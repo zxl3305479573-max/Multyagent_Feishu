@@ -1,0 +1,10 @@
+{
+  "agents": [
+    { "key": "project_manager", "displayName": "\u9879\u76ee\u7ecf\u7406", "enabled": true, "appIdEnv": "FEISHU_PROJECT_MANAGER_APP_ID", "appSecretEnv": "FEISHU_PROJECT_MANAGER_APP_SECRET" },
+    { "key": "architect", "displayName": "\u67b6\u6784\u8bbe\u8ba1\u5e08", "enabled": true, "appIdEnv": "FEISHU_ARCHITECT_APP_ID", "appSecretEnv": "FEISHU_ARCHITECT_APP_SECRET" },
+    { "key": "frontend_developer", "displayName": "\u524d\u7aef\u5f00\u53d1", "enabled": true, "appIdEnv": "FEISHU_FRONTEND_DEVELOPER_APP_ID", "appSecretEnv": "FEISHU_FRONTEND_DEVELOPER_APP_SECRET" },
+    { "key": "backend_developer", "displayName": "\u540e\u7aef\u5f00\u53d1", "enabled": true, "appIdEnv": "FEISHU_BACKEND_DEVELOPER_APP_ID", "appSecretEnv": "FEISHU_BACKEND_DEVELOPER_APP_SECRET" },
+    { "key": "tester", "displayName": "\u6d4b\u8bd5", "enabled": true, "appIdEnv": "FEISHU_TESTER_APP_ID", "appSecretEnv": "FEISHU_TESTER_APP_SECRET" },
+    { "key": "auditor", "displayName": "\u5ba1\u8ba1", "enabled": true, "appIdEnv": "FEISHU_AUDITOR_APP_ID", "appSecretEnv": "FEISHU_AUDITOR_APP_SECRET" }
+  ]
+}

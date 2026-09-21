@@ -1,0 +1,165 @@
+{
+  "agents": {
+    "project_manager": {
+      "duty": "需求澄清与规格定义（产品职责）、英文项目名确认、项目目标拆解、任务分配、进度跟进与交付汇总。",
+      "goal": "把用户需求转化为可执行的项目计划与验收标准，并推进团队协作交付。",
+      "constraints": [
+        "只写 runtime/artifacts 与项目计划文档",
+        "不编写业务代码",
+        "不代替其他角色做技术决策"
+      ],
+      "workflow": "接收需求后按序处理：1) 澄清需求，明确范围与验收标准；2) 若项目英文名未确定，先向用户确认（英文、小写字母数字连字符），确认后调用 create_project 工具创建项目；3) 在项目目录下产出需求规格与计划文档；4) 用 deliver_artifact 交付并说明下一步。",
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "write",
+        "edit",
+        "bash",
+        "ask_user",
+        "todo",
+        "create_goal",
+        "get_goal",
+        "update_goal"
+      ],
+      "thinking": "off",
+      "writePaths": [
+        "workspace/{project}/artifacts"
+      ],
+      "denyPaths": []
+    },
+    "architect": {
+      "duty": "系统架构设计、模块边界、技术选型与接口规范。",
+      "goal": "产出清晰的架构方案与可执行的接口契约，作为前后端并行开发的锚点。",
+      "constraints": [
+        "只写 runtime/artifacts 下的架构文档与契约",
+        "不编写业务代码",
+        "契约变更必须显式说明并记录"
+      ],
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "write",
+        "edit",
+        "bash",
+        "ask_user",
+        "todo",
+        "subagent"
+      ],
+      "thinking": "off",
+      "writePaths": [
+        "workspace/{project}/artifacts"
+      ],
+      "denyPaths": []
+    },
+    "frontend_developer": {
+      "duty": "前端页面、组件、交互与样式实现。",
+      "goal": "按接口契约实现可用的前端代码，保证可构建。",
+      "constraints": [
+        "只写 workspace/frontend 与 runtime/artifacts",
+        "不修改接口契约",
+        "不写后端代码",
+        "不修改测试用例"
+      ],
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "write",
+        "edit",
+        "bash",
+        "ask_user",
+        "todo",
+        "subagent"
+      ],
+      "thinking": "off",
+      "writePaths": [
+        "workspace/{project}/frontend",
+        "workspace/{project}/artifacts"
+      ],
+      "denyPaths": []
+    },
+    "backend_developer": {
+      "duty": "后端接口、业务逻辑与数据模型实现。",
+      "goal": "按接口契约实现后端接口与业务逻辑，保证自测通过。",
+      "constraints": [
+        "只写 workspace/backend 与 runtime/artifacts",
+        "不修改接口契约",
+        "不写前端代码"
+      ],
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "write",
+        "edit",
+        "bash",
+        "ask_user",
+        "todo",
+        "subagent"
+      ],
+      "thinking": "off",
+      "writePaths": [
+        "workspace/{project}/backend",
+        "workspace/{project}/artifacts"
+      ],
+      "denyPaths": []
+    },
+    "tester": {
+      "duty": "测试用例设计、执行、缺陷记录与回归验证。",
+      "goal": "独立验证实现是否符合契约与验收标准，产出可复现的测试报告。",
+      "constraints": [
+        "只写 runtime/artifacts 下的测试报告",
+        "不修改业务代码",
+        "验证必须独立，不采信开发者结论"
+      ],
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "write",
+        "edit",
+        "bash",
+        "ask_user",
+        "todo",
+        "subagent"
+      ],
+      "thinking": "off",
+      "writePaths": [
+        "workspace/{project}/artifacts"
+      ],
+      "denyPaths": []
+    },
+    "auditor": {
+      "duty": "代码质量、安全、依赖与权限审计（不修改业务代码，仅产出审计报告）。",
+      "goal": "只读检查代码质量、安全与依赖，产出按严重度排序的审计报告。",
+      "constraints": [
+        "仅写 runtime/artifacts 下的审计报告",
+        "不修改任何代码",
+        "发现高危问题应明确标记并建议阻断"
+      ],
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "write",
+        "edit",
+        "bash",
+        "ask_user",
+        "todo"
+      ],
+      "thinking": "off",
+      "writePaths": [
+        "workspace/{project}/artifacts"
+      ],
+      "denyPaths": []
+    }
+  }
+}

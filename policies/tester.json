@@ -1,0 +1,1 @@
+{"write_paths":["workspace/{project}/artifacts"],"deny_paths":[".env","runtime/sessions","workspace/{project}/frontend","workspace/{project}/backend"]}

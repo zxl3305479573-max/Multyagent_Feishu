@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "agents": [
+    {
+      "key": "project_manager",
+      "display_name": "项目经理",
+      "runtime": "pi",
+      "profile": "profiles/project_manager.md",
+      "policy": "policies/project_manager.json",
+      "workspace": "workspace/{project}",
+      "session_dir": "runtime/sessions/project_manager",
+      "max_concurrent_tasks": 2,
+      "max_turns": 8,
+      "max_runtime_seconds": 900
+    },
+    {
+      "key": "architect",
+      "display_name": "架构设计师",
+      "runtime": "pi",
+      "profile": "profiles/architect.md",
+      "policy": "policies/architect.json",
+      "workspace": "workspace/{project}",
+      "session_dir": "runtime/sessions/architect",
+      "max_concurrent_tasks": 2,
+      "max_turns": 8,
+      "max_runtime_seconds": 900
+    },
+    {
+      "key": "frontend_developer",
+      "display_name": "前端开发",
+      "runtime": "pi",
+      "profile": "profiles/frontend_developer.md",
+      "policy": "policies/frontend_developer.json",
+      "workspace": "workspace/{project}",
+      "session_dir": "runtime/sessions/frontend_developer",
+      "max_concurrent_tasks": 2,
+      "max_turns": 8,
+      "max_runtime_seconds": 900
+    },
+    {
+      "key": "backend_developer",
+      "display_name": "后端开发",
+      "runtime": "pi",
+      "profile": "profiles/backend_developer.md",
+      "policy": "policies/backend_developer.json",
+      "workspace": "workspace/{project}",
+      "session_dir": "runtime/sessions/backend_developer",
+      "max_concurrent_tasks": 2,
+      "max_turns": 8,
+      "max_runtime_seconds": 900
+    },
+    {
+      "key": "tester",
+      "display_name": "测试",
+      "runtime": "pi",
+      "profile": "profiles/tester.md",
+      "policy": "policies/tester.json",
+      "workspace": "workspace/{project}",
+      "session_dir": "runtime/sessions/tester",
+      "max_concurrent_tasks": 2,
+      "max_turns": 8,
+      "max_runtime_seconds": 900
+    },
+    {
+      "key": "auditor",
+      "display_name": "审计",
+      "runtime": "pi",
+      "profile": "profiles/auditor.md",
+      "policy": "policies/auditor.json",
+      "workspace": "workspace/{project}",
+      "session_dir": "runtime/sessions/auditor",
+      "max_concurrent_tasks": 1,
+      "max_turns": 8,
+      "max_runtime_seconds": 900
+    }
+  ]
+}

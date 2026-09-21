@@ -1,0 +1,353 @@
+// Pi Agent 运行时桥接层（最小纵向切片）。
+// 职责：把飞书任务交给一个真实 Pi 会话处理，返回文本结果。
+//
+// 当前范围（步骤 3 + 阶段一）：
+//   - 每次任务新建一个 in-memory session，prompt 后 dispose（天然并发隔离）。
+//   - 角色身份 + 职责通过 systemPromptOverride 注入系统提示（强约束，防身份幻觉）。
+//   - 工具白名单、职责、思考等级从 config/policy.json 按角色读取（阶段一：先只读）。
+//   - 策略扩展拦截敏感文件（复用 spike/pi-policy.mjs 已验证的结论）。
+//
+// 后续阶段（暂未实现，见设计文档实施阶段）：
+//   - 会话持久化 + task_id 复用（多轮追问）
+//   - 路径级拦截 + 正式策略扩展，然后放开可写工具（edit/write）
+//   - RPC 子进程隔离
+import { existsSync } from "node:fs";
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { checkWriteAllowed, isDeleteCommand, resolveWritePaths } from "./policy.js";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  defineTool,
+  getAgentDir,
+  ModelRuntime,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { artifactsDirFor, ensureArtifactsDir, saveDelivery } from "./artifacts.js";
+
+const MODEL_PROVIDER = process.env.PI_AGENT_PROVIDER || "deepseek";
+// deepseek-chat is the stable API model; override with PI_AGENT_MODEL when needed.
+const MODEL_ID = process.env.PI_AGENT_MODEL || "deepseek-chat";
+const THINKING_LEVEL = process.env.PI_AGENT_THINKING || "off";
+
+// 默认只读工具集：作为 policy.json 未配置角色时的 fallback。
+const DEFAULT_TOOLS = ["read", "ls", "grep", "find"];
+
+// 角色策略配置（权威来源）：每个角色的职责、目标、约束、工具白名单、思考等级。
+const policy = JSON.parse(
+  await readFile(new URL("../config/policy.json", import.meta.url), "utf8"),
+);
+
+// 团队角色清单（用于系统提示里的团队上下文，参考 MetaGPT 的 env_desc）。
+const agentsConfig = JSON.parse(
+  await readFile(new URL("../config/agents.json", import.meta.url), "utf8"),
+);
+
+// 敏感路径/命令拦截。命中即阻断工具执行。
+const SENSITIVE_PATTERNS = [
+  /\.env/i,
+  /\.pem$/i,
+  /\.key$/i,
+  /auth\.json/i,
+  /models-store\.json/i,
+  /\.git\/config/i,
+];
+
+let modelRuntimePromise;
+
+function getModelRuntime() {
+  if (!modelRuntimePromise) {
+    modelRuntimePromise = ModelRuntime.create();
+  }
+  return modelRuntimePromise;
+}
+
+// 每个角色一个策略工厂：闭包捕获该角色的写路径白名单/黑名单。
+function createPolicyFactory(agent, projectName) {
+  const cfg = policy.agents?.[agent.key] ?? {};
+  const writePaths = resolveWritePaths(cfg.writePaths, projectName);
+  const denyPaths = cfg.denyPaths || [];
+  return (pi) => {
+    pi.on("tool_call", async (event, ctx) => {
+      // 1. 敏感文件拦截（全局，所有工具）
+      const raw = [event.input?.path, event.input?.command, event.input?.pattern]
+        .filter(Boolean)
+        .join(" ");
+      if (SENSITIVE_PATTERNS.some((re) => re.test(raw))) {
+        return { block: true, reason: "策略禁止访问敏感文件或执行敏感命令" };
+      }
+      // 2. 删除类命令拦截（仅允许创建与写入）。
+      if (event.toolName === "bash" || event.toolName === "powershell") {
+        if (isDeleteCommand(event.input?.command)) {
+          return { block: true, reason: "策略禁止删除操作（仅允许创建与写入）" };
+        }
+      }
+      // 3. 写入路径拦截（write/edit）
+      if (event.toolName === "write" || event.toolName === "edit") {
+        const check = checkWriteAllowed(ctx.cwd, event.input?.path, { writePaths, denyPaths });
+        if (!check.allowed) {
+          return { block: true, reason: check.reason };
+        }
+      }
+    });
+  };
+}
+
+// 角色相关的系统提示。替换 pi 默认的"编程助手"提示，避免身份被稀释。
+export function buildSystemPrompt(agent, projectName) {
+  const cfg = policy.agents?.[agent.key] ?? {};
+  const duty = cfg.duty || "处理飞书用户发来的任务，给出结果。";
+  const tools = cfg.tools || DEFAULT_TOOLS;
+  const team = agentsConfig.agents
+    .map((a) => (a.key === agent.key ? `${a.displayName}（你）` : a.displayName))
+    .join("、");
+
+  const lines = [
+    `你是「${agent.displayName}」角色 Agent（内部标识：${agent.key}），MultyAgent 多智能体团队的一员。`,
+    `你的身份是固定的，不得自称、扮演或提及你是其他角色。`,
+    ``,
+    `团队角色：${team}。`,
+    `职责：${duty}`,
+  ];
+  if (projectName) {
+    lines.push(`当前项目：${projectName}（工作目录 workspace/${projectName}/）。`);
+  }
+  if (cfg.goal) {
+    lines.push(`目标：${cfg.goal}`);
+  }
+  if (cfg.constraints?.length) {
+    lines.push(``, `约束：`);
+    for (const c of cfg.constraints) {
+      lines.push(`- ${c}`);
+    }
+  }
+  if (cfg.workflow) {
+    lines.push(``, `工作流程：${cfg.workflow}`);
+  }
+  if (agent.key === "project_manager") {
+    lines.push(
+      "",
+      "Project manager must choose only required roles in assignments; never dispatch every role by default.",
+      "Each assignment must include agentKey and task, with reason explaining why the role is needed.",
+    );
+  }
+  lines.push(
+    ``,
+    `工作方式：`,
+    `- 你可以使用工具（${tools.join("、")}）查看项目文件。`,
+    `- 当工具被安全策略拒绝时，如实告知用户，不要尝试绕过。`,
+    `- 完成任务后，用 deliver_artifact 工具交付（summary 必填）。`,
+    `- 需要用户澄清时，也用 deliver_artifact 交付：summary 写明需要澄清什么，next 写明等待用户回答；不要输出长篇分析或复述上下文。`,
+    `- 若这是最终汇总（任务全部完成、无需下游协作），交付时设置 final=true。`,
+    `- 回复使用中文，简洁明确，直接给出结论。`,
+  );
+  return lines.join("\n");
+}
+
+// 每个角色缓存一份 loader（系统提示不同），首次创建后复用。
+const loaderCache = new Map();
+
+function getLoader(agent, projectName) {
+  const cacheKey = `${agent.key}:${projectName || "default"}`;
+  let loaderPromise = loaderCache.get(cacheKey);
+  if (!loaderPromise) {
+    const loader = new DefaultResourceLoader({
+      cwd: process.cwd(),
+      agentDir: getAgentDir(),
+      systemPromptOverride: () => buildSystemPrompt(agent, projectName),
+      extensionFactories: [createPolicyFactory(agent, projectName)],
+    });
+    loaderPromise = loader.reload().then(() => loader);
+    loaderCache.set(cacheKey, loaderPromise);
+  }
+  return loaderPromise;
+}
+
+function sessionDirFor(agent) {
+  return join(process.cwd(), "runtime", "sessions", agent.key);
+}
+
+export function buildPrompt(text, context) {
+  const artifactsDir = context.artifactsDir || artifactsDirFor(context.taskId, context.projectName);
+  return [
+    `任务编号：${context.taskId}`,
+    `产物目录：${artifactsDir}`,
+    `用户指令：${text || "（未提供）"}`,
+    ``,
+    `请处理该任务。若需产出交付物，请写入产物目录，并用 deliver_artifact 工具交付。`,
+  ].join("\n");
+}
+
+export function extractText(message) {
+  if (!message) return "";
+  if (typeof message.content === "string") return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+  }
+  return "";
+}
+
+function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, onDeliver }) {
+  return defineTool({
+    name: "deliver_artifact",
+    label: "交付产物",
+    description: "完成任务后交付：提交摘要、产物路径、假设和下一步建议。交付后任务才算完成。",
+    parameters: Type.Object({
+      summary: Type.String({ description: "交付摘要（必填，需包含：结论 + 关键决策 + 产物内容要点，让人不看文件也能判断成果）" }),
+      artifactPaths: Type.Optional(Type.Array(Type.String(), { description: "产物文件路径列表" })),
+      next: Type.Optional(Type.String({ description: "建议的下一步" })),
+      assumptions: Type.Optional(Type.Array(Type.String(), { description: "未确认的假设" })),
+      choices: Type.Optional(Type.Array(Type.Object({
+        id: Type.String(),
+        label: Type.String(),
+        description: Type.Optional(Type.String()),
+        primary: Type.Optional(Type.Boolean()),
+      }), { description: "需要用户点击选择的选项列表" })),
+      final: Type.Optional(Type.Boolean({ description: "是否为最终交付（汇总完成、无需下游协作）。默认为 false" })),
+      assignments: Type.Optional(Type.Array(Type.Object({
+        agentKey: Type.String(),
+        task: Type.String(),
+        reason: Type.Optional(Type.String()),
+      }))),
+    }),
+    async execute(_toolCallId, params) {
+      const artifactsDir = getArtifactsDir();
+      const delivery = {
+        summary: params.summary,
+        artifactPaths: params.artifactPaths || [],
+        next: params.next || "",
+        assumptions: params.assumptions || [],
+        choices: params.choices || [],
+        assignments: normalizeAssignments(params.assignments),
+        final: params.final === true,
+        artifactsDir,
+        projectName: getProjectName?.() || null,
+        agentKey,
+        agentName,
+      };
+      await saveDelivery(artifactsDir, agentKey, delivery);
+      onDeliver?.(delivery);
+      return {
+        content: [{ type: "text", text: `已交付：${params.summary}` }],
+        details: {},
+      };
+    },
+  });
+}
+
+function normalizeAssignments(value) {
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set(agentsConfig.agents.map((agent) => agent.key));
+  const seen = new Set();
+  return value
+    .filter((item) => item && allowed.has(item.agentKey) && typeof item.task === "string" && item.task.trim())
+    .map((item) => ({
+      agentKey: item.agentKey,
+      task: item.task.trim(),
+      reason: typeof item.reason === "string" ? item.reason.trim() : "",
+    }))
+    .filter((item) => !seen.has(item.agentKey) && seen.add(item.agentKey));
+}
+
+function createProjectTool({ onProject }) {
+  return defineTool({
+    name: "create_project",
+    label: "创建项目",
+    description: "确认英文项目名后调用：创建或切换到 workspace/<项目名>/ 项目目录。",
+    parameters: Type.Object({
+      name: Type.String({ description: "英文项目名：小写字母开头，仅含小写字母、数字、连字符" }),
+    }),
+    async execute(_toolCallId, params) {
+      const name = String(params.name || "").trim().toLowerCase();
+      if (!/^[a-z][a-z0-9-]*$/.test(name)) {
+        return { content: [{ type: "text", text: `项目名 "${name}" 无效。需小写字母开头，仅含小写字母、数字、连字符，例如 phone-login。` }], details: {} };
+      }
+      await ensureArtifactsDir(join(process.cwd(), "workspace", name));
+      onProject?.(name);
+      return { content: [{ type: "text", text: `项目 ${name} 已就绪（workspace/${name}/）。` }], details: {} };
+    },
+  });
+}
+
+export async function runAgent(agent, text, context, { sessionFile } = {}) {
+  const modelRuntime = await getModelRuntime();
+  const model = modelRuntime.getModel(MODEL_PROVIDER, MODEL_ID);
+  if (!model) {
+    const credentialHint = MODEL_PROVIDER === "deepseek"
+      ? "请配置 DEEPSEEK_API_KEY，或先用 pi login deepseek 完成认证"
+      : `请配置 ${MODEL_PROVIDER} 的 API Key 或 pi 登录凭据`;
+    throw new Error(`模型不可用: ${MODEL_PROVIDER}/${MODEL_ID}。${credentialHint}`);
+  }
+
+  const projectName = context.projectName;
+  const loader = await getLoader(agent, projectName);
+  const cfg = policy.agents?.[agent.key] ?? {};
+  const sessionDir = sessionDirFor(agent);
+  await mkdir(sessionDir, { recursive: true });
+  // session 文件可能因清理/迁移而丢失：存在才复用，否则新建，避免写入时 ENOENT。
+  let sessionManager;
+  if (sessionFile && existsSync(sessionFile)) {
+    sessionManager = SessionManager.open(sessionFile, sessionDir);
+  } else {
+    if (sessionFile) {
+      console.warn(`[pi-agent] session 文件不存在，已新建会话: ${sessionFile}`);
+    }
+    sessionManager = SessionManager.create(process.cwd(), sessionDir);
+  }
+
+  let activeProject = projectName || null;
+  const getArtifactsDir = () => context.artifactsDir || artifactsDirFor(context.taskId, activeProject);
+  let delivery = null;
+  const deliverTool = createDeliverTool({
+    getArtifactsDir,
+    getProjectName: () => activeProject,
+    agentKey: agent.key,
+    agentName: agent.displayName,
+    onDeliver: (d) => { delivery = d; },
+  });
+
+  const tools = [...(cfg.tools || DEFAULT_TOOLS), "deliver_artifact"];
+  const customTools = [deliverTool];
+  if (agent.key === "project_manager") {
+    customTools.push(createProjectTool({ onProject: (name) => { activeProject = name; } }));
+    tools.push("create_project");
+  }
+
+  const { session } = await createAgentSession({
+    model,
+    thinkingLevel: cfg.thinking || THINKING_LEVEL,
+    modelRuntime,
+    tools,
+    customTools,
+    sessionManager,
+    resourceLoader: loader,
+  });
+
+  let reply = "";
+  try {
+    session.subscribe((event) => {
+      if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
+        reply += event.assistantMessageEvent.delta;
+      }
+    });
+
+    await session.prompt(buildPrompt(text, context));
+
+    if (!reply.trim()) {
+      const last = [...session.messages].reverse().find((m) => m.role === "assistant");
+      reply = extractText(last);
+    }
+    return {
+      text: reply.trim() || "（Agent 未返回文本结果）",
+      sessionFile: session.sessionFile || sessionFile || null,
+      delivery,
+      projectName: activeProject || null,
+    };
+  } finally {
+    session.dispose();
+  }
+}

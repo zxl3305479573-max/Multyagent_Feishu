@@ -1,0 +1,39 @@
+{
+  "routes": [
+    {
+      "from": "project_manager",
+      "to": [
+        "architect"
+      ]
+    },
+    {
+      "from": "architect",
+      "to": [
+        "frontend_developer",
+        "backend_developer"
+      ]
+    },
+    {
+      "from": [
+        "frontend_developer",
+        "backend_developer"
+      ],
+      "to": [
+        "tester"
+      ],
+      "when": "all_done"
+    },
+    {
+      "from": "tester",
+      "to": [
+        "auditor"
+      ]
+    },
+    {
+      "from": "auditor",
+      "to": [
+        "project_manager"
+      ]
+    }
+  ]
+}
