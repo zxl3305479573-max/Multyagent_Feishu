@@ -147,11 +147,19 @@ function normalizeDelivery(value) {
   return { agentKey: String(source.agentKey || "").trim(), agentName: String(source.agentName || "").trim(), summary: String(source.summary || "").trim(), artifactPaths: list(source.artifactPaths), next: String(source.next || "").trim(), blockers: list(source.blockers), assumptions: list(source.assumptions), risks: list(source.risks), evidence: Array.isArray(source.evidence) ? source.evidence.filter((item) => item?.command && item?.result).slice(0, 6).map((item) => ({ command: String(item.command).trim(), result: String(item.result).trim(), details: String(item.details || "").trim() })) : [], commit: String(source.commit || source.commitHash || "").trim(), durationMs: Number.isFinite(Number(source.durationMs)) ? Number(source.durationMs) : null, assignments: Array.isArray(source.assignments) ? source.assignments.filter((item) => item?.agentKey && item?.task).map((item) => ({ agentKey: String(item.agentKey).trim(), task: String(item.task).trim(), reason: String(item.reason || "").trim() })) : [], choices: Array.isArray(source.choices) ? source.choices.filter((item) => item?.id && item?.label).slice(0, 6) : [], final: source.final === true };
 }
 
+export function hasActionableNextStep(delivery = {}) {
+  return Boolean(
+    String(delivery.next || "").trim()
+      || (Array.isArray(delivery.assignments) && delivery.assignments.length)
+      || (Array.isArray(delivery.choices) && delivery.choices.length),
+  );
+}
+
 export function buildResultCard(result = {}) {
   const delivery = normalizeDelivery(result.delivery);
   const final = delivery.final;
   const confirmRoles = parseConfirmRoles();
-  const approvalRequired = result.approvalRequired === true || (!final && Boolean(delivery.agentKey) && confirmRoles.has(delivery.agentKey));
+  const approvalRequired = result.approvalRequired === true || (!final && hasActionableNextStep(delivery) && Boolean(delivery.agentKey) && confirmRoles.has(delivery.agentKey));
   const choices = delivery.choices.length ? delivery.choices : approvalRequired ? [{ id: "approve", label: "确认执行", primary: true }] : [];
   const evidenceText = delivery.evidence.length ? `**验证证据**\n${delivery.evidence.map((item) => `· ${cardText(item.command, 180)} → ${cardText(item.result, 120)}${item.details ? `（${cardText(item.details, 240)}）` : ""}`).join("\n")}` : "";
   const executionText = [delivery.commit ? `Commit ${cardText(delivery.commit, 80)}` : "", delivery.durationMs === null ? "" : `耗时 ${(delivery.durationMs / 1000).toFixed(1)} 秒`].filter(Boolean).join(" · ");

@@ -16,6 +16,13 @@ function statusFor(event) {
 }
 
 const TERMINAL_STATUSES = new Set(["completed", "failed"]);
+const PROJECT_DECISION_EVENTS = new Set([
+  "delivery_received",
+  "task_completed",
+  "dispatch_started",
+  "dispatch_completed",
+  "approval_required",
+]);
 
 export function summarizeTaskEvents(events, taskId, chatId) {
   const matched = events.filter((event) => belongsToRoot(event, taskId) && (!chatId || event.chat_id === chatId));
@@ -32,7 +39,9 @@ export function summarizeTaskEvents(events, taskId, chatId) {
     // winding-down session must not reopen or move the task backwards.
     if (TERMINAL_STATUSES.has(status) && !["task_terminated", "control_applied"].includes(event.type)) continue;
     latest = event;
-    projectName ||= event.project_name || null;
+    if (event.project_name && (PROJECT_DECISION_EVENTS.has(event.type) || !projectName)) {
+      projectName = event.project_name;
+    }
     const agent = event.target || event.agent;
     if (["task_started", "agent_started", "dispatch_started", "approval_required"].includes(event.type) && agent) active.add(agent);
     if (["dispatch_completed", "dispatch_failed", "agent_finished"].includes(event.type) && agent) active.delete(agent);

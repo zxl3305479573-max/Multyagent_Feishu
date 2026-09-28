@@ -17,6 +17,38 @@ test("event snapshots persist and do not regress after a terminal event", async 
   assert.deepEqual(snapshot.active_agents, []);
 });
 
+test("更新任务项目名时同步更新状态快照", async () => {
+  const file = "runtime/task-store.project-name.test.json";
+  rmSync(file, { force: true });
+  try {
+    const store = new TaskStore(file);
+    await store.create({ task_id: "T-project", agent: "project_manager", source_chat_id: "chat-project" });
+    await store.applyEvent({ type: "task_started", task_id: "T-project", timestamp: "2026-01-01T00:00:00.000Z" });
+    await store.update("T-project", { project_name: "student" });
+    const status = await store.getStatus("T-project", "chat-project");
+    assert.equal(status.project_name, "student");
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test("迟到的旧开始事件不会覆盖任务已切换的项目", async () => {
+  const file = "runtime/task-store.project-late.test.json";
+  rmSync(file, { force: true });
+  try {
+    const store = new TaskStore(file);
+    await store.create({ task_id: "T-project-late", agent: "project_manager", source_chat_id: "chat-project" });
+    await store.applyEvent({ type: "task_started", task_id: "T-project-late", project_name: "default" });
+    await store.applyEvent({ type: "delivery_received", task_id: "T-project-late", project_name: "student" });
+    await store.update("T-project-late", { project_name: "student" });
+    await store.applyEvent({ type: "task_started", task_id: "T-project-late", project_name: "default" });
+    const status = await store.getStatus("T-project-late", "chat-project");
+    assert.equal(status.project_name, "student");
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
 test.afterEach(() => {
   rmSync(FILE, { force: true });
 });

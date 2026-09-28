@@ -8,6 +8,13 @@ function clone(value) {
 }
 
 const TERMINAL_SNAPSHOT_STATUSES = new Set(["completed", "failed"]);
+const PROJECT_DECISION_EVENTS = new Set([
+  "delivery_received",
+  "task_completed",
+  "dispatch_started",
+  "dispatch_completed",
+  "approval_required",
+]);
 
 function rootOf(taskId) { return String(taskId || "").split(":")[0]; }
 
@@ -22,6 +29,13 @@ function snapshotStatus(event = {}) {
 
 function emptySnapshot(taskId) {
   return { task_id: taskId, status: "not_found", active_agents: [], latest_event: null, updated_at: null, project_name: null, error: null, blockers: [], risks: [] };
+}
+
+function projectNameForEvent(event, task, current) {
+  if (event.project_name && (PROJECT_DECISION_EVENTS.has(event.type) || !task.project_name && !current.project_name)) {
+    return event.project_name;
+  }
+  return task.project_name || current.project_name || null;
 }
 
 export class TaskStore {
@@ -173,6 +187,12 @@ export class TaskStore {
     const task = this.state.tasks[taskId];
     if (!task) return null;
     Object.assign(task, patch, { updated_at: new Date().toISOString() });
+    if (Object.prototype.hasOwnProperty.call(patch, "project_name") && task.status_snapshot) {
+      task.status_snapshot = {
+        ...task.status_snapshot,
+        project_name: patch.project_name || null,
+      };
+    }
     await this.persist();
     return clone(task);
   }
@@ -199,7 +219,7 @@ export class TaskStore {
       active_agents: [...active],
       latest_event: nextStatus || event.type === "control_applied" || event.type === "task_resumed" ? event.type : current.latest_event,
       updated_at: event.timestamp || new Date().toISOString(),
-      project_name: event.project_name || current.project_name || null,
+      project_name: projectNameForEvent(event, task, current),
       error: event.error || current.error || null,
       blockers: Array.isArray(event.blockers) && event.blockers.length ? event.blockers : current.blockers || [],
       risks: Array.isArray(event.risks) && event.risks.length ? event.risks : current.risks || [],

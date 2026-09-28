@@ -2,7 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { readFile } from "node:fs/promises";
-import { buildTaskReceivedCard, parseConfirmRoles, sendCard, sendResultCard, sendText } from "./gateway.js";
+import { buildTaskReceivedCard, hasActionableNextStep, parseConfirmRoles, sendCard, sendResultCard, sendText } from "./gateway.js";
 import { isPaused, isTerminated, setPaused, setTerminated } from "./tasks.js";
 import { artifactsDirFor } from "./artifacts.js";
 import { abortActiveSessions } from "./session-control.js";
@@ -50,7 +50,7 @@ export function createOrchestrator({
       const raw = JSON.parse(readFileSync(approvalsFile, "utf8"));
       const now = Date.now();
       const kept = Object.entries(raw?.pending || {})
-        .filter(([, item]) => item?.delivery && now - (item.savedAt || 0) < approvalTtlMs)
+        .filter(([, item]) => item?.delivery && (item.approvalRequired === true || hasActionableNextStep(item.delivery)) && now - (item.savedAt || 0) < approvalTtlMs)
         .map(([key, item]) => [key, item]);
       if (kept.length) log.info?.(`[orchestrator] restored ${kept.length} pending approval(s) from ${approvalsFile}`);
       return kept;
@@ -172,7 +172,7 @@ export function createOrchestrator({
   function needsHumanDecision({ agentKey, delivery, context, approvalRequired }) {
     if (!context?.requireHumanApproval || context.approvalBypass) return false;
     if (approvalRequired === true || delivery?.choices?.length) return true;
-    return parseConfirmRoles().has(agentKey);
+    return hasActionableNextStep(delivery) && parseConfirmRoles().has(agentKey);
   }
 
   async function onTaskCompleted(agentKey, taskId, payload = {}) {
@@ -184,6 +184,14 @@ export function createOrchestrator({
       return;
     }
     let dispatchContext = context || {};
+    // The delivery is the latest project decision from the completed agent.
+    // Replace any stale project carried by the previous execution context.
+    if (delivery.projectName || dispatchContext.projectName) {
+      dispatchContext = {
+        ...dispatchContext,
+        projectName: delivery.projectName || dispatchContext.projectName,
+      };
+    }
     await onEvent({
       type: "delivery_received",
       agent: agentKey,
@@ -227,7 +235,7 @@ export function createOrchestrator({
       return;
     }
     if (needsHumanDecision({ agentKey, delivery, context: dispatchContext, approvalRequired })) {
-      approvals.set(`${dispatchContext?.chatId || ""}:${taskId}`, { agentKey, taskId, delivery, context: dispatchContext, parentTaskId });
+      approvals.set(`${dispatchContext?.chatId || ""}:${taskId}`, { agentKey, taskId, delivery, context: dispatchContext, parentTaskId, approvalRequired: approvalRequired === true });
       persistApprovals();
       await onEvent({ type: "approval_required", agent: agentKey, task_id: taskId, parent_task_id: parentTaskId || null, chat_id: dispatchContext?.chatId || null, project_name: dispatchContext?.projectName || delivery?.projectName || null, correlation_id: dispatchContext?.correlationId || null, artifact_count: delivery?.artifactPaths?.length || 0 });
       log.info(JSON.stringify({ type: "approval_required", agent: agentKey, task_id: taskId }));
@@ -257,11 +265,14 @@ export function createOrchestrator({
     }
     rootRounds.set(root, round + 1);
 
+    let dispatchedDownstream = false;
+    let waitingForDownstream = false;
     for (const rule of matchRoutes(routesConfig.routes, agentKey)) {
       const selected = dispatchContext.selectedAgents;
       const targets = selected ? rule.tos.filter((target) => selected.includes(target)) : rule.tos;
       if (!targets.length || (selected && rule.when === "all_done" && rule.froms.some((from) => !selected.includes(from)))) continue;
       if (rule.when === "always") {
+        dispatchedDownstream = true;
         await Promise.all(
           targets.map((target) =>
             dispatchTo(target, taskId, { context: { ...dispatchContext, approvalBypass: false }, parentDelivery: delivery, fromAgent: agentKey }),
@@ -276,13 +287,18 @@ export function createOrchestrator({
         dispatchGroups.set(key, done);
         if (rule.froms.every((f) => done.has(f))) {
           dispatchGroups.delete(key);
+          dispatchedDownstream = true;
           await Promise.all(
             targets.map((target) =>
               dispatchTo(target, base, { context: { ...dispatchContext, approvalBypass: false }, parentDelivery: delivery, fromAgent: agentKey }),
             ),
           );
-        }
+        } else waitingForDownstream = true;
       }
+    }
+    if (!dispatchedDownstream && !waitingForDownstream) {
+      await onEvent({ type: "task_settle", task_id: taskId, reason: "no_next_step" });
+      log.info(JSON.stringify({ type: "settle", task_id: taskId, reason: "no_next_step" }));
     }
   }
 
@@ -298,7 +314,7 @@ export function createOrchestrator({
     const subTaskId = `${parentTaskId}:${targetKey}`;
     // 项目名必须与写入白名单同源：上游交付包里的 projectName 是最新事实，
     // 只读 context 会让下游的白名单退化成 workspace/default，合法写入被拒。
-    const projectName = context.projectName || parentDelivery.projectName || null;
+    const projectName = parentDelivery.projectName || context.projectName || null;
     const artifactsDir = artifactsDirFor(parentTaskId, projectName);
     const upstreamDir = parentDelivery.artifactsDir;
     const refs = (parentDelivery.artifactPaths || []).map((p) => `- ${p}`).join("\n");
@@ -372,18 +388,22 @@ export function createOrchestrator({
     };
     const assignments = Array.isArray(pending.delivery?.assignments) ? pending.delivery.assignments : [];
     const asksUser = Boolean(pending.delivery?.choices?.length);
+    const hasNext = Boolean(String(pending.delivery?.next || "").trim());
     // 派发清单或阶段完成卡沿用原语义（放行下游 / 结算），不重复跑该角色；
     // 角色自己的提问卡则把用户选择交回原角色继续推进。两者都放后台。
     trackContinuation(
       { taskId: pending.taskId, agentKey: pending.agentKey, chatId },
-      () => assignments.length || !asksUser
-        ? onTaskCompleted(pending.agentKey, pending.taskId, { ...pending, context: { ...pending.context, approvalBypass: true, selection } })
-        : continueWithSelection(pending, selection),
+      () => {
+        if (assignments.length) return onTaskCompleted(pending.agentKey, pending.taskId, { ...pending, context: { ...pending.context, approvalBypass: true, selection } });
+        if (asksUser) return continueWithSelection(pending, selection);
+        if (hasNext) return continueWithSelection(pending, "", pending.delivery.next);
+        return onTaskCompleted(pending.agentKey, pending.taskId, { ...pending, context: { ...pending.context, approvalBypass: true, selection } });
+      },
     );
     return info;
   }
 
-  async function continueWithSelection(pending, selection) {
+  async function continueWithSelection(pending, selection, confirmedNext = "") {
     const role = roles.get(pending.agentKey);
     const chatId = pending.context?.chatId;
     if (!role || !chatId) return;
@@ -391,14 +411,15 @@ export function createOrchestrator({
     if (await isTerminated(rootTaskId)) return;
     const { agent, client } = role;
     const delivery = pending.delivery || {};
-    const choice = (delivery.choices || []).find((item) => item.id === selection);
+    const choice = selection ? (delivery.choices || []).find((item) => item.id === selection) : null;
     const projectName = delivery.projectName || pending.context?.projectName || null;
     const artifactsDir = artifactsDirFor(pending.taskId, projectName);
     const prompt = [
-      `用户选择：${choice?.label || selection}（${selection}）`,
+      choice ? `用户选择：${choice.label || selection}（${selection}）` : "",
+      confirmedNext ? `用户确认的下一步：${confirmedNext}` : "",
       delivery.summary ? `上一轮交付摘要：${delivery.summary}` : "",
       delivery.artifactsDir && delivery.artifactsDir !== artifactsDir ? `上一轮产物目录（可读）：${delivery.artifactsDir}` : "",
-      "请按用户选择继续推进，产出后调用 deliver_artifact 交付；若仍需用户确认，继续给出 choices。",
+      "请继续执行已确认的工作，产出后调用 deliver_artifact 交付；若仍需用户确认，继续给出 choices。",
     ].filter(Boolean).join("\n");
     try {
       log.info(`[dispatch] user selection "${selection}" -> ${agent.displayName}`);

@@ -20,7 +20,7 @@ function buttonLabels(card) {
 }
 
 function deliveryOf(agentKey, extra = {}) {
-  return { agentKey, agentName: agentKey, summary: "阶段结果", artifactPaths: ["workspace/x/out.md"], ...extra };
+  return { agentKey, agentName: agentKey, summary: "阶段结果", artifactPaths: ["workspace/x/out.md"], next: "确认后继续执行", ...extra };
 }
 
 function fakeEnv(raw) {

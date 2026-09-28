@@ -1,9 +1,17 @@
 import { randomUUID } from "node:crypto";
 
+function readableTaskId(date = new Date()) {
+  const stamp = date.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+  const datePart = stamp.slice(0, 8);
+  const timePart = stamp.slice(8);
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 6).toUpperCase();
+  return `TASK-${datePart}-${timePart}-${suffix}`;
+}
+
 export function createTaskRecord(input = {}) {
   const now = new Date().toISOString();
   return {
-    task_id: input.task_id || randomUUID(),
+    task_id: input.task_id || readableTaskId(new Date(now)),
     project_id: input.project_id || null,
     parent_task_id: input.parent_task_id || null,
     source_message_id: input.source_message_id || null,

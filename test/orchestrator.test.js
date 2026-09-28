@@ -292,7 +292,7 @@ test("确认集合内的非 PM/架构角色，卡片按钮同样能取到待确�
   }
 
   await orch.onTaskCompleted("tester", "T:architect:tester", {
-    delivery: { summary: "测试通过", artifactPaths: [], artifactsDir: "d" },
+    delivery: { summary: "测试通过", next: "确认后继续执行", artifactPaths: [], artifactsDir: "d" },
     context: { chatId: "c1", requireHumanApproval: true },
   });
 
@@ -309,8 +309,8 @@ test("resolveLatest 按 task_id 精确解析同群待确认任务，旧卡片仍
   orch.registerRole({ key: "architect", displayName: "架构设计师", appId: "x" }, client);
   orch.registerRole({ key: "tester", displayName: "测试", appId: "x" }, client);
   const context = { chatId: "same-chat", requireHumanApproval: true };
-  await orch.onTaskCompleted("architect", "task-old", { delivery: { summary: "old" }, context });
-  await orch.onTaskCompleted("tester", "task-new", { delivery: { summary: "new" }, context });
+  await orch.onTaskCompleted("architect", "task-old", { delivery: { summary: "old", next: "确认后继续执行" }, context });
+  await orch.onTaskCompleted("tester", "task-new", { delivery: { summary: "new", next: "确认后继续执行" }, context });
 
   const targeted = await orch.resolveLatest("same-chat", "approve", "task-old");
   assert.equal(targeted?.taskId, "task-old");
@@ -336,7 +336,7 @@ test("PM 交付既无 assignments 也无 choices 且无审批上下文时仍结�
   assert.equal(await orch.resolveLatest("c1"), null);
 });
 
-test("PM 交付无 assignments 但卡片仍带确认按钮时，点击必须能解析", async () => {
+test("PM 交付只有 next 时，确认后按下一步重新执行", async () => {
   const runs = [];
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };
   const runAgent = async (agent) => {
@@ -353,14 +353,14 @@ test("PM 交付无 assignments 但卡片仍带确认按钮时，点击必须能�
   orch.registerRole({ key: "architect", displayName: "架构设计师", appId: "x" }, client);
 
   await orch.onTaskCompleted("project_manager", "T-noop", {
-    delivery: { agentKey: "project_manager", summary: "无需派发", artifactPaths: [], artifactsDir: "d", assignments: [] },
+    delivery: { agentKey: "project_manager", summary: "无需派发", next: "确认后继续执行", artifactPaths: [], artifactsDir: "d", assignments: [] },
     context: { chatId: "c1", requireHumanApproval: true },
   });
 
   const resolved = await orch.resolveLatest("c1", "approve");
   assert.equal(resolved?.approved, true, "卡片既然出按钮，点击就不能落空");
   await orch.whenIdle();
-  assert.deepEqual(runs, [], "已声明无派发的卡片，确认后不应重复跑角色或派发下游");
+  assert.deepEqual(runs, ["project_manager"], "确认 next 后应重新运行项目经理");
 });
 
 test("派发下游时继承上游交付的项目名，产物目录与该角色白名单保持一致", async () => {
@@ -400,6 +400,43 @@ test("派发下游时继承上游交付的项目名，产物目录与该角色�
   assert.equal(runs[0].key, "architect");
   assert.equal(runs[0].context.projectName, "student", "下游必须继承上游交付的项目名，否则写入白名单会解析成 default");
   assert.equal(runs[0].context.artifactsDir, artifactsDirFor("T-proj", "student"));
+});
+
+test("上游本轮切换项目时，新项目名覆盖旧上下文并传给下游", async () => {
+  const runs = [];
+  const runAgent = async (agent, prompt, context) => {
+    runs.push({ key: agent.key, context });
+    return {
+      text: "done",
+      delivery: { agentKey: agent.key, summary: "done", artifactPaths: [], artifactsDir: context.artifactsDir, final: true },
+      projectName: context.projectName,
+    };
+  };
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const log = { info() {}, error() {}, warn() {} };
+  const orch = createOrchestrator({ runAgent, log });
+  for (const key of ["project_manager", "architect"]) {
+    orch.registerRole({ key, displayName: key, appId: "x" }, client);
+  }
+
+  await orch.onTaskCompleted("project_manager", "T-project-switch", {
+    delivery: {
+      agentKey: "project_manager",
+      summary: "切换项目后的计划",
+      artifactPaths: ["workspace/student/artifacts/T-project-switch/PROJECT.md"],
+      artifactsDir: "workspace/student/artifacts/T-project-switch",
+      projectName: "student",
+      assignments: [{ agentKey: "architect", task: "产出接口契约" }],
+    },
+    context: { chatId: "c-switch", projectName: "default", requireHumanApproval: true },
+  });
+
+  await orch.resolveLatest("c-switch", "approve");
+  await orch.whenIdle();
+
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].context.projectName, "student");
+  assert.equal(runs[0].context.artifactsDir, artifactsDirFor("T-project-switch", "student"));
 });
 
 test("resolveLatest 立刻返回，不阻塞卡片回调（耗时推进在后台）", async () => {

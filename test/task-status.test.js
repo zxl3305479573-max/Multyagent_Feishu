@@ -16,6 +16,23 @@ test("summarizeTaskEvents returns the current lifecycle of a root task and its s
   assert.equal(status.latest_event, "approval_required");
 });
 
+test("summarizeTaskEvents uses the latest project name after a project switch", () => {
+  const status = summarizeTaskEvents([
+    { type: "task_started", task_id: "T-project", chat_id: "chat-project", project_name: "default", timestamp: "2026-01-01T00:00:00.000Z" },
+    { type: "delivery_received", task_id: "T-project", chat_id: "chat-project", project_name: "student", timestamp: "2026-01-01T00:01:00.000Z" },
+  ], "T-project", "chat-project");
+  assert.equal(status.project_name, "student");
+});
+
+test("迟到的旧 task_started 不会把已切换的项目改回旧值", () => {
+  const status = summarizeTaskEvents([
+    { type: "task_started", task_id: "T-project-late", chat_id: "chat-project", project_name: "default", timestamp: "2026-01-01T00:00:00.000Z" },
+    { type: "delivery_received", task_id: "T-project-late", chat_id: "chat-project", project_name: "student", timestamp: "2026-01-01T00:01:00.000Z" },
+    { type: "task_started", task_id: "T-project-late", chat_id: "chat-project", project_name: "default", timestamp: "2026-01-01T00:02:00.000Z" },
+  ], "T-project-late", "chat-project");
+  assert.equal(status.project_name, "student");
+});
+
 test("summarizeTaskEvents excludes events from another chat", () => {
   const status = summarizeTaskEvents([
     { type: "task_failed", task_id: "T-1", chat_id: "chat-other", error: "secret failure" },
