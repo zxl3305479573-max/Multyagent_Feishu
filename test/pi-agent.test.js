@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { architectSkillPaths, buildPrompt, buildSystemPrompt, diagramSkillPaths, extractText, mapPiToolEvent } from "../src/pi-agent.js";
+import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, diagramSkillPaths, extractText, mapPiToolEvent } from "../src/pi-agent.js";
 
 test("diagram-design skill 对架构设计师和项目经理启用", () => {
   assert.deepEqual(diagramSkillPaths("architect"), architectSkillPaths("architect"));
@@ -13,6 +13,9 @@ test("架构设计师提示词声明 diagram-design skill 与现有交付协议"
   const prompt = buildSystemPrompt({ key: "architect", displayName: "架构设计师" });
   assert.match(prompt, /diagram-design skill/);
   assert.match(prompt, /nodes\/edges/);
+  assert.match(prompt, /9 nodes and 12 edges/);
+  assert.match(prompt, /self-contained HTML\/SVG/);
+  assert.match(prompt, /visual type/);
 });
 
 test("项目经理提示词允许规划图但保留架构图归属约束", () => {
@@ -125,4 +128,58 @@ test("Pi test result and errors are concise structured events", () => {
   assert.ok(result.some((event) => event.type === "test_result" && event.status === "failed"));
   assert.ok(result.some((event) => event.type === "error"));
   assert.equal(JSON.stringify(result).includes("raw output"), false);
+});
+
+test("agent_cli 在执行时读取最新项目名和群聊 ID", async () => {
+  let projectName = null;
+  let received;
+  const tool = createAgentCliTool({
+    taskId: "T-cli",
+    getProjectName: () => projectName,
+    chatId: "chat-cli",
+    agentKey: "project_manager",
+    execute: async (_action, input) => {
+      received = input;
+      return { status: "passed" };
+    },
+  });
+
+  projectName = "student";
+  const result = await tool.execute("call-1", { action: "task-status", command: "cmd.exe", args: ["/c", "whoami"] });
+  assert.deepEqual(result.details, { status: "passed" });
+  assert.equal(received.projectName, "student");
+  assert.equal(received.chatId, "chat-cli");
+  assert.equal(received.taskId, "T-cli");
+  assert.equal(received.command, undefined);
+  assert.equal(received.args, undefined);
+});
+
+test("agent_cli 的 test action 只运行仓库测试，不接受任意进程参数", async () => {
+  let received;
+  const tool = createAgentCliTool({
+    taskId: "T-cli",
+    agentKey: "tester",
+    execute: async (_action, input) => {
+      received = input;
+      return { status: "passed" };
+    },
+  });
+
+  await tool.execute("call-test", { action: "test", command: "cmd.exe", args: ["/c", "whoami"] });
+  assert.equal(received.command, process.execPath);
+  assert.deepEqual(received.args, ["--test", "test"]);
+});
+
+test("agent_cli 对非法图表 JSON 返回可读的结构化失败", async () => {
+  const tool = createAgentCliTool({
+    taskId: "T-cli",
+    getProjectName: () => "student",
+    agentKey: "architect",
+    execute: async () => ({ status: "passed" }),
+  });
+
+  const result = await tool.execute("call-2", { action: "render-diagram", diagramJson: "{" });
+  assert.equal(result.details.status, "failed");
+  assert.match(result.details.error, /diagramJson.*valid JSON/);
+  assert.match(result.content[0].text, /valid JSON/);
 });

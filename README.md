@@ -141,6 +141,20 @@ npm run bitable:setup    # 对齐字段类型与视图
 npm run bitable:smoke    # 端到端验证一任务一行并原地更新
 ```
 
+### 受控 Agent CLI
+
+确定性的测试、状态读取、交付校验和图表生成可以通过统一 CLI 执行，CLI 返回精简 JSON，完整日志不进入 Agent 上下文：
+
+```powershell
+npm run agent:cli -- test
+npm run agent:cli -- task-status --task-id TASK-20260928-001 --chat-id oc_xxx
+npm run agent:cli -- validate-delivery --task-id TASK-20260928-001 --project student --agent architect --artifacts '["workspace/student/artifacts/TASK-20260928-001/architecture.md"]'
+npm run agent:cli -- render-diagram --task-id TASK-20260928-001 --project student --input diagram.json
+npm run agent:cli -- bitable --action check
+```
+
+CLI 的写入操作必须带项目名，目标路径会限制在 `workspace/<project>/` 下；它不接管飞书消息、人工审批或 Agent 派发，这些仍由网关和编排器负责。
+
 ## 设计文档
 
 - [项目总览与流转过程](docs/overview.md)

@@ -26,6 +26,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { artifactsDirFor, ensureArtifactsDir, saveDelivery } from "./artifacts.js";
+import { executeAgentCli } from "./agent-cli.js";
 import { loadTaskStatus } from "./task-status.js";
 import { isTerminated } from "./tasks.js";
 import { registerActiveSession } from "./session-control.js";
@@ -167,7 +168,9 @@ export function buildSystemPrompt(agent, projectName) {
     lines.push(
       "",
       "You have the diagram-design skill available. Use it when producing or revising architecture diagrams; choose an architecture/layers/data-flow type that matches the question, keep the diagram readable, and prefer self-contained SVG/HTML artifacts when a visual artifact is requested.",
-      "The skill improves the visual artifact, but the deliver_artifact `diagram` field must still contain the compact nodes/edges structure consumed by the Feishu card renderer. Keep node labels short, declare layers explicitly, and avoid crossing or backtracking edges.",
+      "The skill improves the visual artifact, but the deliver_artifact `diagram` field must still contain compact nodes/edges for the Feishu card preview. Keep the preview within 9 nodes and 12 edges, keep node labels short, declare layers explicitly, and avoid crossing or backtracking edges.",
+      "When the user asks for a design/flow/architecture visual, create the skill's self-contained HTML/SVG in the assigned artifacts directory and include that file in artifactPaths. The diagram field is only the card preview, not a replacement for the skill-generated visual.",
+      "Choose the visual type from the skill (architecture, flowchart, sequence, state machine, swimlane, etc.) based on the information being communicated; do not force every request into a generic layered architecture diagram.",
       "When your delivery describes system architecture, also fill the `diagram` field of deliver_artifact:",
       "nodes (id + short label, optional layer such as 接入层/服务层/数据层) and edges (from/to node id, optional label).",
       "It is rendered into a flowchart image and embedded in the Feishu card, so keep labels short and the graph readable.",
@@ -179,6 +182,7 @@ export function buildSystemPrompt(agent, projectName) {
     `- 你可以使用工具（${tools.join("、")}）查看项目文件。`,
     `- 当工具被安全策略拒绝时，如实告知用户，不要尝试绕过。`,
     `- 完成任务后，用 deliver_artifact 工具交付（summary 必填）。`,
+    `- 确定性的测试、状态读取、交付校验和图表生成优先使用 agent_cli 工具；不要把完整命令日志复制进交付摘要。`,
     `- 需要用户澄清时，也用 deliver_artifact 交付：summary 写明需要澄清什么，next 写明等待用户回答；不要输出长篇分析或复述上下文。`,
     `- 若这是最终汇总（任务全部完成、无需下游协作），交付时设置 final=true。`,
     `- 回复使用中文，简洁明确，直接给出结论。`,
@@ -403,6 +407,47 @@ function createTaskStatusTool({ taskId, chatId }) {
   });
 }
 
+export function createAgentCliTool({ taskId, projectName, getProjectName, chatId, agentKey, execute = executeAgentCli }) {
+  return defineTool({
+    name: "agent_cli",
+    label: "受控 CLI",
+    description: "执行受控确定性操作并返回精简 JSON。action 只能是 test、task-status、validate-delivery 或 render-diagram；不支持任意 shell 命令。",
+    parameters: Type.Object({
+      action: Type.String({ description: "test | task-status | validate-delivery | render-diagram" }),
+      command: Type.Optional(Type.String({ description: "test 使用的可执行文件，默认 node" })),
+      args: Type.Optional(Type.Array(Type.String(), { description: "test 命令参数数组" })),
+      taskId: Type.Optional(Type.String({ description: "任务编号，默认当前任务" })),
+      projectName: Type.Optional(Type.String({ description: "项目名，默认当前项目" })),
+      artifactPaths: Type.Optional(Type.Array(Type.String(), { description: "交付文件路径列表" })),
+      diagramJson: Type.Optional(Type.String({ description: "render-diagram 使用的图表 JSON" })),
+    }),
+    async execute(_toolCallId, params) {
+      const action = String(params.action || "").trim();
+      const effectiveTaskId = params.taskId || taskId;
+      const effectiveProject = params.projectName || getProjectName?.() || projectName;
+      const input = {
+        taskId: effectiveTaskId,
+        projectName: effectiveProject,
+        chatId,
+        agent: agentKey,
+        artifactPaths: params.artifactPaths || [],
+        ...(action === "render-diagram" ? { spec: params.diagramJson } : {}),
+        ...(action === "test" ? { command: process.execPath, args: ["--test", "test"] } : {}),
+      };
+      if (action === "render-diagram") {
+        try {
+          input.spec = JSON.parse(params.diagramJson || "{}");
+        } catch {
+          const result = { status: "failed", error: "diagramJson must be valid JSON" };
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+        }
+      }
+      const result = await execute(action, input);
+      return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+    },
+  });
+}
+
 export async function runAgent(agent, text, context, { sessionFile } = {}) {
   if (await isTerminated(context.taskId)) return { text: "", cancelled: true, sessionFile: sessionFile || null, delivery: null, projectName: context.projectName || null };
   const modelRuntime = await getModelRuntime();
@@ -445,6 +490,8 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
   if (!context.statusQuery) {
     tools.push("deliver_artifact");
     customTools.push(deliverTool);
+    tools.push("agent_cli");
+    customTools.push(createAgentCliTool({ taskId: context.taskId, getProjectName: () => activeProject, agentKey: agent.key, chatId: context.chatId }));
   }
   if (context.statusQuery) {
     customTools.push(createTaskStatusTool({ taskId: context.taskId, chatId: context.chatId }));
