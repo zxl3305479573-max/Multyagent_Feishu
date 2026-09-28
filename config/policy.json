@@ -21,9 +21,10 @@
         "todo",
         "create_goal",
         "get_goal",
-        "update_goal"
+        "update_goal",
+        "get_task_status"
       ],
-      "thinking": "off",
+      "thinking": "low",
       "writePaths": [
         "workspace/{project}/artifacts"
       ],

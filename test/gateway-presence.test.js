@@ -6,6 +6,7 @@ import {
   createCardActionHandler,
   isApprovalCommand,
   parseConfirmRoles,
+  uploadCardImage,
 } from "../src/gateway.js";
 
 const ALL_ROLES = ["project_manager", "architect", "frontend_developer", "backend_developer", "tester", "auditor"];
@@ -159,6 +160,154 @@ test("final:true 的交付不出按钮（六角色逐个断言）", () => {
 test("agentKey 为空时不出按钮（无法判断归属）", () => {
   const card = buildResultCard({ delivery: { summary: "无归属交付" } });
   assert.equal(actionElement(card), undefined);
+});
+
+test("交付卡带 diagramImageKey 时渲染图片元素，不带时不渲染", () => {
+  const withDiagram = buildResultCard({
+    delivery: deliveryOf("architect"),
+    diagramImageKey: "img_v2_abc",
+  });
+  const img = withDiagram.body.elements.find((element) => element?.tag === "img");
+  assert.ok(img, "应渲染 img 元素");
+  assert.equal(img.img_key, "img_v2_abc");
+  assert.equal(img.alt.content, "系统架构流程图");
+
+  // 图片必须排在正文之后、按钮之前，阅读顺序才对
+  const order = withDiagram.body.elements.map((element) => element.tag);
+  assert.deepEqual(order, ["div", "img", "action"]);
+
+  const without = buildResultCard({ delivery: deliveryOf("architect") });
+  assert.equal(without.body.elements.some((element) => element?.tag === "img"), false);
+});
+
+test("uploadCardImage 返回飞书给的 image_key", async () => {
+  const calls = [];
+  const client = {
+    im: { image: { create: async (payload) => { calls.push(payload); return { data: { image_key: "img_v2_xyz" } }; } } },
+  };
+  const key = await uploadCardImage(client, Buffer.from("png-bytes"));
+  assert.equal(key, "img_v2_xyz");
+  assert.equal(calls[0].data.image_type, "message");
+  assert.ok(Buffer.isBuffer(calls[0].data.image));
+
+  // 飞书实际返回的是顶层 image_key（已实测），两种形态都要认
+  const flat = { im: { image: { create: async () => ({ image_key: "img_flat" }) } } };
+  assert.equal(await uploadCardImage(flat, Buffer.from("x")), "img_flat");
+});
+
+test("交付带 diagram 时渲染成图并嵌进卡片，上传失败则降级为纯文本卡", async () => {
+  const { sendResultCard } = await import("../src/gateway.js");
+  const diagram = {
+    title: "架构",
+    nodes: [{ id: "a", label: "客户端" }, { id: "b", label: "服务端" }],
+    edges: [{ from: "a", to: "b", label: "REST" }],
+  };
+  const delivery = { agentKey: "architect", agentName: "架构设计师", summary: "架构已完成", artifactPaths: [], diagram };
+  const elementsOf = (payload) => JSON.parse(payload.data.content).elements ?? JSON.parse(payload.data.content).body.elements;
+
+  const sent = [];
+  const okClient = {
+    im: {
+      image: { create: async () => ({ data: { image_key: "img_v2_test" } }) },
+      message: { create: async (payload) => { sent.push(payload); return { code: 0 }; } },
+    },
+  };
+  await sendResultCard(okClient, "chat-1", { delivery }, { log: { error() {} } });
+  const img = elementsOf(sent[0]).find((element) => element.tag === "img");
+  assert.ok(img, "应把渲染出来的图放进卡片");
+  assert.equal(img.img_key, "img_v2_test");
+  assert.equal(img.alt.content, "系统架构流程图");
+
+  const errors = [];
+  const failingClient = {
+    im: {
+      image: { create: async () => { throw new Error("no scope"); } },
+      message: { create: async (payload) => { sent.push(payload); return { code: 0 }; } },
+    },
+  };
+  await sendResultCard(failingClient, "chat-1", { delivery }, { log: { error: (message) => errors.push(message) } });
+  assert.equal(elementsOf(sent[1]).some((element) => element.tag === "img"), false, "上传失败不应嵌图");
+  assert.equal(errors.length, 1, "上传失败要记录日志");
+
+  const plain = [];
+  await sendResultCard(okClient, "chat-1", { delivery: { ...delivery, diagram: null } }, { log: { error: (message) => plain.push(message) } });
+  assert.equal(elementsOf(sent[2]).some((element) => element.tag === "img"), false);
+  assert.equal(plain.length, 0);
+});
+
+test("卡片正文把 Markdown 标题降级为加粗、去掉反引号，不再字面显示 ##", () => {
+  const card = buildResultCard({
+    delivery: {
+      agentKey: "project_manager",
+      summary: "## 结论\n\nteacher 已暂停。\n\n## 关键决策\n\n1. 即时冻结：`workspace/teacher/` 不再新增文件\n- 第二条\n\n---\n\n### 产物内容要点",
+    },
+  });
+  const content = card.body.elements[0].text.content;
+  assert.equal(content.includes("##"), false, "标题井号不应字面出现");
+  assert.equal(content.includes("`"), false, "反引号不应字面出现");
+  assert.ok(content.includes("**结论**"), "标题应降级为加粗");
+  assert.ok(content.includes("**关键决策**"));
+  assert.ok(content.includes("workspace/teacher/ 不再新增文件"), "反引号要去掉但内容保留");
+  assert.ok(content.includes("· 第二条"), "连字符列表统一成 ·");
+  assert.equal(content.includes("---"), false, "分隔线应去掉");
+});
+
+test("卡片正文清掉代码围栏、引用符号、表格线与斜体星号，只留加粗标题", () => {
+  const card = buildResultCard({
+    delivery: {
+      agentKey: "architect",
+      summary: [
+        "## 接口清单",
+        "",
+        "| 端点 | 方法 |",
+        "| --- | --- |",
+        "| /students | GET |",
+        "",
+        "> 注意：分页从 1 开始",
+        "",
+        "```bash",
+        "npm run dev",
+        "```",
+        "",
+        "*斜体说明* 还有 * 号在中间：2 * 3",
+      ].join("\n"),
+    },
+  });
+  const content = card.body.elements[0].text.content;
+  assert.ok(content.includes("**接口清单**"), "标题保持加粗");
+  assert.equal(content.includes("```"), false, "代码围栏应去掉");
+  assert.ok(content.includes("npm run dev"), "围栏内内容按普通文本保留");
+  assert.equal(content.includes("|"), false, "表格竖线应去掉");
+  assert.ok(content.includes("端点 · 方法"), "表头拍平成一行");
+  assert.ok(content.includes("注意：分页从 1 开始"), "引用内容保留、符号去掉");
+  assert.equal(content.trimStart().startsWith(">"), false, "引用符号应去掉");
+  assert.equal(/^\s/.test(content.split("\n").find((line) => line.includes("注意"))), false, "引用行不应残留行首空格");
+  assert.ok(content.includes("斜体说明"), "斜体内容保留");
+  assert.ok(content.includes("2 * 3"), "行内乘号不该被当成斜体");
+});
+
+test("项目经理即使填了 diagram 也不渲染架构图，只有架构师可以", async () => {
+  const { sendResultCard } = await import("../src/gateway.js");
+  const diagram = { nodes: [{ id: "a", label: "客户端" }, { id: "b", label: "服务端" }], edges: [{ from: "a", to: "b" }] };
+  const sent = [];
+  let uploads = 0;
+  const client = {
+    im: {
+      image: { create: async () => { uploads += 1; return { image_key: "img_v2_x" }; } },
+      message: { create: async (payload) => { sent.push(payload); return { code: 0 }; } },
+    },
+  };
+  const elementsOf = (payload) => JSON.parse(payload.data.content).elements ?? JSON.parse(payload.data.content).body.elements;
+
+  const infos = [];
+  await sendResultCard(client, "chat-1", { delivery: { agentKey: "project_manager", agentName: "项目经理", summary: "汇总", artifactPaths: [], diagram } }, { log: { info: (m) => infos.push(m), error() {} } });
+  assert.equal(uploads, 0, "项目经理不该上传架构图");
+  assert.equal(elementsOf(sent[0]).some((element) => element.tag === "img"), false);
+  assert.ok(infos.some((line) => line.includes("skipped for project_manager")), "跳过要留日志");
+
+  await sendResultCard(client, "chat-1", { delivery: { agentKey: "architect", agentName: "架构设计师", summary: "架构", artifactPaths: [], diagram } }, { log: { info() {}, error() {} } });
+  assert.equal(uploads, 1, "架构师可以上传架构图");
+  assert.equal(elementsOf(sent[1]).some((element) => element.tag === "img"), true);
 });
 
 test("delivery 自带 choices 时优先使用，不被默认确认按钮覆盖", () => {

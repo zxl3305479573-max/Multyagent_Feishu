@@ -13,6 +13,7 @@
 //   - RPC 子进程隔离
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { checkWriteAllowed, isDeleteCommand, resolveWritePaths } from "./policy.js";
 import {
@@ -25,11 +26,32 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { artifactsDirFor, ensureArtifactsDir, saveDelivery } from "./artifacts.js";
+import { loadTaskStatus } from "./task-status.js";
+import { isTerminated } from "./tasks.js";
+import { registerActiveSession } from "./session-control.js";
 
 const MODEL_PROVIDER = process.env.PI_AGENT_PROVIDER || "deepseek";
 // deepseek-chat is the stable API model; override with PI_AGENT_MODEL when needed.
 const MODEL_ID = process.env.PI_AGENT_MODEL || "deepseek-chat";
 const THINKING_LEVEL = process.env.PI_AGENT_THINKING || "off";
+
+// The diagram-design skill is intentionally scoped to the planning/design
+// agents. Other role agents should not receive the extra visual-authoring
+// instructions or resources.
+// Keep the path configurable so deployments can pin a vendored copy instead
+// of relying on the user's global Codex skills directory.
+export function diagramSkillPaths(agentKey) {
+  if (agentKey !== "architect" && agentKey !== "project_manager") return [];
+  const configured = process.env.PI_DIAGRAM_SKILL_PATH?.trim()
+    || process.env.PI_ARCHITECT_DIAGRAM_SKILL_PATH?.trim();
+  const defaultPath = join(homedir(), ".codex", "skills", "diagram-design");
+  const skillPath = configured || defaultPath;
+  return existsSync(skillPath) ? [skillPath] : [];
+}
+
+// Backward-compatible name for callers that used the original architect-only
+// helper before project-manager support was added.
+export const architectSkillPaths = diagramSkillPaths;
 
 // 默认只读工具集：作为 policy.json 未配置角色时的 fallback。
 const DEFAULT_TOOLS = ["read", "ls", "grep", "find"];
@@ -64,9 +86,11 @@ function getModelRuntime() {
 }
 
 // 每个角色一个策略工厂：闭包捕获该角色的写路径白名单/黑名单。
-function createPolicyFactory(agent, projectName) {
+export function createPolicyFactory(agent, projectNameOrGetter) {
   const cfg = policy.agents?.[agent.key] ?? {};
-  const writePaths = resolveWritePaths(cfg.writePaths, projectName);
+  const getProjectName = typeof projectNameOrGetter === "function"
+    ? projectNameOrGetter
+    : () => projectNameOrGetter;
   const denyPaths = cfg.denyPaths || [];
   return (pi) => {
     pi.on("tool_call", async (event, ctx) => {
@@ -85,6 +109,11 @@ function createPolicyFactory(agent, projectName) {
       }
       // 3. 写入路径拦截（write/edit）
       if (event.toolName === "write" || event.toolName === "edit") {
+        const currentProject = getProjectName();
+        if (cfg.writePaths?.length && !currentProject) {
+          return { block: true, reason: "尚未确定项目，禁止写入项目目录" };
+        }
+        const writePaths = resolveWritePaths(cfg.writePaths, currentProject);
         const check = checkWriteAllowed(ctx.cwd, event.input?.path, { writePaths, denyPaths });
         if (!check.allowed) {
           return { block: true, reason: check.reason };
@@ -130,6 +159,18 @@ export function buildSystemPrompt(agent, projectName) {
       "",
       "Project manager must choose only required roles in assignments; never dispatch every role by default.",
       "Each assignment must include agentKey and task, with reason explaining why the role is needed.",
+      "You have the diagram-design skill available for project plans, dependency maps, roadmaps, and workflow visuals. Use it only for planning/coordination visuals; do not author the final system architecture diagram or put an architecture `diagram` field in your delivery—delegate that to the architect.",
+      "Do not produce architecture diagrams yourself: the `diagram` field belongs to the architect. Summarize and dispatch instead.",
+    );
+  }
+  if (agent.key === "architect") {
+    lines.push(
+      "",
+      "You have the diagram-design skill available. Use it when producing or revising architecture diagrams; choose an architecture/layers/data-flow type that matches the question, keep the diagram readable, and prefer self-contained SVG/HTML artifacts when a visual artifact is requested.",
+      "The skill improves the visual artifact, but the deliver_artifact `diagram` field must still contain the compact nodes/edges structure consumed by the Feishu card renderer. Keep node labels short, declare layers explicitly, and avoid crossing or backtracking edges.",
+      "When your delivery describes system architecture, also fill the `diagram` field of deliver_artifact:",
+      "nodes (id + short label, optional layer such as 接入层/服务层/数据层) and edges (from/to node id, optional label).",
+      "It is rendered into a flowchart image and embedded in the Feishu card, so keep labels short and the graph readable.",
     );
   }
   lines.push(
@@ -148,18 +189,22 @@ export function buildSystemPrompt(agent, projectName) {
 // 每个角色缓存一份 loader（系统提示不同），首次创建后复用。
 const loaderCache = new Map();
 
-function getLoader(agent, projectName) {
+function getLoader(agent, projectNameOrGetter) {
+  const dynamicProject = typeof projectNameOrGetter === "function";
+  const getProjectName = dynamicProject ? projectNameOrGetter : () => projectNameOrGetter;
+  const projectName = getProjectName();
   const cacheKey = `${agent.key}:${projectName || "default"}`;
   let loaderPromise = loaderCache.get(cacheKey);
-  if (!loaderPromise) {
+  if (!loaderPromise || dynamicProject) {
     const loader = new DefaultResourceLoader({
       cwd: process.cwd(),
       agentDir: getAgentDir(),
-      systemPromptOverride: () => buildSystemPrompt(agent, projectName),
-      extensionFactories: [createPolicyFactory(agent, projectName)],
+      additionalSkillPaths: diagramSkillPaths(agent.key),
+      systemPromptOverride: () => buildSystemPrompt(agent, getProjectName()),
+      extensionFactories: [createPolicyFactory(agent, getProjectName)],
     });
     loaderPromise = loader.reload().then(() => loader);
-    loaderCache.set(cacheKey, loaderPromise);
+    if (!dynamicProject) loaderCache.set(cacheKey, loaderPromise);
   }
   return loaderPromise;
 }
@@ -169,10 +214,24 @@ function sessionDirFor(agent) {
 }
 
 export function buildPrompt(text, context) {
-  const artifactsDir = context.artifactsDir || artifactsDirFor(context.taskId, context.projectName);
+  const artifactsDir = context.artifactsDir
+    || (context.projectName ? artifactsDirFor(context.taskId, context.projectName) : null);
+  if (context.statusQuery) {
+    return [
+      `要查询的根任务编号：${context.taskId}`,
+      `当前群聊：${context.chatId || ""}`,
+      `用户请求：${text || "查询当前任务状态"}`,
+      "",
+      "这是只读状态查询。必须调用 get_task_status，并将上面的根任务编号作为 taskId 传入。",
+      "不要调用 deliver_artifact，不要创建或修改任务，不要派发下游；根据工具返回的结构化状态用简洁中文回答。",
+    ].join("\n");
+  }
+  const artifactInstruction = artifactsDir
+    ? `产物目录：${artifactsDir}`
+    : "项目尚未确定：先调用 create_project 创建或切换项目，再将交付物写入该项目的 artifacts 目录。";
   return [
     `任务编号：${context.taskId}`,
-    `产物目录：${artifactsDir}`,
+    artifactInstruction,
     `用户指令：${text || "（未提供）"}`,
     ``,
     `请处理该任务。若需产出交付物，请写入产物目录，并用 deliver_artifact 工具交付。`,
@@ -191,6 +250,42 @@ export function extractText(message) {
   return "";
 }
 
+function testCommand(command = "") {
+  return /(?:^|[\s;&|])(?:npm\s+(?:run\s+)?(?:test|vitest|jest|playwright)|pnpm\s+(?:run\s+)?(?:test|vitest|jest|playwright)|yarn\s+(?:run\s+)?(?:test|vitest|jest|playwright)|bun\s+(?:run\s+)?(?:test|vitest|jest|playwright)|pytest|vitest|jest|playwright\s+test)(?:\s|$)/i.test(command);
+}
+
+export function mapPiToolEvent(event = {}, context = {}, previous = {}) {
+  const common = {
+    task_id: context.taskId || null,
+    parent_task_id: context.parentTaskId || null,
+    agent: context.agentKey || null,
+  };
+  if (event.type === "agent_start") return [{ ...common, type: "agent_started", status: "running", summary: "Agent 开始执行" }];
+  if (event.type === "agent_settled") {
+    return [{ ...common, type: "agent_finished", status: "completed", summary: "Agent 执行轮次结束" }];
+  }
+  if (event.type === "tool_execution_start") {
+    const args = event.args || {};
+    const command = ["bash", "powershell"].includes(event.toolName) ? String(args.command || "") : "";
+    const filePath = ["write", "edit"].includes(event.toolName) ? String(args.path || "") : "";
+    const events = [{ ...common, type: "tool_call", status: "running", tool: event.toolName, ...(command ? { command } : {}), ...(filePath ? { file_path: filePath } : {}), summary: "工具开始执行" }];
+    if (command && testCommand(command)) events.push({ ...common, type: "test_started", status: "running", tool: event.toolName, command, summary: "测试开始" });
+    return events;
+  }
+  if (event.type === "tool_execution_end") {
+    const failed = event.isError === true;
+    const command = String(previous.command || "");
+    const events = [{ ...common, type: "tool_result", status: failed ? "failed" : "completed", tool: event.toolName, summary: failed ? "工具执行失败" : "工具执行完成" }];
+    if (["write", "edit"].includes(event.toolName) && !failed && previous.path) {
+      events.push({ ...common, type: "file_change", status: "completed", tool: event.toolName, file_path: String(previous.path), summary: event.toolName === "write" ? "文件已创建或覆盖" : "文件已编辑" });
+    }
+    if (command && testCommand(command)) events.push({ ...common, type: "test_result", status: failed ? "failed" : "passed", tool: event.toolName, command, summary: failed ? "测试命令失败" : "测试命令完成" });
+    if (failed) events.push({ ...common, type: "error", status: "failed", tool: event.toolName, summary: "工具调用失败", error: "工具返回错误" });
+    return events;
+  }
+  return [];
+}
+
 function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, onDeliver }) {
   return defineTool({
     name: "deliver_artifact",
@@ -200,7 +295,9 @@ function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentNam
       summary: Type.String({ description: "交付摘要（必填，需包含：结论 + 关键决策 + 产物内容要点，让人不看文件也能判断成果）" }),
       artifactPaths: Type.Optional(Type.Array(Type.String(), { description: "产物文件路径列表" })),
       next: Type.Optional(Type.String({ description: "建议的下一步" })),
+      blockers: Type.Optional(Type.Array(Type.String(), { description: "当前无法继续推进的阻塞项；没有则传空数组" })),
       assumptions: Type.Optional(Type.Array(Type.String(), { description: "未确认的假设" })),
+      risks: Type.Optional(Type.Array(Type.String(), { description: "需跟踪的风险；没有则传空数组" })),
       choices: Type.Optional(Type.Array(Type.Object({
         id: Type.String(),
         label: Type.String(),
@@ -213,6 +310,19 @@ function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentNam
         task: Type.String(),
         reason: Type.Optional(Type.String()),
       }))),
+      diagram: Type.Optional(Type.Object({
+        title: Type.Optional(Type.String({ description: "流程图标题" })),
+        nodes: Type.Array(Type.Object({
+          id: Type.String({ description: "节点唯一 id，供连线引用" }),
+          label: Type.String({ description: "方框里的文字，尽量短" }),
+          layer: Type.Optional(Type.String({ description: "所属层/分组，同层节点并排显示，例如：接入层、服务层、数据层" })),
+        }), { description: "节点列表" }),
+        edges: Type.Array(Type.Object({
+          from: Type.String({ description: "起点节点 id" }),
+          to: Type.String({ description: "终点节点 id" }),
+          label: Type.Optional(Type.String({ description: "连线上的文字，例如协议或操作名" })),
+        }), { description: "连线列表" }),
+      }, { description: "系统架构流程图：有架构内容时填写，会渲染成图片放进飞书卡片" })),
     }),
     async execute(_toolCallId, params) {
       const artifactsDir = getArtifactsDir();
@@ -220,9 +330,12 @@ function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentNam
         summary: params.summary,
         artifactPaths: params.artifactPaths || [],
         next: params.next || "",
+        blockers: params.blockers || [],
         assumptions: params.assumptions || [],
+        risks: params.risks || [],
         choices: params.choices || [],
         assignments: normalizeAssignments(params.assignments),
+        diagram: params.diagram || null,
         final: params.final === true,
         artifactsDir,
         projectName: getProjectName?.() || null,
@@ -273,7 +386,25 @@ function createProjectTool({ onProject }) {
   });
 }
 
+function createTaskStatusTool({ taskId, chatId }) {
+  return defineTool({
+    name: "get_task_status",
+    label: "查询任务状态",
+    description: "只读查询当前群内指定根任务及其下游任务的结构化状态，不读取其他群或原始会话内容。",
+    parameters: Type.Object({
+      taskId: Type.Optional(Type.String({ description: "要查询的根任务编号；省略时查询当前任务" })),
+    }),
+    async execute(_toolCallId, params) {
+      const requested = String(params.taskId || taskId || "").trim();
+      if (!requested) return { content: [{ type: "text", text: "当前没有可查询的任务编号。" }], details: {} };
+      const status = await loadTaskStatus(requested, chatId);
+      return { content: [{ type: "text", text: JSON.stringify(status) }], details: status };
+    },
+  });
+}
+
 export async function runAgent(agent, text, context, { sessionFile } = {}) {
+  if (await isTerminated(context.taskId)) return { text: "", cancelled: true, sessionFile: sessionFile || null, delivery: null, projectName: context.projectName || null };
   const modelRuntime = await getModelRuntime();
   const model = modelRuntime.getModel(MODEL_PROVIDER, MODEL_ID);
   if (!model) {
@@ -283,8 +414,8 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
     throw new Error(`模型不可用: ${MODEL_PROVIDER}/${MODEL_ID}。${credentialHint}`);
   }
 
-  const projectName = context.projectName;
-  const loader = await getLoader(agent, projectName);
+  let activeProject = context.projectName || null;
+  const loader = await getLoader(agent, () => activeProject);
   const cfg = policy.agents?.[agent.key] ?? {};
   const sessionDir = sessionDirFor(agent);
   await mkdir(sessionDir, { recursive: true });
@@ -299,7 +430,6 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
     sessionManager = SessionManager.create(process.cwd(), sessionDir);
   }
 
-  let activeProject = projectName || null;
   const getArtifactsDir = () => context.artifactsDir || artifactsDirFor(context.taskId, activeProject);
   let delivery = null;
   const deliverTool = createDeliverTool({
@@ -310,11 +440,23 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
     onDeliver: (d) => { delivery = d; },
   });
 
-  const tools = [...(cfg.tools || DEFAULT_TOOLS), "deliver_artifact"];
-  const customTools = [deliverTool];
+  const tools = [...(cfg.tools || DEFAULT_TOOLS)];
+  const customTools = [];
+  if (!context.statusQuery) {
+    tools.push("deliver_artifact");
+    customTools.push(deliverTool);
+  }
+  if (context.statusQuery) {
+    customTools.push(createTaskStatusTool({ taskId: context.taskId, chatId: context.chatId }));
+    tools.push("get_task_status");
+  }
   if (agent.key === "project_manager") {
     customTools.push(createProjectTool({ onProject: (name) => { activeProject = name; } }));
     tools.push("create_project");
+    if (!context.statusQuery) {
+      customTools.push(createTaskStatusTool({ taskId: context.taskId, chatId: context.chatId }));
+      tools.push("get_task_status");
+    }
   }
 
   const { session } = await createAgentSession({
@@ -326,16 +468,32 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
     sessionManager,
     resourceLoader: loader,
   });
+  const unregisterSession = registerActiveSession(context.taskId, session);
 
   let reply = "";
+  let traceChain = Promise.resolve();
+  const emitTrace = (events) => {
+    for (const event of events) {
+      traceChain = traceChain
+        .then(() => context.onEvent?.(event))
+        .catch((error) => console.warn(`[pi-agent] trace event dropped: ${error.message}`));
+    }
+  };
+  const toolInputs = new Map();
   try {
     session.subscribe((event) => {
       if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
         reply += event.assistantMessageEvent.delta;
       }
+      if (event.type === "tool_execution_start") toolInputs.set(event.toolCallId, event.args || {});
+      emitTrace(mapPiToolEvent(event, context, toolInputs.get(event.toolCallId) || {}));
+      if (event.type === "tool_execution_end") toolInputs.delete(event.toolCallId);
     });
 
+    if (await isTerminated(context.taskId)) return { text: "", cancelled: true, sessionFile: session.sessionFile || sessionFile || null, delivery: null, projectName: activeProject };
     await session.prompt(buildPrompt(text, context));
+    await traceChain;
+    if (await isTerminated(context.taskId)) return { text: "", cancelled: true, sessionFile: session.sessionFile || sessionFile || null, delivery: null, projectName: activeProject };
 
     if (!reply.trim()) {
       const last = [...session.messages].reverse().find((m) => m.role === "assistant");
@@ -347,7 +505,16 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
       delivery,
       projectName: activeProject || null,
     };
+  } catch (error) {
+    if (await isTerminated(context.taskId)) {
+      await traceChain;
+      return { text: "", cancelled: true, sessionFile: session.sessionFile || sessionFile || null, delivery: null, projectName: activeProject };
+    }
+    emitTrace([{ task_id: context.taskId, parent_task_id: context.parentTaskId || null, agent: agent.key, type: "error", status: "failed", error: error.message, summary: "Agent 执行失败" }]);
+    await traceChain;
+    throw error;
   } finally {
+    unregisterSession();
     session.dispose();
   }
 }

@@ -5,12 +5,16 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test",
-    "smoke": "node scripts/smoke.mjs"
+    "test": "node --test \"test/*.test.js\"",
+    "smoke": "node scripts/smoke.mjs",
+    "bitable:check": "node scripts/check-bitable.mjs",
+    "bitable:setup": "node scripts/setup-bitable-board.mjs",
+    "bitable:smoke": "node scripts/smoke-bitable.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.85.1",
     "@larksuiteoapi/node-sdk": "^1.50.0",
+    "@resvg/resvg-js": "^2.6.2",
     "dotenv": "^16.4.7",
     "typebox": "^1.3.7"
   }

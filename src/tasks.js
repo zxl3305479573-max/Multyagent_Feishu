@@ -1,120 +1,62 @@
-// 任务表：task_id ↔ session 文件映射 + 状态流转。
-// 内存缓存 + 持久化到 runtime/tasks.json（可用 PI_TASKS_FILE 覆盖，测试用）。
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+// Compatibility facade: TaskStore is the only durable source of task state.
+import { TaskStore } from "./domain/task-store.js";
 
-const DEFAULT_FILE = "runtime/tasks.json";
-let file = process.env.PI_TASKS_FILE || DEFAULT_FILE;
-let state = { tasks: {}, byRoot: {}, recent: {} };
-let loaded = false;
-let writeChain = Promise.resolve();
+const DEFAULT_FILE = process.env.PI_DOMAIN_TASKS_FILE || process.env.PI_TASKS_FILE || "runtime/domain-tasks.json";
+let store = new TaskStore(DEFAULT_FILE);
 
-async function load() {
-  if (loaded) return;
-  try {
-    state = JSON.parse(await readFile(file, "utf8"));
-  } catch {
-    state = { tasks: {}, byRoot: {}, recent: {} };
-  }
-  if (!state.tasks) state.tasks = {};
-  if (!state.byRoot) state.byRoot = {};
-  if (!state.recent) state.recent = {};
-  loaded = true;
+export function configureTaskStore(nextStore) {
+  if (!nextStore || typeof nextStore.create !== "function") throw new TypeError("configureTaskStore requires a TaskStore-like object");
+  store = nextStore;
+  return store;
 }
 
-async function persist() {
-  writeChain = writeChain.then(async () => {
-    await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, JSON.stringify(state, null, 2));
-  });
-  await writeChain;
-}
-
-// 按话题根（rootKey）查找任务，用于多轮追问复用。
-export async function findTaskByRoot(agentKey, rootKey) {
-  await load();
-  if (!rootKey) return null;
-  const taskId = state.byRoot[`${agentKey}:${rootKey}`];
-  return taskId ? state.tasks[taskId] : null;
-}
-
-export async function createTask({ agentKey, chatId, rootKey, messageId }) {
-  await load();
-  const taskId = randomUUID();
-  const task = {
-    taskId,
-    agentKey,
-    chatId,
-    rootKey: rootKey || null,
-    firstMessageId: messageId,
-    sessionFile: null,
-    projectName: null,
-    status: "received",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+function legacy(task) {
+  if (!task) return null;
+  return {
+    ...task,
+    taskId: task.task_id,
+    agentKey: task.agent,
+    chatId: task.source_chat_id,
+    rootKey: task.root_key || null,
+    messageId: task.source_message_id,
+    sessionFile: task.session_file || null,
+    projectName: task.project_name || null,
+    lastMessageId: task.last_message_id || null,
+    updatedAt: task.updated_at ? Date.parse(task.updated_at) : null,
+    createdAt: task.created_at ? Date.parse(task.created_at) : null,
   };
-  state.tasks[taskId] = task;
-  if (rootKey) state.byRoot[`${agentKey}:${rootKey}`] = taskId;
-  touchRecent(task);
-  await persist();
-  return task;
 }
 
-export async function updateTask(taskId, patch) {
-  await load();
-  const task = state.tasks[taskId];
-  if (!task) return null;
-  Object.assign(task, patch, { updatedAt: Date.now() });
-  touchRecent(task);
-  await persist();
-  return task;
+function domainPatch(patch = {}) {
+  const result = { ...patch };
+  const fields = { taskId: "task_id", agentKey: "agent", chatId: "source_chat_id", rootKey: "root_key", messageId: "source_message_id", sessionFile: "session_file", projectName: "project_name", lastMessageId: "last_message_id", parentTaskId: "parent_task_id" };
+  for (const [legacyKey, domainKey] of Object.entries(fields)) {
+    if (Object.prototype.hasOwnProperty.call(result, legacyKey)) { result[domainKey] = result[legacyKey]; delete result[legacyKey]; }
+  }
+  return result;
 }
 
-// 记录“同一群 + 同一机器人”的最近任务，用于无线程消息的会话延续。
-function touchRecent(task) {
-  state.recent[`${task.agentKey}:${task.chatId}`] = task.taskId;
+function rootOf(taskId) { return String(taskId || "").split(":")[0]; }
+
+export async function createTask({ agentKey, chatId, rootKey, messageId, ...input } = {}) {
+  const task = await store.create({ ...input, agent: agentKey || input.agent, requested_role: agentKey || input.requested_role || input.agent, source_chat_id: chatId || input.source_chat_id, source_message_id: messageId || input.source_message_id, root_key: rootKey || null, project_name: input.projectName || input.project_name || null, session_file: input.sessionFile || input.session_file || null });
+  if (agentKey && rootKey) await store.linkAlias(agentKey, rootKey, task.task_id);
+  if (agentKey && chatId) await store.setRecent(agentKey, chatId, task.task_id);
+  return legacy(await store.get(task.task_id));
 }
 
-// 查找同一群内该机器人时间窗口内的最近任务（无 root 关联时兜底）。
-export async function findRecentTask(agentKey, chatId, ttlMs) {
-  await load();
-  const taskId = state.recent[`${agentKey}:${chatId}`];
-  const task = taskId ? state.tasks[taskId] : null;
-  if (!task) return null;
-  if (ttlMs && Date.now() - task.updatedAt > ttlMs) return null;
-  return task;
+export async function updateTask(taskId, patch = {}) {
+  const updated = await store.update(rootOf(taskId), domainPatch(patch));
+  if (updated?.agent && updated.source_chat_id) await store.setRecent(updated.agent, updated.source_chat_id, updated.task_id);
+  return legacy(updated);
 }
 
-// 把额外的关联键（如机器人回复的消息 id）映射到已有任务，支持“回复某条消息”式追问。
-export async function linkRootAlias(agentKey, rootKey, taskId) {
-  await load();
-  if (!rootKey || !taskId) return;
-  state.byRoot[`${agentKey}:${rootKey}`] = taskId;
-  await persist();
-}
+export async function findTaskByRoot(agentKey, rootKey) { return legacy(await store.findByAlias(agentKey, rootKey)); }
+export async function findRecentTask(agentKey, chatId, ttlMs) { return legacy(await store.findRecent(agentKey, chatId, ttlMs)); }
+export async function linkRootAlias(agentKey, rootKey, taskId) { return legacy(await store.linkAlias(agentKey, rootKey, rootOf(taskId))); }
+export async function setPaused(taskId, paused) { return legacy(await store.setPaused(rootOf(taskId), paused)); }
+export async function isPaused(taskId) { return Boolean((await store.getRoot(taskId))?.paused); }
+export async function setTerminated(taskId, terminated = true) { return legacy(await store.setTerminated(rootOf(taskId), terminated)); }
+export async function isTerminated(taskId) { return Boolean((await store.getRoot(taskId))?.terminated); }
 
-// 暂停/恢复任务：暂停后编排层不再派发下游。
-export async function setPaused(taskId, paused) {
-  await load();
-  const task = state.tasks[taskId];
-  if (!task) return null;
-  task.paused = !!paused;
-  task.updatedAt = Date.now();
-  touchRecent(task);
-  await persist();
-  return task;
-}
-
-export async function isPaused(taskId) {
-  await load();
-  return !!state.tasks[taskId]?.paused;
-}
-
-// 测试钩子：重置内存状态并指向临时文件。
-export function _resetForTest(newFile) {
-  file = newFile || DEFAULT_FILE;
-  state = { tasks: {}, byRoot: {}, recent: {} };
-  loaded = false;
-  writeChain = Promise.resolve();
-}
+export function _resetForTest(newFile) { store = new TaskStore(newFile || DEFAULT_FILE); }

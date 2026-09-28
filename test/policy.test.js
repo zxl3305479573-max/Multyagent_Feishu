@@ -3,8 +3,42 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { checkWriteAllowed, isDeleteCommand, isDenied, isWithin, resolvePath, resolveWritePaths } from "../src/policy.js";
+import { createPolicyFactory } from "../src/pi-agent.js";
 
 const cwd = process.cwd();
+
+test("dynamic policy follows project changes and never falls back to default", async () => {
+  let projectName = null;
+  const factory = createPolicyFactory({ key: "project_manager" }, () => projectName);
+  let onToolCall;
+  factory({ on(name, handler) { if (name === "tool_call") onToolCall = handler; } });
+  const check = (path) => onToolCall({ toolName: "write", input: { path } }, { cwd });
+
+  assert.equal((await check("workspace/default/artifacts/plan.md"))?.block, true);
+  projectName = "student";
+  assert.equal((await check("workspace/student/artifacts/plan.md"))?.block, undefined);
+  assert.equal((await check("workspace/default/artifacts/plan.md"))?.block, true);
+});
+
+test("every role resolves its owned write paths against the active project", async () => {
+  const ownedPaths = {
+    project_manager: "artifacts/plan.md",
+    architect: "artifacts/architecture.md",
+    frontend_developer: "frontend/app.js",
+    backend_developer: "backend/api.js",
+    tester: "artifacts/test-report.md",
+    auditor: "artifacts/audit.md",
+  };
+  for (const [agentKey, suffix] of Object.entries(ownedPaths)) {
+    let projectName = "student";
+    const factory = createPolicyFactory({ key: agentKey }, () => projectName);
+    let onToolCall;
+    factory({ on(name, handler) { if (name === "tool_call") onToolCall = handler; } });
+    const check = (path) => onToolCall({ toolName: "write", input: { path } }, { cwd });
+    assert.equal((await check(`workspace/student/${suffix}`))?.block, undefined, agentKey);
+    assert.equal((await check(`workspace/other/${suffix}`))?.block, true, agentKey);
+  }
+});
 
 test("policy config scopes each role to its owned project paths", async () => {
   const config = JSON.parse(await readFile(new URL("../config/policy.json", import.meta.url), "utf8"));
@@ -93,4 +127,21 @@ test("isDeleteCommand 放行创建/写入/构建类命令", () => {
   assert.equal(isDeleteCommand("git add ."), false);
   assert.equal(isDeleteCommand("mkdir -p a/b"), false);
   assert.equal(isDeleteCommand("echo hi > a.txt"), false);
+});
+
+test("编排层指定的产物目录必须落在该角色的写入白名单内", async () => {
+  const { artifactsDirFor } = await import("../src/artifacts.js");
+  const config = JSON.parse(await readFile(new URL("../config/policy.json", import.meta.url), "utf8"));
+  for (const [role, cfg] of Object.entries(config.agents)) {
+    for (const projectName of [null, "student"]) {
+      const artifactsDir = artifactsDirFor("T-root", projectName);
+      const writePaths = resolveWritePaths(cfg.writePaths, projectName);
+      const target = `${artifactsDir}/architecture-plan.md`;
+      assert.equal(
+        checkWriteAllowed(cwd, target, { writePaths }).allowed,
+        true,
+        `${role} 在 projectName=${projectName} 时应能写入自己的产物目录 ${artifactsDir}`,
+      );
+    }
+  }
 });

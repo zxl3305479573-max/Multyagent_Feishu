@@ -55,3 +55,17 @@ test("result card renders assignment list", () => {
   assert.match(content, /请确认后继续执行/);
   assert.match(card.header.title.content, /^\u8bf7\u786e\u8ba4\u4e0b\u4e00\u6b65/);
 });
+
+test("result card renders blockers and risks from the delivery protocol", () => {
+  const card = buildResultCard({ delivery: {
+    agentKey: "project_manager",
+    summary: "plan needs a decision",
+    blockers: ["waiting for product owner"],
+    risks: ["scope may expand"],
+  } });
+  const content = card.body.elements.map((element) => element.text?.content || "").join("\n");
+  assert.match(content, /阻塞/);
+  assert.match(content, /waiting for product owner/);
+  assert.match(content, /风险/);
+  assert.match(content, /scope may expand/);
+});

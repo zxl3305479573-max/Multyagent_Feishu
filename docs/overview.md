@@ -75,6 +75,11 @@ Pi 运行时    六个独立进程，各一根 stdin/stdout      ← 设计中
 
 ## 五、支撑这套流程的关键机制
 
+任务状态只有一个事实来源：`src/domain/task-store.js` 的 `TaskStore`。网关旧接口
+`src/tasks.js` 仅负责把 `task_id`/`source_chat_id` 等领域字段转换为历史调用方使用的
+`taskId`/`chatId` 字段；别名、最近任务、暂停和终止标志也由同一个 store 持久化，避免
+看板、Trace 与运行时各自维护互相矛盾的任务状态。
+
 | 机制 | 作用 |
 | --- | --- |
 | 星型协作 | 所有跨 Agent 通信经编排层，不点对点直连 |

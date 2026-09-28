@@ -5,6 +5,18 @@ import { TaskStore } from "../src/domain/task-store.js";
 
 const FILE = "runtime/domain-task-store.test.json";
 
+test("event snapshots persist and do not regress after a terminal event", async () => {
+  const store = new TaskStore(FILE);
+  const task = await store.create({ agent: "project_manager", source_chat_id: "chat-snapshot" });
+  await store.applyEvent({ type: "task_started", task_id: task.task_id, agent: "project_manager", chat_id: "chat-snapshot", timestamp: "2026-09-24T01:00:00.000Z" });
+  await store.applyEvent({ type: "task_settle", task_id: task.task_id, chat_id: "chat-snapshot", timestamp: "2026-09-24T01:01:00.000Z" });
+  await store.applyEvent({ type: "task_started", task_id: task.task_id, agent: "project_manager", chat_id: "chat-snapshot", timestamp: "2026-09-24T01:02:00.000Z" });
+  const snapshot = await new TaskStore(FILE).getStatus(task.task_id, "chat-snapshot");
+  assert.equal(snapshot.status, "completed");
+  assert.equal(snapshot.latest_event, "task_settle");
+  assert.deepEqual(snapshot.active_agents, []);
+});
+
 test.afterEach(() => {
   rmSync(FILE, { force: true });
 });
@@ -55,4 +67,21 @@ test("租约防止并发领取并支持失败重试", async () => {
   const retried = await store.retry(task.task_id, "boom");
   assert.equal(retried.status, "retrying");
   assert.equal(retried.attempt, 1);
+});
+
+test("只把旧任务文件中缺失的记录迁移到统一 store", async () => {
+  const legacy = "runtime/legacy-task-store.test.json";
+  const target = "runtime/domain-task-migration.test.json";
+  const { writeFile } = await import("node:fs/promises");
+  await writeFile(legacy, JSON.stringify({
+    tasks: { "old-1": { taskId: "old-1", agentKey: "tester", chatId: "chat", rootKey: "root", status: "completed", createdAt: Date.now(), updatedAt: Date.now() } },
+    byRoot: { "tester:root": "old-1" },
+  }));
+  const store = new TaskStore(target);
+  assert.deepEqual(await store.migrateLegacyFile(legacy), { imported: 1 });
+  assert.equal((await store.get("old-1")).agent, "tester");
+  assert.equal((await store.findByAlias("tester", "root")).task_id, "old-1");
+  assert.deepEqual(await store.migrateLegacyFile(legacy), { imported: 0 });
+  rmSync(legacy, { force: true });
+  rmSync(target, { force: true });
 });
