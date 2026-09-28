@@ -2,6 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildFailureCard, buildReply, buildResultCard, buildTextCard, sendCard } from "../src/gateway.js";
 
+test("delivery summary missing uses the robot reply in the stage card", () => {
+  const card = buildResultCard({
+    text: "后端机器人已完成数据库迁移和接口修复。",
+    delivery: { agentKey: "backend_developer", summary: "", artifactPaths: [], final: false },
+  });
+  const content = card.body.elements[0].text.content;
+  assert.match(content, /后端机器人已完成数据库迁移和接口修复/);
+  assert.doesNotMatch(content, /任务已完成/);
+});
+
 test("所有 Agent 的普通回复也使用卡片", () => {
   const card = buildTextCard({ text: "已完成检查" }, { displayName: "测试" });
   assert.equal(card.schema, "2.0");
@@ -86,4 +96,22 @@ test("产物超过 8 个只列前 8 个", () => {
   assert.ok(reply.includes("f0.ts"));
   assert.ok(reply.includes("f7.ts"));
   assert.ok(!reply.includes("f8.ts"));
+});
+
+test("long approval summaries keep the actionable next step visible", () => {
+  const next = "Dispatch tester for independent verification";
+  const card = buildResultCard({
+    delivery: {
+      agentKey: "backend_developer",
+      summary: "completed verification ".repeat(200),
+      artifactPaths: Array.from({ length: 8 }, (_, index) => `workspace/artifact-${index}.md`),
+      evidence: Array.from({ length: 6 }, (_, index) => ({ command: `npm test ${index}`, result: "66 pass / 0 fail" })),
+      assumptions: ["Node 22 and Node 24 were both verified", "The package lock is current"],
+      next,
+      final: false,
+    },
+  });
+  const content = card.body.elements.find((element) => element.tag === "div").text.content;
+  assert.match(content, new RegExp(next));
+  assert.ok(card.body.elements.some((element) => element.tag === "action"));
 });

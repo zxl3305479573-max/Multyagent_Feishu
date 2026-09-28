@@ -157,13 +157,16 @@ export function hasActionableNextStep(delivery = {}) {
 
 export function buildResultCard(result = {}) {
   const delivery = normalizeDelivery(result.delivery);
+  if (!delivery.summary && result.text) delivery.summary = cleanText(result.text).trim();
   const final = delivery.final;
   const confirmRoles = parseConfirmRoles();
   const approvalRequired = result.approvalRequired === true || (!final && hasActionableNextStep(delivery) && Boolean(delivery.agentKey) && confirmRoles.has(delivery.agentKey));
-  const choices = delivery.choices.length ? delivery.choices : approvalRequired ? [{ id: "approve", label: "确认执行", primary: true }] : [];
+  const explicitApproval = result.approvalRequired === true;
+  const choices = (delivery.choices.length && (!final || explicitApproval)) ? delivery.choices : (approvalRequired && (!final || explicitApproval)) ? [{ id: "approve", label: "确认执行", primary: true }] : [];
   const evidenceText = delivery.evidence.length ? `**验证证据**\n${delivery.evidence.map((item) => `· ${cardText(item.command, 180)} → ${cardText(item.result, 120)}${item.details ? `（${cardText(item.details, 240)}）` : ""}`).join("\n")}` : "";
   const executionText = [delivery.commit ? `Commit ${cardText(delivery.commit, 80)}` : "", delivery.durationMs === null ? "" : `耗时 ${(delivery.durationMs / 1000).toFixed(1)} 秒`].filter(Boolean).join(" · ");
-  const lines = [delivery.summary ? `**结果**\n${cardText(delivery.summary)}` : "", delivery.artifactPaths.length ? `**产物（${delivery.artifactPaths.length} 项）**\n${delivery.artifactPaths.slice(0, 5).map((path) => `· \`${cardText(path, 240)}\``).join("\n")}` : "", evidenceText, executionText ? `**执行信息**\n${executionText}` : "", approvalRequired && delivery.assignments.length ? `**任务分配**\n${delivery.assignments.slice(0, 6).map((item) => `· ${cardText(item.task, 240)}`).join("\n")}` : "", delivery.next ? `**下一步**\n${cardText(delivery.next, 400)}` : "", delivery.blockers.length ? `**阻塞**\n${delivery.blockers.slice(0, 3).map((item) => `· ${cardText(item, 240)}`).join("\n")}` : "", delivery.risks.length ? `**风险**\n${delivery.risks.slice(0, 3).map((item) => `· ${cardText(item, 240)}`).join("\n")}` : "", delivery.assumptions.length ? `**需要关注**\n${delivery.assumptions.slice(0, 3).map((item) => `· ${cardText(item, 240)}`).join("\n")}` : ""].filter(Boolean);
+  const nextText = delivery.next ? `**下一步**\n${cardText(delivery.next, 400)}` : "";
+  const lines = [approvalRequired ? nextText : "", delivery.summary ? `**结果**\n${cardText(delivery.summary)}` : "", delivery.artifactPaths.length ? `**产物（${delivery.artifactPaths.length} 项）**\n${delivery.artifactPaths.slice(0, 5).map((path) => `· \`${cardText(path, 240)}\``).join("\n")}` : "", evidenceText, executionText ? `**执行信息**\n${executionText}` : "", approvalRequired && delivery.assignments.length ? `**任务分配**\n${delivery.assignments.slice(0, 6).map((item) => `· ${cardText(item.task, 240)}`).join("\n")}` : "", !approvalRequired ? nextText : "", delivery.blockers.length ? `**阻塞**\n${delivery.blockers.slice(0, 3).map((item) => `· ${cardText(item, 240)}`).join("\n")}` : "", delivery.risks.length ? `**风险**\n${delivery.risks.slice(0, 3).map((item) => `· ${cardText(item, 240)}`).join("\n")}` : "", delivery.assumptions.length ? `**需要关注**\n${delivery.assumptions.slice(0, 3).map((item) => `· ${cardText(item, 240)}`).join("\n")}` : ""].filter(Boolean);
   const content = cardText(`${lines.join("\n\n") || "任务已完成。"}${approvalRequired ? "\n\n请确认后继续执行。" : ""}`, 1200);
   const elements = [{ tag: "div", text: { tag: "lark_md", content } }];
   if (result.diagramImageKey) {
@@ -267,8 +270,8 @@ export function createRoleHandler({ agent, client, runAgent, isAllowedChat = () 
       }
       const projectName = result.projectName || result.delivery?.projectName || null;
       if (projectName && projectName !== task.projectName) await updateTask(task.taskId, { projectName });
-      if (result.delivery) { await buildValidatedHandoff(result.delivery, { agentKey: agent.key, taskId: task.taskId }); await sendResultCard(client, message.chatId, { ...result, taskId: task.taskId }, { log }); if (orchestrator) await orchestrator.onTaskCompleted(agent.key, task.taskId, { delivery: result.delivery, context: { chatId: message.chatId, messageId: message.messageId, correlationId: message.messageId, requireHumanApproval: true, projectName }, approvalRequired: result.approvalRequired === true }); }
-      else await sendCard(client, message.chatId, buildTextCard(result, agent));
+      if (result.delivery) { await buildValidatedHandoff(result.delivery, { agentKey: agent.key, taskId: task.taskId }); await sendResultCard(client, message.chatId, { ...result, taskId: task.taskId }, { log }); if (orchestrator) await orchestrator.onTaskCompleted(agent.key, task.taskId, { delivery: result.delivery, resultText: result.text, context: { chatId: message.chatId, messageId: message.messageId, correlationId: message.messageId, requireHumanApproval: true, projectName }, approvalRequired: result.approvalRequired === true }); }
+      else { await sendCard(client, message.chatId, buildTextCard(result, agent)); if (orchestrator) await orchestrator.onTaskCompleted(agent.key, task.taskId, { delivery: { agentKey: agent.key, agentName: agent.displayName, summary: result.text || "已完成交付", artifactPaths: [], final: false }, resultText: result.text, context: { chatId: message.chatId, messageId: message.messageId, correlationId: message.messageId, requireHumanApproval: true, projectName } }); }
       await onEvent({ type: "task_completed", task_id: task.taskId, agent: agent.key, chat_id: message.chatId, project_name: projectName, has_delivery: Boolean(result.delivery), artifact_count: result.delivery?.artifactPaths?.length || 0, final: result.delivery?.final === true });
     } catch (error) {
       if (await isTerminated(task.taskId)) {

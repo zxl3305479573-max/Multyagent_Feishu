@@ -2,7 +2,7 @@ import "dotenv/config";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
-import { runAgent } from "./handlers.js";
+import { createRunAgent } from "./handlers.js";
 import { createCardActionHandler, createRoleHandler } from "./gateway.js";
 import { createOrchestrator } from "./orchestrator.js";
 import { TaskStore } from "./domain/task-store.js";
@@ -13,6 +13,7 @@ import { createBitableControl } from "./bitable-control.js";
 import { configureTaskStore, setPaused } from "./tasks.js";
 
 const config = JSON.parse(await readFile(new URL("../config/agents.json", import.meta.url), "utf8"));
+const runAgent = createRunAgent();
 const allowedChatId = process.env.FEISHU_ALLOWED_CHAT_ID || "";
 const active = [];
 const feishuClientLogger = createCompactLogger();

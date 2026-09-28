@@ -6,7 +6,7 @@ const MAX_NODES = 24;
 const MAX_EDGES = 40;
 const BOX_HEIGHT = 54;
 const MIN_BOX_WIDTH = 132;
-const MAX_BOX_WIDTH = 240;
+const MAX_BOX_WIDTH = 260;
 const GAP_X = 58;
 const GAP_Y = 66;
 const PADDING = 28;
@@ -15,7 +15,7 @@ const TITLE_HEIGHT = 64;
 const FONT_SIZE = 15;
 const LINE_HEIGHT = 20;
 const MAX_LINES = 2;
-const MIN_CANVAS_WIDTH = 760;
+const MIN_CANVAS_WIDTH = 720;
 
 function escapeXml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -47,6 +47,34 @@ function wrapLabel(text, maxWidth) {
   }
   if (current) lines.push(current);
   return lines.slice(0, MAX_LINES);
+}
+
+function roundedPath(points, radius = 8) {
+  if (points.length < 2) return "";
+  const parts = [`M ${points[0][0]} ${points[0][1]}`];
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const next = points[index + 1];
+    if (!next) {
+      parts.push(`L ${current[0]} ${current[1]}`);
+      break;
+    }
+    const beforeLength = Math.max(Math.abs(current[0] - previous[0]), Math.abs(current[1] - previous[1]));
+    const afterLength = Math.max(Math.abs(next[0] - current[0]), Math.abs(next[1] - current[1]));
+    const before = Math.min(radius, beforeLength / 2);
+    const after = Math.min(radius, afterLength / 2);
+    const beforePoint = [
+      current[0] + Math.sign(previous[0] - current[0]) * before,
+      current[1] + Math.sign(previous[1] - current[1]) * before,
+    ];
+    const afterPoint = [
+      current[0] + Math.sign(next[0] - current[0]) * after,
+      current[1] + Math.sign(next[1] - current[1]) * after,
+    ];
+    parts.push(`L ${beforePoint[0]} ${beforePoint[1]} Q ${current[0]} ${current[1]} ${afterPoint[0]} ${afterPoint[1]}`);
+  }
+  return parts.join(" ");
 }
 
 // 校验并归一化外部传入的图描述；不合法就返回 null（调用方据此跳过嵌图）。
@@ -146,6 +174,16 @@ export function renderDiagramSvg(spec) {
     parts.push(`<text x="${canvasWidth / 2}" y="${PADDING + 26}" font-size="20" font-weight="600" text-anchor="middle" fill="#1f2329">${escapeXml(diagram.title)}</text>`);
   }
 
+  const edgeGroups = new Map();
+  for (const edge of diagram.edges) {
+    const from = boxes.get(edge.from);
+    const to = boxes.get(edge.to);
+    const key = `${from.layer}->${to.layer}:${edge.from}->${edge.to}`;
+    const group = edgeGroups.get(key) || [];
+    group.push(edge);
+    edgeGroups.set(key, group);
+  }
+
   for (const edge of diagram.edges) {
     const from = boxes.get(edge.from);
     const to = boxes.get(edge.to);
@@ -154,11 +192,13 @@ export function renderDiagramSvg(spec) {
     let path;
     let labelX;
     let labelY;
+    const group = edgeGroups.get(`${from.layer}->${to.layer}:${edge.from}->${edge.to}`) || [edge];
+    const groupIndex = group.indexOf(edge);
     if (to.layer > from.layer) {
       const startY = from.y + from.height;
       const endY = to.y;
-      const midY = (startY + endY) / 2;
-      path = `M ${fromCx} ${startY} V ${midY} H ${toCx} V ${endY}`;
+      const midY = (startY + endY) / 2 + (groupIndex - (group.length - 1) / 2) * 12;
+      path = roundedPath([[fromCx, startY], [fromCx, midY], [toCx, midY], [toCx, endY]]);
       labelX = (fromCx + toCx) / 2;
       labelY = midY - 6;
     } else if (to.layer === from.layer) {
@@ -166,22 +206,33 @@ export function renderDiagramSvg(spec) {
       const startX = rightward ? from.x + from.width : from.x;
       const endX = rightward ? to.x : to.x + to.width;
       const y = from.y + from.height / 2;
-      path = `M ${startX} ${y} H ${endX}`;
+      path = roundedPath([[startX, y], [endX, y]]);
       labelX = (startX + endX) / 2;
       labelY = y - 8;
     } else {
-      const startX = from.x + from.width;
-      const y = from.y + from.height / 2;
-      const endX = toCx;
-      path = `M ${startX} ${y} H ${startX + 30} V ${to.y - 26} H ${endX} V ${to.y}`;
-      labelX = startX + 34;
-      labelY = to.y - 32;
+      const startX = from.x + from.width / 2;
+      const startY = from.y + from.height;
+      const endX = to.x + to.width / 2;
+      const endY = to.y;
+      const direction = Math.sign(endY - startY) || 1;
+      const gap = Math.abs(endY - startY);
+      if (gap > 44) {
+        const midY = (startY + endY) / 2 + groupIndex * 12;
+        path = roundedPath([[startX, startY], [startX, midY], [endX, midY], [endX, endY]]);
+        labelX = (startX + endX) / 2;
+        labelY = midY - 6 * direction;
+      } else {
+        const sideX = from.x + from.width + 24 + groupIndex * 14;
+        path = roundedPath([[from.x + from.width, from.y + from.height / 2], [sideX, from.y + from.height / 2], [sideX, endY - 20], [endX, endY - 20], [endX, endY]]);
+        labelX = (from.x + from.width + sideX) / 2;
+        labelY = from.y + from.height / 2 - 8;
+      }
     }
-    parts.push(`<path d="${path}" fill="none" stroke="#646a73" stroke-width="1.6" marker-end="url(#arrow)"/>`);
+    parts.push(`<path d="${path}" fill="none" stroke="#4f5d75" stroke-width="1.6" marker-end="url(#arrow)"/>`);
     if (edge.label) {
       const width = Math.ceil(textWidth(edge.label) + 10);
-      parts.push(`<rect x="${labelX - width / 2}" y="${labelY - 13}" width="${width}" height="18" rx="4" fill="#ffffff"/>`);
-      parts.push(`<text x="${labelX}" y="${labelY}" font-size="12" text-anchor="middle" fill="#646a73">${escapeXml(edge.label)}</text>`);
+      parts.push(`<rect x="${labelX - width / 2}" y="${labelY - 16}" width="${width}" height="12" rx="2" fill="#f5f5f5"/>`);
+      parts.push(`<text x="${labelX}" y="${labelY - 6}" font-size="11" text-anchor="middle" fill="#7a8399">${escapeXml(edge.label)}</text>`);
     }
   }
 
@@ -193,7 +244,7 @@ export function renderDiagramSvg(spec) {
     const box = boxes.get(node.id);
     const lines = wrapLabel(node.label, box.width - 24);
     const startY = box.y + box.height / 2 - ((lines.length - 1) * LINE_HEIGHT) / 2 + FONT_SIZE / 3;
-    parts.push(`<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="10" fill="#eef4ff" stroke="#3370ff" stroke-width="1.4"/>`);
+    parts.push(`<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1.2"/>`);
     lines.forEach((line, index) => {
       parts.push(`<text x="${box.x + box.width / 2}" y="${startY + index * LINE_HEIGHT}" font-size="${FONT_SIZE}" text-anchor="middle" fill="#1f2329">${escapeXml(line)}</text>`);
     });

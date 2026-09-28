@@ -52,6 +52,14 @@ test("renderDiagramSvg 没有分层信息时按最长路径自动分层", () => 
   assert.ok(ys[0] < ys[1] && ys[1] < ys[2], `三层应自上而下递增，实际 ${ys.join(",")}`);
 });
 
+test("renderDiagramSvg 使用圆角正交连线和低密度白底节点样式", () => {
+  const svg = renderDiagramSvg(SPEC);
+  assert.match(svg, /Q [\d.]+ [\d.]+ [\d.]+ [\d.]+/);
+  assert.match(svg, /fill="#ffffff" stroke="#2d3142"/);
+  assert.match(svg, /fill="#f5f5f5"/);
+  assert.doesNotMatch(svg, /stroke="#3370ff"/);
+});
+
 test("renderDiagramPng 产出真正的 PNG", () => {
   const png = renderDiagramPng(SPEC, { width: 800 });
   assert.ok(Buffer.isBuffer(png));

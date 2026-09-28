@@ -9,6 +9,13 @@ import {
   uploadCardImage,
 } from "../src/gateway.js";
 
+test("final delivery choices are not rendered as dead buttons", () => {
+  const card = buildResultCard({
+    delivery: { agentKey: "project_manager", summary: "已完成", final: true, choices: [{ id: "accept", label: "接受现状" }] },
+  });
+  assert.equal(card.body.elements.some((element) => element.tag === "action"), false);
+});
+
 const ALL_ROLES = ["project_manager", "architect", "frontend_developer", "backend_developer", "tester", "auditor"];
 
 function actionElement(card) {

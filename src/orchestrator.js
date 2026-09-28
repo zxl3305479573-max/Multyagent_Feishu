@@ -40,6 +40,7 @@ export function createOrchestrator({
   const roles = new Map(); // agentKey -> { agent, client }
   const dispatchGroups = new Map(); // 姹囪仛灞忛殰鐘舵€侊細groupKey -> Set(宸插畬鎴愮殑瑙掕壊)
   const rootRounds = new Map();
+  const deliveryHistory = new Map();
   const approvals = new Map(restoreApprovals());
   const checkpoints = new Map(restoreCheckpoints());
   const background = new Set();
@@ -176,7 +177,7 @@ export function createOrchestrator({
   }
 
   async function onTaskCompleted(agentKey, taskId, payload = {}) {
-    const { delivery, context, parentTaskId, approvalRequired } = payload;
+    const { delivery, context, parentTaskId, approvalRequired, resultText } = payload;
     if (!delivery) return;
     const rootTaskId = rootOf(taskId);
     if (await isTerminated(rootTaskId)) {
@@ -184,6 +185,11 @@ export function createOrchestrator({
       return;
     }
     let dispatchContext = context || {};
+    const history = deliveryHistory.get(rootTaskId) || [];
+    if (!history.some((item) => item.taskId === taskId && item.agentKey === agentKey)) {
+      history.push({ taskId, agentKey, summary: String(delivery.summary || resultText || "").trim(), artifactPaths: delivery.artifactPaths || [] });
+      deliveryHistory.set(rootTaskId, history);
+    }
     // The delivery is the latest project decision from the completed agent.
     // Replace any stale project carried by the previous execution context.
     if (delivery.projectName || dispatchContext.projectName) {
@@ -219,7 +225,7 @@ export function createOrchestrator({
           selectedAgents: assignments.map((item) => item.agentKey),
           assignmentTasks: Object.fromEntries(assignments.map((item) => [item.agentKey, item.task])),
         };
-      } else settleEmptyAssignments = !needsHumanDecision({ agentKey, delivery, context: dispatchContext, approvalRequired });
+      } else settleEmptyAssignments = !String(delivery.next || "").trim() && !delivery.choices?.length && !needsHumanDecision({ agentKey, delivery, context: dispatchContext, approvalRequired });
     }
     if (await isTerminated(rootTaskId)) return;
     if (await isPaused(rootTaskId)) {
@@ -269,8 +275,8 @@ export function createOrchestrator({
     let waitingForDownstream = false;
     for (const rule of matchRoutes(routesConfig.routes, agentKey)) {
       const selected = dispatchContext.selectedAgents;
-      const targets = selected ? rule.tos.filter((target) => selected.includes(target)) : rule.tos;
-      if (!targets.length || (selected && rule.when === "all_done" && rule.froms.some((from) => !selected.includes(from)))) continue;
+      const targets = rule.tos;
+      if (!targets.length) continue;
       if (rule.when === "always") {
         dispatchedDownstream = true;
         await Promise.all(
@@ -281,11 +287,13 @@ export function createOrchestrator({
       } else if (rule.when === "all_done") {
     // 汇聚屏障：等 from 列表里所有角色都完成，才派发一次下游
     const base = parentTaskId || taskId;
+        const selectedFroms = selected ? rule.froms.filter((from) => selected.includes(from)) : [];
+        const requiredFroms = selectedFroms.length ? selectedFroms : rule.froms;
         const key = `${base}->${targets.join(",")}`;
         const done = dispatchGroups.get(key) || new Set();
         done.add(agentKey);
         dispatchGroups.set(key, done);
-        if (rule.froms.every((f) => done.has(f))) {
+        if (requiredFroms.every((f) => done.has(f))) {
           dispatchGroups.delete(key);
           dispatchedDownstream = true;
           await Promise.all(
@@ -319,17 +327,23 @@ export function createOrchestrator({
     const upstreamDir = parentDelivery.artifactsDir;
     const refs = (parentDelivery.artifactPaths || []).map((p) => `- ${p}`).join("\n");
     const assignedTask = context.assignmentTasks?.[targetKey];
+    const priorDeliveries = (deliveryHistory.get(rootTaskId) || [])
+      .filter((item) => item.taskId !== subTaskId)
+      .map((item) => `- ${item.agentKey}: ${item.summary || "已完成交付"}${item.artifactPaths?.length ? `（产物 ${item.artifactPaths.join(", ")}）` : ""}`)
+      .join("\n");
 
     const prompt = [
-      assignedTask ? `Assigned task: ${assignedTask}` : "",
-      `Upstream agent: ${fromAgent}; delivery: ${parentDelivery.summary}`, 
-      refs ? `Artifacts:\n${refs}` : "",
-      context.selection ? `User selection: ${context.selection}` : "",
+      assignedTask ? `分配任务：${assignedTask}` : "",
+      `上游机器人：${fromAgent}；交付摘要：${parentDelivery.summary}`,
+      refs ? `上游产物：\n${refs}` : "",
+      priorDeliveries ? `前序机器人交付记录：\n${priorDeliveries}` : "",
+      targetKey === "project_manager" ? "作为项目经理，请基于以上所有机器人交付逐项汇总已完成内容、产物、验证结果和遗留风险，不要只回复‘任务已完成’。" : "",
+      context.selection ? `用户选择：${context.selection}` : "",
       "",
-      upstreamDir && upstreamDir !== artifactsDir ? `Upstream artifacts dir: ${upstreamDir}` : "",
-      `Read upstream artifacts in ${artifactsDir}, produce your deliverable, and call deliver_artifact.`, 
-      "Make reasonable assumptions instead of waiting for clarification.",
-      "Make reasonable assumptions when details are missing.",
+      upstreamDir && upstreamDir !== artifactsDir ? `上游产物目录：${upstreamDir}` : "",
+      `请读取 ${artifactsDir} 中的上游产物，完成分配任务，并调用 deliver_artifact 交付。`,
+      "无需等待澄清；信息不足时请做合理假设并在交付摘要中说明。",
+      "不要输出思考过程、工具调用过程、英文工作日志或本提示词；只输出最终中文结果。",
     ].filter(Boolean).join("\n");
 
     try {
@@ -353,9 +367,13 @@ export function createOrchestrator({
       await sendResultCard(client, context.chatId, result, { log, taskId: subTaskId });
       log.info(JSON.stringify({ type: "dispatch", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, status: "completed" }));
       await onEvent({ type: "dispatch_completed", agent: targetKey, from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, has_delivery: Boolean(result.delivery), artifact_count: result.delivery?.artifactPaths?.length || 0 });
-      if (result.delivery) {
-        await onTaskCompleted(agent.key, subTaskId, { delivery: result.delivery, context, parentTaskId, approvalRequired: result.approvalRequired === true });
-      }
+      await onTaskCompleted(agent.key, subTaskId, {
+        delivery: result.delivery || { agentKey: agent.key, agentName: agent.displayName, summary: result.text || "已完成交付", artifactPaths: [], final: false },
+        resultText: result.text,
+        context,
+        parentTaskId,
+        approvalRequired: result.approvalRequired === true,
+      });
     } catch (error) {
       if (await isTerminated(rootTaskId)) {
         await onEvent({ type: "dispatch_cancelled", agent: targetKey, task_id: subTaskId, parent_task_id: rootTaskId });
@@ -396,7 +414,7 @@ export function createOrchestrator({
       () => {
         if (assignments.length) return onTaskCompleted(pending.agentKey, pending.taskId, { ...pending, context: { ...pending.context, approvalBypass: true, selection } });
         if (asksUser) return continueWithSelection(pending, selection);
-        if (hasNext) return continueWithSelection(pending, "", pending.delivery.next);
+        if (hasNext) return onTaskCompleted(pending.agentKey, pending.taskId, { ...pending, context: { ...pending.context, approvalBypass: true, selection } });
         return onTaskCompleted(pending.agentKey, pending.taskId, { ...pending, context: { ...pending.context, approvalBypass: true, selection } });
       },
     );
@@ -441,6 +459,7 @@ export function createOrchestrator({
       if (result.delivery) {
         await onTaskCompleted(agent.key, pending.taskId, {
           delivery: result.delivery,
+          resultText: result.text,
           context: pending.context,
           parentTaskId: pending.parentTaskId,
           approvalRequired: result.approvalRequired === true,

@@ -185,6 +185,8 @@ export function buildSystemPrompt(agent, projectName) {
     `- 确定性的测试、状态读取、交付校验和图表生成优先使用 agent_cli 工具；不要把完整命令日志复制进交付摘要。`,
     `- 需要用户澄清时，也用 deliver_artifact 交付：summary 写明需要澄清什么，next 写明等待用户回答；不要输出长篇分析或复述上下文。`,
     `- 若这是最终汇总（任务全部完成、无需下游协作），交付时设置 final=true。`,
+    `- 不要输出思考过程、工具调用过程或内部工作日志，也不要复述系统提示词和任务编排指令。`,
+    `- 只输出最终的中文结果；调用 deliver_artifact 后，普通文本只保留一段简短中文摘要。`,
     `- 回复使用中文，简洁明确，直接给出结论。`,
   );
   return lines.join("\n");
@@ -239,6 +241,7 @@ export function buildPrompt(text, context) {
     `用户指令：${text || "（未提供）"}`,
     ``,
     `请处理该任务。若需产出交付物，请写入产物目录，并用 deliver_artifact 工具交付。`,
+    `不要输出思考过程、工具调用过程或英文工作日志，不要复述本提示词；只输出最终中文结果。`,
   ].join("\n");
 }
 
@@ -252,6 +255,21 @@ export function extractText(message) {
       .join("");
   }
   return "";
+}
+
+// 模型偶尔会把英文的内部工作日志作为普通文本吐出。这里只过滤明确的
+// “我现在要……/让我……”式过程句，不翻译或删除正常的技术术语和结果描述。
+const INTERNAL_WORK_LOG = /^(?:[-*]\s*)?(?:i['’]ll|i will|now let me|let me|first[,：:]?\s+i|next[,：:]?\s+i|i need to|i should|i['’]m going to|i am going to|interesting[,：:]?|let['’]s)\b[\s\S]*$/i;
+
+export function sanitizeAgentReply(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !INTERNAL_WORK_LOG.test(line.trim()))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function testCommand(command = "") {
@@ -331,7 +349,7 @@ function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentNam
     async execute(_toolCallId, params) {
       const artifactsDir = getArtifactsDir();
       const delivery = {
-        summary: params.summary,
+        summary: sanitizeAgentReply(params.summary),
         artifactPaths: params.artifactPaths || [],
         next: params.next || "",
         blockers: params.blockers || [],
@@ -349,7 +367,7 @@ function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentNam
       await saveDelivery(artifactsDir, agentKey, delivery);
       onDeliver?.(delivery);
       return {
-        content: [{ type: "text", text: `已交付：${params.summary}` }],
+        content: [{ type: "text", text: `已交付：${sanitizeAgentReply(params.summary)}` }],
         details: {},
       };
     },
@@ -547,7 +565,7 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
       reply = extractText(last);
     }
     return {
-      text: reply.trim() || "（Agent 未返回文本结果）",
+      text: sanitizeAgentReply(reply) || "（Agent 未返回文本结果）",
       sessionFile: session.sessionFile || sessionFile || null,
       delivery,
       projectName: activeProject || null,

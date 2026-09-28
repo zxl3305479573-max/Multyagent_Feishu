@@ -301,6 +301,67 @@ test("确认集合内的非 PM/架构角色，卡片按钮同样能取到待确�
   assert.equal(resolved?.agentKey, "tester");
 });
 
+test("确认后端的下一步后沿路由完成测试、审计，并由项目经理最终汇总", async () => {
+  const runs = [];
+  const prompts = [];
+  const events = [];
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const runAgent = async (agent, prompt) => {
+    runs.push(agent.key);
+    prompts.push({ key: agent.key, prompt });
+    if (agent.key === "project_manager") {
+      return { text: "最终汇总", delivery: { agentKey: agent.key, summary: "全部复验完成", final: true, artifactPaths: [] } };
+    }
+    return { text: `${agent.key} 完成`, delivery: { agentKey: agent.key, summary: `${agent.key} 完成`, final: false, artifactPaths: [] } };
+  };
+  const orch = createOrchestrator({ runAgent, log: { info() {}, error() {}, warn() {} }, onEvent: async (event) => events.push(event) });
+  for (const key of ["backend_developer", "tester", "auditor", "project_manager"]) {
+    orch.registerRole({ key, displayName: key, appId: "x" }, client);
+  }
+
+  await orch.onTaskCompleted("backend_developer", "T-flow:backend_developer", {
+    delivery: { agentKey: "backend_developer", summary: "后端修复已完成", next: "派发测试复验，最后由项目经理总结", artifactPaths: [] },
+    parentTaskId: "T-flow",
+    context: {
+      chatId: "flow-chat",
+      requireHumanApproval: true,
+      selectedAgents: ["backend_developer", "tester"],
+    },
+  });
+
+  assert.equal((await orch.resolveLatest("flow-chat", "approve"))?.approved, true);
+  await orch.whenIdle();
+
+  assert.deepEqual(runs, ["tester", "auditor", "project_manager"]);
+  assert.match(prompts.find((item) => item.key === "project_manager").prompt, /后端修复已完成/);
+  assert.match(prompts.find((item) => item.key === "project_manager").prompt, /tester 完成/);
+  assert.match(prompts.find((item) => item.key === "project_manager").prompt, /逐项汇总已完成内容/);
+  assert.ok(events.some((event) => event.type === "task_settle" && event.reason === "final"));
+});
+
+test("下游机器人未调用 deliver_artifact 时也用普通回复继续路由", async () => {
+  const runs = [];
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const orch = createOrchestrator({
+    runAgent: async (agent) => {
+      runs.push(agent.key);
+      if (agent.key === "tester") return { text: "测试机器人已完成复验" };
+      return { text: "审计机器人已完成审计" };
+    },
+    log: { info() {}, warn() {}, error() {} },
+  });
+  orch.registerRole({ key: "tester", displayName: "测试", appId: "x" }, client);
+  orch.registerRole({ key: "auditor", displayName: "审计", appId: "x" }, client);
+  orch.registerRole({ key: "project_manager", displayName: "项目经理", appId: "x" }, client);
+  await orch.onTaskCompleted("tester", "T-fallback:tester", {
+    delivery: { agentKey: "tester", summary: "测试任务已派发", artifactPaths: [] },
+    parentTaskId: "T-fallback",
+    context: { chatId: "fallback-chat" },
+  });
+  await orch.whenIdle();
+  assert.deepEqual(runs, ["auditor", "project_manager"]);
+});
+
 test("resolveLatest 按 task_id 精确解析同群待确认任务，旧卡片仍按最新项解析", async () => {
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };
   const runAgent = async () => ({ text: "done", delivery: { summary: "done", final: true }, projectName: null });
@@ -336,7 +397,7 @@ test("PM 交付既无 assignments 也无 choices 且无审批上下文时仍结�
   assert.equal(await orch.resolveLatest("c1"), null);
 });
 
-test("PM 交付只有 next 时，确认后按下一步重新执行", async () => {
+test("PM 交付只有 next 时，确认后按配置路由派发下游", async () => {
   const runs = [];
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };
   const runAgent = async (agent) => {
@@ -360,7 +421,7 @@ test("PM 交付只有 next 时，确认后按下一步重新执行", async () =>
   const resolved = await orch.resolveLatest("c1", "approve");
   assert.equal(resolved?.approved, true, "卡片既然出按钮，点击就不能落空");
   await orch.whenIdle();
-  assert.deepEqual(runs, ["project_manager"], "确认 next 后应重新运行项目经理");
+  assert.deepEqual(runs, ["architect"], "确认 next 后应派发配置中的下一角色");
 });
 
 test("派发下游时继承上游交付的项目名，产物目录与该角色白名单保持一致", async () => {
@@ -400,6 +461,32 @@ test("派发下游时继承上游交付的项目名，产物目录与该角色�
   assert.equal(runs[0].key, "architect");
   assert.equal(runs[0].context.projectName, "student", "下游必须继承上游交付的项目名，否则写入白名单会解析成 default");
   assert.equal(runs[0].context.artifactsDir, artifactsDirFor("T-proj", "student"));
+});
+
+test("下游派发提示词使用中文并禁止输出英文内部工作日志", async () => {
+  let prompt = "";
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const runAgent = async (_agent, value) => {
+    prompt = value;
+    return { text: "完成", delivery: { summary: "完成", artifactPaths: [], artifactsDir: "d", final: true } };
+  };
+  const orch = createOrchestrator({ runAgent, log: { info() {}, error() {}, warn() {} } });
+  orch.registerRole({ key: "project_manager", displayName: "项目经理", appId: "x" }, client);
+  orch.registerRole({ key: "architect", displayName: "架构设计师", appId: "x" }, client);
+
+  await orch.onTaskCompleted("project_manager", "T-prompt", {
+    delivery: {
+      agentKey: "project_manager",
+      summary: "计划完成",
+      artifactsDir: "d",
+      artifactPaths: [],
+      assignments: [{ agentKey: "architect", task: "产出架构方案" }],
+    },
+    context: { chatId: "c-prompt", requireHumanApproval: false },
+  });
+  assert.match(prompt, /分配任务：产出架构方案/);
+  assert.match(prompt, /不要输出思考过程、工具调用过程、英文工作日志/);
+  assert.doesNotMatch(prompt, /Assigned task:|Upstream agent:|Previous agent deliveries:/);
 });
 
 test("上游本轮切换项目时，新项目名覆盖旧上下文并传给下游", async () => {

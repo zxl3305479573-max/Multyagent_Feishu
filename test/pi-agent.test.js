@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, diagramSkillPaths, extractText, mapPiToolEvent } from "../src/pi-agent.js";
+import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, diagramSkillPaths, extractText, mapPiToolEvent, sanitizeAgentReply } from "../src/pi-agent.js";
 
 test("diagram-design skill 对架构设计师和项目经理启用", () => {
   assert.deepEqual(diagramSkillPaths("architect"), architectSkillPaths("architect"));
@@ -32,6 +32,12 @@ test("buildSystemPrompt 含身份、职责、工具与固定身份约束", () =>
   assert.ok(prompt.includes("职责："));
   assert.ok(prompt.includes("身份是固定的"));
   assert.ok(prompt.includes("read"));
+});
+
+test("buildSystemPrompt 明确禁止展示英文内部工作日志并要求最终中文", () => {
+  const prompt = buildSystemPrompt({ key: "tester", displayName: "测试" });
+  assert.match(prompt, /不要输出思考过程、工具调用过程或内部工作日志/);
+  assert.match(prompt, /只输出最终的中文结果/);
 });
 
 test("buildSystemPrompt 从 policy.json 读职责与工具", () => {
@@ -76,6 +82,12 @@ test("buildPrompt does not direct an unresolved project to workspace/default", (
   assert.match(prompt, /create_project|项目目录/);
 });
 
+test("buildPrompt 要求只返回中文最终结果", () => {
+  const prompt = buildPrompt("检查接口", { taskId: "T-output" });
+  assert.match(prompt, /不要输出思考过程、工具调用过程或英文工作日志/);
+  assert.match(prompt, /只输出最终中文结果/);
+});
+
 test("状态查询提示词固定传入根任务编号并禁止产物交付", () => {
   const prompt = buildPrompt("查询当前任务状态", { taskId: "root-status", chatId: "chat-status", statusQuery: true });
   assert.match(prompt, /root-status/);
@@ -102,6 +114,16 @@ test("extractText 提取数组 content 里的 text 块", () => {
 test("extractText 空消息返回空串", () => {
   assert.equal(extractText(null), "");
   assert.equal(extractText({ role: "assistant", content: [] }), "");
+});
+
+test("sanitizeAgentReply 删除英文内部工作日志但保留技术结果", () => {
+  const reply = [
+    "I'll start by surveying the artifacts.",
+    "Now let me read the backend delivery report.",
+    "已完成接口联调，Node.js API 测试通过。",
+    "Let me independently verify the result.",
+  ].join("\n");
+  assert.equal(sanitizeAgentReply(reply), "已完成接口联调，Node.js API 测试通过。");
 });
 
 test("Pi 工具事件映射为命令、文件变化和测试状态，不包含文件内容或工具输出", () => {
