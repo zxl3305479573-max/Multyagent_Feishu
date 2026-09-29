@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+
 const REQUIRED_FIELDS = [
   "task_id",
   "agent",
@@ -44,13 +46,22 @@ export function validateHandoff(handoff) {
     }
   }
 
+  for (const field of ["task_id", "agent", "status", "summary", "next_action", "created_at"]) {
+    if (typeof handoff[field] !== "string" || !handoff[field].trim()) errors.push(field);
+  }
+
   for (const field of ["artifacts", "evidence", "blockers", "assumptions", "risks"]) {
     if (field in handoff && !Array.isArray(handoff[field])) errors.push(field);
   }
   if ("choices" in handoff && !Array.isArray(handoff.choices)) errors.push("choices");
   if (Array.isArray(handoff.choices)) {
     for (const choice of handoff.choices) {
-      if (!isObject(choice) || !choice.id || !choice.label) { errors.push("choices"); break; }
+      if (!isObject(choice)
+        || typeof choice.id !== "string" || !choice.id.trim()
+        || typeof choice.label !== "string" || !choice.label.trim()) {
+        errors.push("choices");
+        break;
+      }
     }
   }
   if (Array.isArray(handoff.evidence) && handoff.evidence.length === 0) {
@@ -59,7 +70,13 @@ export function validateHandoff(handoff) {
 
   if (Array.isArray(handoff.artifacts)) {
     for (const artifact of handoff.artifacts) {
-      if (!isObject(artifact) || !artifact.path || !artifact.type || !artifact.digest || !artifact.version) {
+      if (!isObject(artifact)
+        || typeof artifact.path !== "string" || !artifact.path.trim()
+        || typeof artifact.type !== "string" || !artifact.type.trim()
+        || typeof artifact.digest !== "string" || !artifact.digest.trim()
+        || typeof artifact.version !== "string" || !artifact.version.trim()
+        || isAbsolute(artifact.path)
+        || artifact.path.split(/[\\/]+/).includes("..")) {
         errors.push("artifacts");
         break;
       }
@@ -68,7 +85,9 @@ export function validateHandoff(handoff) {
 
   if (Array.isArray(handoff.evidence)) {
     for (const evidence of handoff.evidence) {
-      if (!isObject(evidence) || !evidence.command || !evidence.result) {
+      if (!isObject(evidence)
+        || typeof evidence.command !== "string" || !evidence.command.trim()
+        || typeof evidence.result !== "string" || !evidence.result.trim()) {
         errors.push("evidence");
         break;
       }

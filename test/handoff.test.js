@@ -40,3 +40,16 @@ test("交接包产物和证据字段必须是数组对象", () => {
   assert.equal(result.valid, false);
   assert.ok(result.errors.includes("artifacts"));
 });
+
+test("交接包拒绝绝对路径和目录穿越产物", () => {
+  assert.equal(validateHandoff({ ...valid, artifacts: [{ ...valid.artifacts[0], path: "/etc/passwd" }] }).valid, false);
+  assert.equal(validateHandoff({ ...valid, artifacts: [{ ...valid.artifacts[0], path: "../../secret.txt" }] }).valid, false);
+  assert.equal(validateHandoff({ ...valid, artifacts: [{ ...valid.artifacts[0], path: "workspace/student/artifacts/T-001/a.md" }] }).valid, true);
+});
+
+test("交接包拒绝非字符串字段和证据", () => {
+  assert.equal(validateHandoff({ ...valid, task_id: 123 }).valid, false);
+  assert.equal(validateHandoff({ ...valid, agent: { key: "tester" } }).valid, false);
+  assert.equal(validateHandoff({ ...valid, evidence: [{ command: { runner: "npm test" }, result: "passed" }] }).valid, false);
+  assert.equal(validateHandoff({ ...valid, choices: [{ id: "", label: "接受" }] }).valid, false);
+});
