@@ -19,6 +19,7 @@ const MIN_CANVAS_WIDTH = 720;
 // 同层间/反向边共用的偏移步长；gutter 是画布右侧给反向预留的布线区。
 const LANE_GAP = 12;
 const GUTTER_LABEL_WIDTH = 84;
+const PORT_GAP = 14;
 
 function escapeXml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -81,6 +82,15 @@ function roundedPath(points, radius = 8) {
 }
 
 // 校验并归一化外部传入的图描述；不合法就返回 null（调用方据此跳过嵌图）。
+// 节点标签里已经写了“领域层/策略层”这类层名时，以标签为准纠正 layer 字段，
+// 避免模型把不同层复用成同一个 layer 导致两行被错误合并。
+const LAYER_TOKENS = ["接入层", "编排层", "策略层", "领域层", "数据层", "观测层"];
+
+function deriveLayer(label, fallback) {
+  const head = String(label).split(/[·\s:：\-—]/)[0];
+  return LAYER_TOKENS.find((token) => head.endsWith(token)) || fallback || null;
+}
+
 export function normalizeDiagram(spec) {
   if (!spec || typeof spec !== "object") return null;
   const rawNodes = Array.isArray(spec.nodes) ? spec.nodes : [];
@@ -91,7 +101,8 @@ export function normalizeDiagram(spec) {
     const label = String(item?.label ?? "").trim();
     if (!id || !label || seen.has(id)) continue;
     seen.add(id);
-    nodes.push({ id, label, layer: String(item?.layer ?? item?.group ?? "").trim() || null });
+    const fallbackLayer = String(item?.layer ?? item?.group ?? "").trim() || null;
+    nodes.push({ id, label, layer: deriveLayer(label, fallbackLayer) });
     if (nodes.length >= MAX_NODES) break;
   }
   if (!nodes.length) return null;
@@ -181,6 +192,29 @@ export function renderDiagramSvg(spec) {
     }
   }
   gutterEdges.forEach((edge, index) => { edge.lane = index; });
+  const forwardOutCount = new Map();
+  const forwardInCount = new Map();
+  for (const group of forwardByPair.values()) {
+    for (const edge of group) {
+      forwardOutCount.set(edge.from, (forwardOutCount.get(edge.from) || 0) + 1);
+      forwardInCount.set(edge.to, (forwardInCount.get(edge.to) || 0) + 1);
+    }
+  }
+  const gutterOutCount = new Map();
+  const gutterInCount = new Map();
+  for (const edge of gutterEdges) {
+    gutterOutCount.set(edge.from, (gutterOutCount.get(edge.from) || 0) + 1);
+    gutterInCount.set(edge.to, (gutterInCount.get(edge.to) || 0) + 1);
+  }
+  const forwardOutSeen = new Map();
+  const forwardInSeen = new Map();
+  const gutterOutSeen = new Map();
+  const gutterInSeen = new Map();
+  const portOffset = (seen, counts, id) => {
+    const index = seen.get(id) || 0;
+    seen.set(id, index + 1);
+    return (index - ((counts.get(id) || 1) - 1) / 2) * PORT_GAP;
+  };
   const gutterBase = baseCanvasWidth - PADDING + 22;
   const rightGutterWidth = gutterEdges.length ? 22 + (gutterEdges.length - 1) * LANE_GAP + GUTTER_LABEL_WIDTH : 0;
   const canvasWidth = baseCanvasWidth + rightGutterWidth;
@@ -236,8 +270,8 @@ export function renderDiagramSvg(spec) {
     group.forEach((edge, index) => {
       const from = boxes.get(edge.from);
       const to = boxes.get(edge.to);
-      const fromCx = from.x + from.width / 2;
-      const toCx = to.x + to.width / 2;
+      const fromCx = from.x + from.width / 2 + portOffset(forwardOutSeen, forwardOutCount, edge.from);
+      const toCx = to.x + to.width / 2 + portOffset(forwardInSeen, forwardInCount, edge.to);
       const gapTop = from.y + from.height;
       const gapBottom = to.y;
       const offset = (index - (group.length - 1) / 2) * LANE_GAP;
@@ -285,8 +319,8 @@ export function renderDiagramSvg(spec) {
     const from = boxes.get(edge.from);
     const to = boxes.get(edge.to);
     const gutterX = gutterBase + edge.lane * LANE_GAP;
-    const startY = from.y + from.height / 2;
-    const endY = to.y + to.height / 2;
+    const startY = from.y + from.height / 2 + portOffset(gutterOutSeen, gutterOutCount, edge.from);
+    const endY = to.y + to.height / 2 + portOffset(gutterInSeen, gutterInCount, edge.to);
     const labelWidth = edge.label ? Math.ceil(textWidth(edge.label) + 10) : 0;
     drawEdge(
       edge,

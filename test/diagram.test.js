@@ -30,6 +30,18 @@ test("normalizeDiagram 丢弃脏数据且不因缺节点炸掉", () => {
   assert.deepEqual(cleaned.edges, [{ from: "a", to: "b", label: null }]);
 });
 
+test("normalizeDiagram 用节点标签里的层名纠正错误的 layer 字段", () => {
+  const cleaned = normalizeDiagram({
+    nodes: [
+      { id: "policy", label: "策略层 · 拦截", layer: "策略层" },
+      { id: "domain", label: "领域层 · 交付包/DAG/状态机", layer: "策略层" },
+      { id: "obs", label: "观测 · 看板/Trace 投影", layer: "数据层" },
+    ],
+    edges: [{ from: "policy", to: "domain" }],
+  });
+  assert.deepEqual(cleaned.nodes.map((node) => node.layer), ["策略层", "领域层", "数据层"]);
+});
+
 test("renderDiagramSvg 画出每个节点和每条连线，并遵循显式分层", () => {
   const svg = renderDiagramSvg(SPEC);
   assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
@@ -136,6 +148,11 @@ test("同层跨节点边、反向边和标签不会穿框或重叠", () => {
   const maxRight = Math.max(...boxes.map((box) => box.x + box.width));
   const backward = paths.find((item) => item.edge === "art->orch");
   assert.ok(backward.points.some((point) => point.x > maxRight), "反向边应走右侧通道");
+
+  const fromDomain = paths.filter((item) => item.edge === "domain->art" || item.edge === "domain->store");
+  assert.notEqual(fromDomain[0].points[0].x, fromDomain[1].points[0].x, "同一来源的多条正向边应从不同出口出发");
+  const intoOrch = paths.filter((item) => item.edge === "roles->orch" || item.edge === "art->orch");
+  assert.notEqual(intoOrch[0].points.at(-1).y, intoOrch[1].points.at(-1).y, "同一目标的多条反向边应从不同入口进入");
 
   const labels = [...svg.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="12" rx="2"/g)]
     .map((match) => ({ x: Number(match[1]), y: Number(match[2]), width: Number(match[3]), height: 12 }));
