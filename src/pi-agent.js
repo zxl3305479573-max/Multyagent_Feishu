@@ -27,6 +27,7 @@ import {
 import { Type } from "typebox";
 import { artifactsDirFor, ensureArtifactsDir, saveDelivery } from "./artifacts.js";
 import { executeAgentCli } from "./agent-cli.js";
+import { readProjectSummary } from "./project-summary.js";
 import { loadTaskStatus } from "./task-status.js";
 import { isTerminated } from "./tasks.js";
 import { registerActiveSession } from "./session-control.js";
@@ -248,6 +249,9 @@ export function buildPrompt(text, context) {
   return [
     `任务编号：${context.taskId}`,
     artifactInstruction,
+    context.projectSummary?.content
+      ? `项目历史摘要（来源：${context.projectSummary.path}；先读取并延续以下上下文）：\n${context.projectSummary.content}`
+      : "",
     `用户指令：${text || "（未提供）"}`,
     ``,
     `请处理该任务。若需产出交付物，请写入产物目录，并用 deliver_artifact 工具交付。`,
@@ -415,7 +419,12 @@ export function createProjectTool({ onProject, root = process.cwd() }) {
       }
       await ensureArtifactsDir(join(root, "workspace", name));
       onProject?.(name);
-      return { content: [{ type: "text", text: `项目 ${name} 已就绪（workspace/${name}/）。` }], details: {} };
+      let summary = null;
+      try { summary = await readProjectSummary({ root, projectName: name }); } catch {}
+      const text = summary?.content
+        ? `项目 ${name} 已就绪（workspace/${name}/）。检测到历史项目摘要，请先读取并延续以下上下文：\n\n${summary.content}`
+        : `项目 ${name} 已就绪（workspace/${name}/）。新项目暂无历史摘要。`;
+      return { content: [{ type: "text", text }], details: { projectSummary: summary?.path || null } };
     },
   });
 }

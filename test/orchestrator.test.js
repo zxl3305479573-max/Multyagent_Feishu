@@ -1,9 +1,13 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createOrchestrator, matchRoutes } from "../src/orchestrator.js";
 import { buildResultCard } from "../src/gateway.js";
 import { artifactsDirFor } from "../src/artifacts.js";
+import { readProjectSummary } from "../src/project-summary.js";
 import { _resetForTest, createTask, setPaused, setTerminated } from "../src/tasks.js";
 
 const routes = [
@@ -724,4 +728,31 @@ test("PM 自己能做的 next 自动续跑，不派发下游，也不出确认�
   await orch.whenIdle();
   assert.deepEqual(runs, ["project_manager"], "PM 自己能做的下一步不应派发给架构设计师");
   assert.match(prompts[0], /由项目经理补充范围、交付边界与验收标准/);
+});
+
+test("每个阶段交付后自动追加项目摘要", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orch-summary-"));
+  const previous = process.cwd();
+  try {
+    process.chdir(root);
+    const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+    const orch = createOrchestrator({ runAgent: async () => ({ text: "x" }), log: { info() {}, warn() {}, error() {} } });
+    orch.registerRole({ key: "architect", displayName: "架构设计师", appId: "x" }, client);
+    await orch.onTaskCompleted("architect", "T-sum", {
+      delivery: {
+        agentKey: "architect",
+        summary: "架构图完成",
+        artifactPaths: ["workspace/student/artifacts/T-sum/architecture.md"],
+        projectName: "student",
+        final: true,
+      },
+      context: { chatId: "c-sum", projectName: "student" },
+    });
+    const summary = await readProjectSummary({ root, projectName: "student" });
+    assert.match(summary.content, /架构图完成/);
+    assert.match(summary.content, /workspace\/student\/artifacts\/T-sum\/architecture.md/);
+  } finally {
+    process.chdir(previous);
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, diagramSkillPaths, extractText, mapPiToolEvent, normalizeAssignments, sanitizeAgentReply } from "../src/pi-agent.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, createProjectTool, diagramSkillPaths, extractText, mapPiToolEvent, normalizeAssignments, sanitizeAgentReply } from "../src/pi-agent.js";
+import { appendProjectSummary } from "../src/project-summary.js";
 
 test("diagram-design skill 对架构设计师和项目经理启用", () => {
   assert.deepEqual(diagramSkillPaths("architect"), architectSkillPaths("architect"));
@@ -48,6 +52,27 @@ test("normalizeAssignments 过滤自身并将单次派发限制在三个角色�
 test("非项目经理提示词声明不能直接派发其他角色", () => {
   const prompt = buildSystemPrompt({ key: "architect", displayName: "架构设计师" });
   assert.match(prompt, /Only the project manager may dispatch other roles/);
+});
+
+test("createProjectTool 切换项目时自动读取并返回历史摘要", async () => {
+  const root = await mkdtemp(join(tmpdir(), "create-project-summary-"));
+  try {
+    await appendProjectSummary({
+      root,
+      projectName: "phone-login",
+      taskId: "T-old",
+      agentKey: "architect",
+      agentName: "架构设计师",
+      delivery: { summary: "旧项目架构已定", artifactPaths: [] },
+    });
+    const tool = createProjectTool({ root, onProject: () => {} });
+    const result = await tool.execute("call", { name: "phone-login" });
+    assert.match(result.content[0].text, /历史项目摘要/);
+    assert.match(result.content[0].text, /旧项目架构已定/);
+    assert.equal(result.details.projectSummary, join(root, "workspace", "phone-login", "artifacts", "PROJECT_SUMMARY.md"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("buildSystemPrompt 含身份、职责、工具与固定身份约束", () => {
@@ -111,6 +136,18 @@ test("buildPrompt 要求只返回中文最终结果", () => {
   const prompt = buildPrompt("检查接口", { taskId: "T-output" });
   assert.match(prompt, /不要输出思考过程、工具调用过程或英文工作日志/);
   assert.match(prompt, /只输出最终中文结果/);
+});
+
+test("buildPrompt 注入项目历史摘要供切换后续接上下文", () => {
+  const prompt = buildPrompt("继续实现", {
+    taskId: "T-sum",
+    projectSummary: {
+      path: "workspace/student/artifacts/PROJECT_SUMMARY.md",
+      content: "阶段结论：需求规格完成",
+    },
+  });
+  assert.match(prompt, /项目历史摘要/);
+  assert.match(prompt, /需求规格完成/);
 });
 
 test("状态查询提示词固定传入根任务编号并禁止产物交付", () => {

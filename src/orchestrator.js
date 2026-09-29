@@ -2,7 +2,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { readFile } from "node:fs/promises";
-import { buildTaskReceivedCard, sendCard, sendResultCard, sendText } from "./gateway.js";
+import { buildTaskReceivedCard, loadProjectSummaryFor, sendCard, sendResultCard, sendText } from "./gateway.js";
+import { appendProjectSummary } from "./project-summary.js";
 import { isPaused, isTerminated, setPaused, setTerminated } from "./tasks.js";
 import { artifactsDirFor } from "./artifacts.js";
 import { abortActiveSessions } from "./session-control.js";
@@ -224,6 +225,22 @@ export function createOrchestrator({
       assignments: (delivery.assignments || []).map((item) => item.agentKey),
       summary: String(delivery.summary || "").slice(0, 1000),
     });
+    const summaryProject = dispatchContext.projectName || delivery.projectName || null;
+    if (summaryProject) {
+      try {
+        await appendProjectSummary({
+          root: process.cwd(),
+          projectName: summaryProject,
+          taskId,
+          agentKey,
+          agentName: roles.get(agentKey)?.agent?.displayName || agentKey,
+          delivery,
+          resultText,
+        });
+      } catch (error) {
+        log.warn?.(`[orchestrator] project summary append failed: ${error.message}`);
+      }
+    }
     let settleEmptyAssignments = false;
     if (agentKey === "project_manager" && !delivery.final && Object.prototype.hasOwnProperty.call(delivery, "assignments")) {
       const assignments = Array.isArray(delivery.assignments) ? delivery.assignments : [];
@@ -384,6 +401,7 @@ export function createOrchestrator({
       log.info(`[dispatch] ${fromAgent} -> ${agent.displayName} (subtask ${String(subTaskId).slice(0, 8)})`);
       await onEvent({ type: "dispatch_started", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, assigned_task: assignedTask || null });
       await sendCard(client, context.chatId, buildTaskReceivedCard(agent, subTaskId, assignedTask || parentDelivery.summary));
+      const projectSummary = await loadProjectSummaryFor(targetKey, projectName, { root: process.cwd() });
       const result = await runAgent(agent, prompt, {
         taskId: subTaskId,
         parentTaskId,
@@ -392,6 +410,7 @@ export function createOrchestrator({
         chatId: context.chatId,
         projectName,
         artifactsDir,
+        projectSummary,
         onEvent,
       });
       if (result.cancelled || await isTerminated(rootTaskId)) {

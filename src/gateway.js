@@ -1,5 +1,6 @@
 import { createTask, findRecentTask, findTaskByRoot, linkRootAlias, setPaused, isTerminated, updateTask } from "./tasks.js";
 import { buildValidatedHandoff } from "./domain/delivery.js";
+import { readProjectSummary } from "./project-summary.js";
 import { assertAudit } from "./domain/audit.js";
 import { loadTaskStatus } from "./task-status.js";
 
@@ -17,6 +18,16 @@ export const DEFAULT_CONFIRM_ROLES = "project_manager,architect,frontend_develop
 export function parseConfirmRoles(raw = process.env.PI_CONFIRM_ROLES) {
   const value = raw === undefined || raw === null || String(raw).trim() === "" ? DEFAULT_CONFIRM_ROLES : String(raw);
   return new Set(value.split(",").map((key) => key.trim()).filter(Boolean));
+}
+
+// 项目经理在新任务或切换项目后先接续项目历史摘要；其他角色仍通过上游交付获取上下文。
+export async function loadProjectSummaryFor(agentKey, projectName, { root = process.cwd() } = {}) {
+  if (agentKey !== "project_manager" || !projectName) return null;
+  try {
+    return await readProjectSummary({ root, projectName });
+  } catch {
+    return null;
+  }
 }
 
 export function parseMessage(event) {
@@ -265,7 +276,8 @@ export function createRoleHandler({ agent, client, runAgent, isAllowedChat = () 
       await onEvent({ type: "task_started", task_id: task.taskId, agent: agent.key, chat_id: message.chatId, project_name: task.projectName || null });
       // 任务记录里的项目名要与写入白名单同源，并随本轮交付回写，
       // 否则同一项目后续消息的白名单会退回 workspace/default。
-      const result = await runAgent(agent, text, { taskId: task.taskId, chatId: message.chatId, appId: agent.appId, projectName: task.projectName || null, onEvent });
+      const projectSummary = await loadProjectSummaryFor(agent.key, task.projectName, { root: process.cwd() });
+      const result = await runAgent(agent, text, { taskId: task.taskId, chatId: message.chatId, appId: agent.appId, projectName: task.projectName || null, projectSummary, onEvent });
       if (result.cancelled || await isTerminated(task.taskId)) {
         await onEvent({ type: "task_cancelled", task_id: task.taskId, agent: agent.key, chat_id: message.chatId });
         return;

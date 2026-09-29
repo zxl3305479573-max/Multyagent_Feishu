@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
-import { buildResultCard, createCardActionHandler, createDeduper, createRoleHandler, isApprovalCommand, isStatusQueryCommand, parseControlCommand, parseMessage, parseNewTaskCommand, shouldHandleMessage } from "../src/gateway.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildResultCard, createCardActionHandler, createDeduper, createRoleHandler, isApprovalCommand, isStatusQueryCommand, loadProjectSummaryFor, parseControlCommand, parseMessage, parseNewTaskCommand, shouldHandleMessage } from "../src/gateway.js";
+import { appendProjectSummary } from "../src/project-summary.js";
 import { _resetForTest, createTask, findTaskByRoot, updateTask } from "../src/tasks.js";
 
 const BOT_NAMES = ["项目经理", "架构设计师", "前端开发", "后端开发", "测试", "审计"];
@@ -409,5 +413,25 @@ test("根 Agent 收到 Trace 回调，取消结果不作为普通失败处理", 
   } finally {
     rmSync("runtime/tasks.gateway.cancel.test.json", { force: true });
     _resetForTest();
+  }
+});
+
+test("loadProjectSummaryFor 只给项目经理注入项目历史摘要", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gateway-summary-"));
+  try {
+    await appendProjectSummary({
+      root,
+      projectName: "student",
+      taskId: "T-1",
+      agentKey: "architect",
+      agentName: "架构设计师",
+      delivery: { summary: "架构已定", artifactPaths: [] },
+    });
+    const pm = await loadProjectSummaryFor("project_manager", "student", { root });
+    assert.match(pm.content, /架构已定/);
+    assert.equal(await loadProjectSummaryFor("tester", "student", { root }), null);
+    assert.equal(await loadProjectSummaryFor("project_manager", "missing", { root }), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
