@@ -53,16 +53,27 @@ function describeArg(arg) {
 
 // The SDK logs whole axios payloads on failure, which buries the actionable
 // line. Keep one compact line per event and let our own messages carry detail.
-export function createCompactLogger(sink = console) {
+export function createCompactLogger(sink = console, { networkErrorWindowMs = 10_000 } = {}) {
   const format = (args) => args
     .map(describeArg)
     .join(" ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 400);
+  const recentNetworkErrors = new Map();
+  const emit = (level, args) => {
+    const line = `[feishu] ${format(args)}`;
+    if (/\b(?:ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH)\b/i.test(line)) {
+      const now = Date.now();
+      const previous = recentNetworkErrors.get(line) || 0;
+      if (now - previous < networkErrorWindowMs) return;
+      recentNetworkErrors.set(line, now);
+    }
+    sink[level]?.(line);
+  };
   return {
-    error: (...args) => sink.error?.(`[feishu] ${format(args)}`),
-    warn: (...args) => sink.warn?.(`[feishu] ${format(args)}`),
+    error: (...args) => emit("error", args),
+    warn: (...args) => emit("warn", args),
     info: () => {},
     debug: () => {},
   };

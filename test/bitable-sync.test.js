@@ -351,6 +351,19 @@ test("the compact logger survives a circular payload", () => {
   assert.match(lines[0], /boom/);
 });
 
+test("the compact logger suppresses duplicate Feishu DNS errors briefly", () => {
+  const lines = [];
+  const logger = createCompactLogger({ error: (line) => lines.push(line) }, { networkErrorWindowMs: 1_000 });
+
+  logger.error("getaddrinfo ENOTFOUND open.feishu.cn");
+  logger.error("getaddrinfo ENOTFOUND open.feishu.cn");
+  logger.error("getaddrinfo ENOTFOUND another.feishu.cn");
+
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /open\.feishu\.cn/);
+  assert.match(lines[1], /another\.feishu\.cn/);
+});
+
 test("a restart rebuilds prior state so an old row keeps its fields", async (t) => {
   const storageFile = await makeStorage(t);
   const historyFile = join(storageFile, "..", "events.jsonl");

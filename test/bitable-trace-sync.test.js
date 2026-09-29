@@ -85,6 +85,38 @@ test("trace failures stay local and remain available for a later retry", async (
   assert.equal(sync.stats.created, 1);
 });
 
+test("trace DNS/network failure backs off once and keeps the event queued", async (t) => {
+  const storageFile = await tempFile(t);
+  const { client, calls } = makeClient();
+  let online = false;
+  client.bitable.appTableRecord.search = async () => {
+    calls.search.push({});
+    if (!online) {
+      const error = new Error("getaddrinfo ENOTFOUND open.feishu.cn");
+      error.code = "ENOTFOUND";
+      throw error;
+    }
+    return { code: 0, data: { items: [] } };
+  };
+  const warnings = [];
+  const sync = createBitableTraceSync({
+    client, appToken: "base", tableId: "trace", storageFile, historyFile: null,
+    flushDelayMs: 0, networkBackoffMs: 30,
+    log: { warn: (message) => warnings.push(message) },
+  });
+
+  sync.handleEvent({ event_id: "evt-network", type: "task_started", task_id: "T-network" });
+  await sync.flush();
+  await sync.flush();
+  assert.equal(calls.search.length, 1, "退避期间不应重复请求 Feishu");
+  assert.equal(warnings.length, 1, "同一次网络故障只记录一次追踪同步警告");
+
+  online = true;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  await sync.flush();
+  assert.equal(calls.create.length, 1, "网络恢复后应继续补写本地事件");
+});
+
 test("missing trace records are replayed from the local JSONL event log after restart", async (t) => {
   const storageFile = await tempFile(t);
   const historyFile = storageFile.replace("trace-records.json", "events.jsonl");

@@ -4,7 +4,13 @@ import { TRACE_FIELD_SCHEMA, TRACE_KEY_FIELD, sanitizeTraceEvent, toTraceFields 
 
 const DEFAULT_MAPPING_FILE = "runtime/bitable-trace-records.json";
 const DEFAULT_FLUSH_DELAY_MS = 500;
+const DEFAULT_NETWORK_BACKOFF_MS = 30_000;
 const NOT_FOUND = new Set([1254043, 1254003, 1254040]);
+
+function isNetworkError(error) {
+  const value = `${error?.code || ""} ${error?.message || error || ""}`;
+  return /\b(?:ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH)\b/i.test(value);
+}
 
 function normalize(response, error) {
   if (error) {
@@ -70,6 +76,7 @@ export function createBitableTraceSync({
   log = console,
   flushDelayMs = DEFAULT_FLUSH_DELAY_MS,
   maxAttempts = 3,
+  networkBackoffMs = Number(process.env.FEISHU_BITABLE_NETWORK_BACKOFF_MS) || DEFAULT_NETWORK_BACKOFF_MS,
 } = {}) {
   if (!client || !appToken || !tableId) throw new Error("createBitableTraceSync requires client, appToken and tableId");
 
@@ -81,6 +88,8 @@ export function createBitableTraceSync({
   let timer = null;
   let chain = Promise.resolve();
   let hydrated = false;
+  let networkBackoffUntil = 0;
+  let networkWarningActive = false;
   const queued = [];
 
   async function hydrate() {
@@ -176,22 +185,39 @@ export function createBitableTraceSync({
 
   async function flushEvents() {
     await drain();
+    if (networkBackoffUntil > Date.now()) {
+      schedule(networkBackoffUntil - Date.now());
+      return;
+    }
     const pending = [...dirty];
     dirty.clear();
-    for (const eventId of pending) {
+    for (let index = 0; index < pending.length; index += 1) {
+      const eventId = pending[index];
       try {
         await writeEvent(eventId);
         attempts.delete(eventId);
+        networkBackoffUntil = 0;
+        networkWarningActive = false;
       } catch (error) {
         stats.failed += 1;
         stats.lastError = error.message;
+        if (isNetworkError(error)) {
+          for (const remaining of pending.slice(index)) dirty.add(remaining);
+          networkBackoffUntil = Date.now() + Math.max(0, Number(networkBackoffMs) || DEFAULT_NETWORK_BACKOFF_MS);
+          if (!networkWarningActive) {
+            networkWarningActive = true;
+            log.warn?.(`[bitable-trace] Feishu 网络暂不可用，${Math.ceil(Math.max(0, Number(networkBackoffMs) || DEFAULT_NETWORK_BACKOFF_MS) / 1000)} 秒后重试：${error.message}`);
+          }
+          schedule(networkBackoffUntil - Date.now());
+          break;
+        }
         const count = (attempts.get(eventId) || 0) + 1;
         if (count < maxAttempts) { attempts.set(eventId, count); dirty.add(eventId); }
         else attempts.delete(eventId);
         log.warn?.(`[bitable-trace] event sync failed (${count}/${maxAttempts}): ${error.message}`);
       }
     }
-    if (dirty.size) schedule();
+    if (dirty.size && networkBackoffUntil <= Date.now()) schedule();
   }
 
   function runFlush() {
@@ -203,9 +229,9 @@ export function createBitableTraceSync({
     return chain;
   }
 
-  function schedule() {
-    if (!(flushDelayMs > 0) || timer) return;
-    timer = setTimeout(() => { timer = null; void runFlush(); }, flushDelayMs);
+  function schedule(delayMs = flushDelayMs) {
+    if (!(delayMs > 0) || timer) return;
+    timer = setTimeout(() => { timer = null; void runFlush(); }, delayMs);
     timer.unref?.();
   }
 
