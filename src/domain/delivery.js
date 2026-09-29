@@ -10,8 +10,9 @@ function evidenceFor(delivery) {
   }];
 }
 
-export async function buildValidatedHandoff(delivery, { taskId, agent, artifactsDir, root = process.cwd() } = {}) {
+export async function buildValidatedHandoff(delivery, { taskId, agent, agentKey, artifactsDir, root = process.cwd() } = {}) {
   const supplied = delivery?.handoff || delivery;
+  const resolvedAgent = supplied?.agent || supplied?.agentKey || agent || agentKey || null;
   const paths = Array.isArray(supplied?.artifactPaths)
     ? supplied.artifactPaths
     : Array.isArray(supplied?.artifacts) ? supplied.artifacts.map((a) => a.path) : [];
@@ -24,7 +25,7 @@ export async function buildValidatedHandoff(delivery, { taskId, agent, artifacts
   const handoff = createHandoff({
     ...supplied,
     task_id: taskId,
-    agent: supplied?.agent || agent,
+    agent: resolvedAgent,
     status: supplied?.status || "completed",
     summary: supplied?.summary || "",
     artifacts,
@@ -43,7 +44,7 @@ export async function buildValidatedHandoff(delivery, { taskId, agent, artifacts
     await saveHandoff(artifactsDir, handoff);
     await saveArtifactMetadata(artifactsDir, {
       taskId,
-      agent,
+      agent: resolvedAgent,
       artifacts,
       evidence: handoff.evidence,
       changedFiles: artifacts.map((item) => item.path),

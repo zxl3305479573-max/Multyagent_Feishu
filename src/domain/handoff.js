@@ -22,7 +22,7 @@ export function createHandoff(input = {}) {
   const now = new Date().toISOString();
   return {
     task_id: input.task_id || input.taskId || null,
-    agent: input.agent || null,
+    agent: input.agent || input.agentKey || null,
     status: input.status || "completed",
     summary: input.summary || "",
     artifacts: input.artifacts || [],
