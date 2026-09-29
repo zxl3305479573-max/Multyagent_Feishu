@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, diagramSkillPaths, extractText, mapPiToolEvent, sanitizeAgentReply } from "../src/pi-agent.js";
+import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, diagramSkillPaths, extractText, mapPiToolEvent, normalizeAssignments, sanitizeAgentReply } from "../src/pi-agent.js";
 
 test("diagram-design skill 对架构设计师和项目经理启用", () => {
   assert.deepEqual(diagramSkillPaths("architect"), architectSkillPaths("architect"));
@@ -23,6 +23,25 @@ test("项目经理提示词允许规划图但保留架构图归属约束", () =>
   assert.match(prompt, /diagram-design skill/);
   assert.match(prompt, /final system architecture diagram/);
   assert.match(prompt, /diagram.*belongs to the architect/);
+});
+
+test("项目经理提示词要求最小派发并避免超出需求的交付", () => {
+  const prompt = buildSystemPrompt({ key: "project_manager", displayName: "项目经理" });
+  assert.match(prompt, /Default to zero downstream assignments/);
+  assert.match(prompt, /never dispatch more than two roles/);
+  assert.match(prompt, /do not add extra architecture documents/);
+});
+
+test("normalizeAssignments 过滤自身并将单次派发限制在三个角色内", () => {
+  const result = normalizeAssignments([
+    { agentKey: "project_manager", task: "自己继续" },
+    { agentKey: "architect", task: "架构设计", reason: "需要模块边界" },
+    { agentKey: "frontend_developer", task: "前端实现" },
+    { agentKey: "backend_developer", task: "后端实现" },
+    { agentKey: "tester", task: "测试" },
+    { agentKey: "auditor", task: "审计" },
+  ], { selfAgentKey: "project_manager" });
+  assert.deepEqual(result.map((item) => item.agentKey), ["architect", "frontend_developer", "backend_developer"]);
 });
 
 test("buildSystemPrompt 含身份、职责、工具与固定身份约束", () => {

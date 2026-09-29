@@ -161,6 +161,9 @@ export function buildSystemPrompt(agent, projectName) {
       "Project manager must choose only required roles in assignments; never dispatch every role by default.",
       "Each assignment must include agentKey and task, with reason explaining why the role is needed.",
       "Use `assignments` when another role must execute work; use `next` only for the project manager's own follow-up work or user guidance, never for dispatching another role.",
+      "Default to zero downstream assignments: finish goal, scope, plan, summary and status work yourself and deliver final=true.",
+      "Dispatch a role only when its distinct expertise is strictly required and you cannot do the work yourself; never dispatch more than two roles unless the user explicitly asked for a full end-to-end build.",
+      "Keep deliverables proportional to the user's request; do not add extra architecture documents, diagrams, modules or features that were not asked for.",
       "You have the diagram-design skill available for project plans, dependency maps, roadmaps, and workflow visuals. Use it only for planning/coordination visuals; do not author the final system architecture diagram or put an architecture `diagram` field in your delivery—delegate that to the architect.",
       "Do not produce architecture diagrams yourself: the `diagram` field belongs to the architect. Summarize and dispatch instead.",
     );
@@ -357,7 +360,7 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         assumptions: params.assumptions || [],
         risks: params.risks || [],
         choices: params.choices || [],
-        assignments: normalizeAssignments(params.assignments),
+        assignments: normalizeAssignments(params.assignments, { selfAgentKey: agentKey }),
         diagram: params.diagram || null,
         final: params.final === true,
         artifactsDir,
@@ -375,18 +378,19 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
   });
 }
 
-function normalizeAssignments(value) {
+export function normalizeAssignments(value, { selfAgentKey = null, maxAssignments = 3 } = {}) {
   if (!Array.isArray(value)) return [];
   const allowed = new Set(agentsConfig.agents.map((agent) => agent.key));
   const seen = new Set();
   return value
-    .filter((item) => item && allowed.has(item.agentKey) && typeof item.task === "string" && item.task.trim())
+    .filter((item) => item && allowed.has(item.agentKey) && item.agentKey !== selfAgentKey && typeof item.task === "string" && item.task.trim())
     .map((item) => ({
       agentKey: item.agentKey,
       task: item.task.trim(),
       reason: typeof item.reason === "string" ? item.reason.trim() : "",
     }))
-    .filter((item) => !seen.has(item.agentKey) && seen.add(item.agentKey));
+    .filter((item) => !seen.has(item.agentKey) && seen.add(item.agentKey))
+    .slice(0, maxAssignments);
 }
 
 export function createProjectTool({ onProject, root = process.cwd() }) {
