@@ -180,6 +180,12 @@ export function buildSystemPrompt(agent, projectName) {
       "It is rendered into a flowchart image and embedded in the Feishu card, so keep labels short and the graph readable.",
     );
   }
+  if (agent.key !== "project_manager") {
+    lines.push(
+      "",
+      "Only the project manager may dispatch other roles. You cannot assign or request other roles directly; if another role's work is needed, describe it in `next` as a recommendation for the project manager.",
+    );
+  }
   lines.push(
     ``,
     `工作方式：`,
@@ -360,7 +366,7 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         assumptions: params.assumptions || [],
         risks: params.risks || [],
         choices: params.choices || [],
-        assignments: normalizeAssignments(params.assignments, { selfAgentKey: agentKey }),
+        assignments: normalizeAssignments(params.assignments, { selfAgentKey: agentKey, allowDispatch: agentKey === "project_manager" }),
         diagram: params.diagram || null,
         final: params.final === true,
         artifactsDir,
@@ -378,7 +384,8 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
   });
 }
 
-export function normalizeAssignments(value, { selfAgentKey = null, maxAssignments = 3 } = {}) {
+export function normalizeAssignments(value, { selfAgentKey = null, maxAssignments = 3, allowDispatch = true } = {}) {
+  if (!allowDispatch) return [];
   if (!Array.isArray(value)) return [];
   const allowed = new Set(agentsConfig.agents.map((agent) => agent.key));
   const seen = new Set();

@@ -108,6 +108,7 @@ test("long approval summaries keep the actionable next step visible", () => {
       evidence: Array.from({ length: 6 }, (_, index) => ({ command: `npm test ${index}`, result: "66 pass / 0 fail" })),
       assumptions: ["Node 22 and Node 24 were both verified", "The package lock is current"],
       next,
+      choices: [{ id: "approve", label: "确认执行" }],
       final: false,
     },
   });

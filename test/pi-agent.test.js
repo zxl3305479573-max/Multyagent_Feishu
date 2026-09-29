@@ -42,6 +42,12 @@ test("normalizeAssignments 过滤自身并将单次派发限制在三个角色�
     { agentKey: "auditor", task: "审计" },
   ], { selfAgentKey: "project_manager" });
   assert.deepEqual(result.map((item) => item.agentKey), ["architect", "frontend_developer", "backend_developer"]);
+  assert.deepEqual(normalizeAssignments([{ agentKey: "tester", task: "复验" }], { allowDispatch: false }), []);
+});
+
+test("非项目经理提示词声明不能直接派发其他角色", () => {
+  const prompt = buildSystemPrompt({ key: "architect", displayName: "架构设计师" });
+  assert.match(prompt, /Only the project manager may dispatch other roles/);
 });
 
 test("buildSystemPrompt 含身份、职责、工具与固定身份约束", () => {

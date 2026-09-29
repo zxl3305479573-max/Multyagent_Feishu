@@ -65,7 +65,7 @@ test("重启时丢弃旧版本遗留的无下一步待确认项", async () => {
   }
 });
 
-test("确认 next 后先由原角色继续，完成后再沿配置路由派发", async () => {
+test("非 PM 的 next 自动交回项目经理决策，不出确认卡", async () => {
   const runs = [];
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };
   const orchestrator = createOrchestrator({
@@ -90,7 +90,7 @@ test("确认 next 后先由原角色继续，完成后再沿配置路由派发",
     context: { chatId: "chat-next", requireHumanApproval: true },
   });
 
-  await orchestrator.resolveLatest("chat-next", "approve");
+  assert.equal(await orchestrator.resolveLatest("chat-next", "approve"), null, "普通 next 不应登记待确认项");
   await orchestrator.whenIdle();
-  assert.deepEqual(runs, ["tester", "auditor", "project_manager"]);
+  assert.deepEqual(runs, ["project_manager"]);
 });

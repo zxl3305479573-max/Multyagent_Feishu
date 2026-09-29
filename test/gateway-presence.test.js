@@ -59,18 +59,14 @@ function makeHandler({ resolveLatest, sent = [], log = { error() {} } } = {}) {
 // T1：六角色各自出确认按钮
 // ---------------------------------------------------------------------------
 
-test("默认配置下六个角色的交付卡片都带「确认执行」按钮", () => {
+test("普通 next 不再出确认按钮（六角色逐个断言）", () => {
   const restore = fakeEnv(undefined);
   try {
     for (const agentKey of ALL_ROLES) {
       const card = buildResultCard({ delivery: deliveryOf(agentKey) });
-      const action = actionElement(card);
-      assert.ok(action, `${agentKey} 应渲染 action 元素`);
-      assert.deepEqual(buttonLabels(card), ["确认执行"], `${agentKey} 按钮文案`);
-      assert.equal(action.actions[0].type, "primary");
-      assert.deepEqual(action.actions[0].value, { action: "approve", choice: "approve", label: "确认执行" });
-      assert.match(card.header.title.content, /^请确认下一步/);
-      assert.match(card.body.elements[0].text.content, /请确认后继续执行/);
+      assert.equal(actionElement(card), undefined, `${agentKey} 普通 next 不应出按钮`);
+      assert.equal(card.header.title.content.startsWith("阶段完成"), true, `${agentKey} 应是阶段完成卡`);
+      assert.doesNotMatch(card.body.elements[0].text.content, /请确认后继续执行/);
     }
   } finally {
     restore();
@@ -82,47 +78,30 @@ test("默认确认角色集合就是六个角色", () => {
   assert.deepEqual([...parseConfirmRoles(undefined)].sort(), [...ALL_ROLES].sort());
 });
 
-test("六角色逐个断言：按钮 value 可被 handler 白名单接受", async () => {
-  const restore = fakeEnv(undefined);
-  try {
-    for (const agentKey of ALL_ROLES) {
-      const card = buildResultCard({ delivery: deliveryOf(agentKey) });
-      const value = actionElement(card).actions[0].value;
-      const { handler, calls } = makeHandler({ resolveLatest: async (chatId, selection) => { calls.push({ chatId, selection }); return { approved: true, agentKey }; } });
-      const response = await handler({ context: { open_chat_id: "c1" }, action: { value } });
-      assert.equal(response.toast.type, "success", `${agentKey} 点击应有成功反馈`);
-      assert.deepEqual(calls, [{ chatId: "c1", selection: "approve" }], `${agentKey} 应触发 resolveLatest`);
-    }
-  } finally {
-    restore();
+test("真实抉择卡的按钮 value 可被 handler 白名单接受（六角色）", async () => {
+  for (const agentKey of ALL_ROLES) {
+    const card = buildResultCard({ delivery: deliveryOf(agentKey, { choices: [{ id: "approve", label: "确认执行", primary: true }] }) });
+    const value = actionElement(card).actions[0].value;
+    const { handler, calls } = makeHandler({ resolveLatest: async (chatId, selection) => { calls.push({ chatId, selection }); return { approved: true, agentKey }; } });
+    const response = await handler({ context: { open_chat_id: "c1" }, action: { value } });
+    assert.equal(response.toast.type, "success", `${agentKey} 点击应有成功反馈`);
+    assert.deepEqual(calls, [{ chatId: "c1", selection: "approve" }], `${agentKey} 应触发 resolveLatest`);
   }
 });
 
-test("PI_CONFIRM_ROLES 白名单外的角色不出按钮", () => {
-  const restore = fakeEnv("project_manager,architect");
-  try {
-    for (const agentKey of ["frontend_developer", "backend_developer", "tester", "auditor"]) {
-      const card = buildResultCard({ delivery: deliveryOf(agentKey) });
-      assert.equal(actionElement(card), undefined, `${agentKey} 不应出按钮`);
-      assert.equal(card.header.title.content.startsWith("阶段完成"), true);
-    }
-    for (const agentKey of ["project_manager", "architect"]) {
-      assert.ok(actionElement(buildResultCard({ delivery: deliveryOf(agentKey) })), `${agentKey} 仍应出按钮`);
-    }
-  } finally {
-    restore();
+test("只有项目经理的派发计划出确认按钮，其他角色的 assignments 不出按钮", () => {
+  const pm = buildResultCard({ delivery: deliveryOf("project_manager", { assignments: [{ agentKey: "architect", task: "架构设计" }] }) });
+  assert.ok(actionElement(pm), "PM 派发计划应有确认按钮");
+  for (const agentKey of ALL_ROLES.filter((key) => key !== "project_manager")) {
+    const card = buildResultCard({ delivery: deliveryOf(agentKey, { assignments: [{ agentKey: "tester", task: "复验" }] }) });
+    assert.equal(actionElement(card), undefined, `${agentKey} 不应有派发按钮`);
   }
 });
 
-test("PI_CONFIRM_ROLES=project_manager 即方案 B：只有项目经理出按钮", () => {
-  const restore = fakeEnv("project_manager");
-  try {
-    assert.ok(actionElement(buildResultCard({ delivery: deliveryOf("project_manager") })));
-    for (const agentKey of ALL_ROLES.filter((key) => key !== "project_manager")) {
-      assert.equal(actionElement(buildResultCard({ delivery: deliveryOf(agentKey) })), undefined, `${agentKey} 在方案 B 下不出按钮`);
-    }
-  } finally {
-    restore();
+test("choices 让任意角色出确认按钮", () => {
+  for (const agentKey of ALL_ROLES) {
+    const card = buildResultCard({ delivery: deliveryOf(agentKey, { choices: [{ id: "accept", label: "接受" }] }) });
+    assert.ok(actionElement(card), `${agentKey} 有 choices 应出按钮`);
   }
 });
 
@@ -153,7 +132,7 @@ test("final:true 的交付不出按钮（六角色逐个断言）", () => {
   const restore = fakeEnv(undefined);
   try {
     for (const agentKey of ALL_ROLES) {
-      const card = buildResultCard({ delivery: deliveryOf(agentKey, { final: true }) });
+      const card = buildResultCard({ delivery: deliveryOf(agentKey, { final: true, choices: [{ id: "accept", label: "接受" }] }) });
       assert.equal(actionElement(card), undefined, `${agentKey} final 交付不应出按钮`);
       assert.equal(card.header.template, "green");
       assert.match(card.header.title.content, /^最终交付/);
@@ -171,7 +150,7 @@ test("agentKey 为空时不出按钮（无法判断归属）", () => {
 
 test("交付卡带 diagramImageKey 时渲染图片元素，不带时不渲染", () => {
   const withDiagram = buildResultCard({
-    delivery: deliveryOf("architect"),
+    delivery: deliveryOf("architect", { choices: [{ id: "approve", label: "确认执行" }] }),
     diagramImageKey: "img_v2_abc",
   });
   const img = withDiagram.body.elements.find((element) => element?.tag === "img");
@@ -511,7 +490,7 @@ test("六角色卡片到回调的闭环：每张卡片点击后都有 toast 且�
   const restore = fakeEnv(undefined);
   try {
     for (const agentKey of ALL_ROLES) {
-      const card = buildResultCard({ delivery: deliveryOf(agentKey) });
+      const card = buildResultCard({ delivery: deliveryOf(agentKey, { choices: [{ id: "approve", label: "确认执行" }] }) });
       const value = actionElement(card).actions[0].value;
       let dispatched = 0;
       let pending = true;

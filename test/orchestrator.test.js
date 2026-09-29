@@ -278,7 +278,7 @@ test("PM 交付只有 choices、没有 assignments 时，按钮点击仍能解�
   assert.match(runs[0].prompt, new RegExp(button.value.choice));
 });
 
-test("确认集合内的非 PM/架构角色，卡片按钮同样能取到待确认项", async () => {
+test("非 PM 角色有真实 choices 时，卡片按钮能取到待确认项", async () => {
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };
   const runAgent = async () => ({
     text: "x",
@@ -292,7 +292,7 @@ test("确认集合内的非 PM/架构角色，卡片按钮同样能取到待确�
   }
 
   await orch.onTaskCompleted("tester", "T:architect:tester", {
-    delivery: { summary: "测试通过", next: "确认后继续执行", artifactPaths: [], artifactsDir: "d" },
+    delivery: { summary: "测试通过", choices: [{ id: "approve", label: "确认执行" }], artifactPaths: [], artifactsDir: "d" },
     context: { chatId: "c1", requireHumanApproval: true },
   });
 
@@ -301,7 +301,7 @@ test("确认集合内的非 PM/架构角色，卡片按钮同样能取到待确�
   assert.equal(resolved?.agentKey, "tester");
 });
 
-test("确认后端的下一步后沿路由完成测试、审计，并由项目经理最终汇总", async () => {
+test("非 PM 的下一步交回项目经理，由项目经理派发后完成测试、审计和汇总", async () => {
   const runs = [];
   const prompts = [];
   const events = [];
@@ -310,6 +310,17 @@ test("确认后端的下一步后沿路由完成测试、审计，并由项目�
     runs.push(agent.key);
     prompts.push({ key: agent.key, prompt });
     if (agent.key === "project_manager") {
+      if (!runs.includes("tester")) {
+        return {
+          text: "计划已定",
+          delivery: {
+            agentKey: agent.key,
+            summary: "派发测试复验",
+            assignments: [{ agentKey: "tester", task: "复验后端修复" }],
+            artifactPaths: [],
+          },
+        };
+      }
       return { text: "最终汇总", delivery: { agentKey: agent.key, summary: "全部复验完成", final: true, artifactPaths: [] } };
     }
     return { text: `${agent.key} 完成`, delivery: { agentKey: agent.key, summary: `${agent.key} 完成`, final: false, artifactPaths: [] } };
@@ -325,7 +336,6 @@ test("确认后端的下一步后沿路由完成测试、审计，并由项目�
       summary: "后端修复已完成",
       next: "派发测试复验，最后由项目经理总结",
       artifactPaths: [],
-      assignments: [{ agentKey: "tester", task: "复验后端修复" }],
     },
     parentTaskId: "T-flow",
     context: {
@@ -338,10 +348,11 @@ test("确认后端的下一步后沿路由完成测试、审计，并由项目�
   assert.equal((await orch.resolveLatest("flow-chat", "approve"))?.approved, true);
   await orch.whenIdle();
 
-  assert.deepEqual(runs, ["tester", "auditor", "project_manager"]);
-  assert.match(prompts.find((item) => item.key === "project_manager").prompt, /后端修复已完成/);
-  assert.match(prompts.find((item) => item.key === "project_manager").prompt, /tester 完成/);
-  assert.match(prompts.find((item) => item.key === "project_manager").prompt, /逐项汇总已完成内容/);
+  assert.deepEqual(runs, ["project_manager", "tester", "auditor", "project_manager"]);
+  assert.match(prompts[0].prompt, /后端修复已完成/);
+  assert.match(prompts[0].prompt, /派发测试复验/);
+  assert.match(prompts[0].prompt, /上游建议的下一步/);
+  assert.match(prompts.find((item) => item.key === "project_manager" && /tester 完成/.test(item.prompt)).prompt, /逐项汇总已完成内容/);
   assert.ok(events.some((event) => event.type === "task_settle" && event.reason === "final"));
 });
 
@@ -376,8 +387,9 @@ test("resolveLatest 按 task_id 精确解析同群待确认任务，旧卡片仍
   orch.registerRole({ key: "architect", displayName: "架构设计师", appId: "x" }, client);
   orch.registerRole({ key: "tester", displayName: "测试", appId: "x" }, client);
   const context = { chatId: "same-chat", requireHumanApproval: true };
-  await orch.onTaskCompleted("architect", "task-old", { delivery: { summary: "old", next: "确认后继续执行" }, context });
-  await orch.onTaskCompleted("tester", "task-new", { delivery: { summary: "new", next: "确认后继续执行" }, context });
+  const choices = [{ id: "approve", label: "确认执行" }];
+  await orch.onTaskCompleted("architect", "task-old", { delivery: { summary: "old", choices }, context });
+  await orch.onTaskCompleted("tester", "task-new", { delivery: { summary: "new", choices }, context });
 
   const targeted = await orch.resolveLatest("same-chat", "approve", "task-old");
   assert.equal(targeted?.taskId, "task-old");
@@ -403,7 +415,7 @@ test("PM 交付既无 assignments 也无 choices 且无审批上下文时仍结�
   assert.equal(await orch.resolveLatest("c1"), null);
 });
 
-test("PM 交付只有 next 时，确认后继续由项目经理执行", async () => {
+test("PM 交付只有 next 时自动继续由项目经理执行，不出确认卡", async () => {
   const runs = [];
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };
   const runAgent = async (agent) => {
@@ -424,10 +436,9 @@ test("PM 交付只有 next 时，确认后继续由项目经理执行", async ()
     context: { chatId: "c1", requireHumanApproval: true },
   });
 
-  const resolved = await orch.resolveLatest("c1", "approve");
-  assert.equal(resolved?.approved, true, "卡片既然出按钮，点击就不能落空");
+  assert.equal(await orch.resolveLatest("c1", "approve"), null, "普通 next 不应登记待确认项");
   await orch.whenIdle();
-  assert.deepEqual(runs, ["project_manager"], "确认 next 后应由原角色继续执行，而不是派发给配置路由");
+  assert.deepEqual(runs, ["project_manager"], "PM 的 next 应自动续跑，而不是派发给配置路由");
 });
 
 test("派发下游时继承上游交付的项目名，产物目录与该角色白名单保持一致", async () => {
@@ -683,24 +694,13 @@ test("不传 approvalsFile 时不落盘", async () => {
   assert.equal(existsSync(file), false, "未指定路径时不应写文件");
 });
 
-test("PM 可直接执行的 next 确认后仍由项目经理继续，不派发下游", async () => {
+test("PM 自己能做的 next 自动续跑，不派发下游，也不出确认卡", async () => {
   const runs = [];
   const prompts = [];
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };
   const runAgent = async (agent, prompt) => {
     runs.push(agent.key);
     prompts.push(prompt);
-    if (runs.length === 1) {
-      return {
-        text: "目标已定",
-        delivery: {
-          agentKey: agent.key,
-          summary: "目标已定",
-          next: "由项目经理补充范围、交付边界与验收标准",
-          artifactPaths: [],
-        },
-      };
-    }
     return {
       text: "需求规格已完成",
       delivery: { agentKey: agent.key, summary: "需求规格已完成", final: true, artifactPaths: [] },
@@ -720,7 +720,7 @@ test("PM 可直接执行的 next 确认后仍由项目经理继续，不派发�
     context: { chatId: "c-pm-self", requireHumanApproval: true },
   });
 
-  assert.equal((await orch.resolveLatest("c-pm-self", "approve"))?.approved, true);
+  assert.equal(await orch.resolveLatest("c-pm-self", "approve"), null, "普通 next 不应登记待确认项");
   await orch.whenIdle();
   assert.deepEqual(runs, ["project_manager"], "PM 自己能做的下一步不应派发给架构设计师");
   assert.match(prompts[0], /由项目经理补充范围、交付边界与验收标准/);

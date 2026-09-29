@@ -159,8 +159,10 @@ export function buildResultCard(result = {}) {
   const delivery = normalizeDelivery(result.delivery);
   if (!delivery.summary && result.text) delivery.summary = cleanText(result.text).trim();
   const final = delivery.final;
-  const confirmRoles = parseConfirmRoles();
-  const approvalRequired = result.approvalRequired === true || (!final && hasActionableNextStep(delivery) && Boolean(delivery.agentKey) && confirmRoles.has(delivery.agentKey));
+  const hasAssignments = Array.isArray(delivery.assignments) && delivery.assignments.length > 0;
+  const approvalRequired = result.approvalRequired === true
+    || (!final && delivery.choices.length > 0)
+    || (!final && delivery.agentKey === "project_manager" && hasAssignments);
   const explicitApproval = result.approvalRequired === true;
   const choices = (delivery.choices.length && (!final || explicitApproval)) ? delivery.choices : (approvalRequired && (!final || explicitApproval)) ? [{ id: "approve", label: "确认执行", primary: true }] : [];
   const evidenceText = delivery.evidence.length ? `**验证证据**\n${delivery.evidence.map((item) => `· ${cardText(item.command, 180)} → ${cardText(item.result, 120)}${item.details ? `（${cardText(item.details, 240)}）` : ""}`).join("\n")}` : "";

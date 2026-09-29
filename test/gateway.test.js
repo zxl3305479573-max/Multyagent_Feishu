@@ -290,13 +290,13 @@ test("状态查询走只读快照，不启动新的 Agent 会话", async () => {
 });
 
 test("approval card carries the task id for precise callback resolution", () => {
-  const card = buildResultCard({ taskId: "task-42", delivery: { agentKey: "architect", agentName: "架构设计师", summary: "方案完成", next: "确认后继续执行", final: false } });
+  const card = buildResultCard({ taskId: "task-42", delivery: { agentKey: "architect", agentName: "架构设计师", summary: "方案完成", next: "确认后继续执行", choices: [{ id: "approve", label: "确认执行" }], final: false } });
   const action = card.body.elements.find((element) => element.tag === "action");
   assert.equal(action.actions[0].value.task_id, "task-42");
 });
 
 test("approval card omits task_id when no task id is available", () => {
-  const card = buildResultCard({ delivery: { agentKey: "architect", agentName: "架构设计师", summary: "方案完成", next: "确认后继续执行", final: false } });
+  const card = buildResultCard({ delivery: { agentKey: "architect", agentName: "架构设计师", summary: "方案完成", next: "确认后继续执行", choices: [{ id: "approve", label: "确认执行" }], final: false } });
   const action = card.body.elements.find((element) => element.tag === "action");
   assert.equal(Object.hasOwn(action.actions[0].value, "task_id"), false);
 });

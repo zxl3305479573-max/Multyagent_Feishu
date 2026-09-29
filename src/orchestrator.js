@@ -2,7 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { readFile } from "node:fs/promises";
-import { buildTaskReceivedCard, hasActionableNextStep, parseConfirmRoles, sendCard, sendResultCard, sendText } from "./gateway.js";
+import { buildTaskReceivedCard, sendCard, sendResultCard, sendText } from "./gateway.js";
 import { isPaused, isTerminated, setPaused, setTerminated } from "./tasks.js";
 import { artifactsDirFor } from "./artifacts.js";
 import { abortActiveSessions } from "./session-control.js";
@@ -51,7 +51,13 @@ export function createOrchestrator({
       const raw = JSON.parse(readFileSync(approvalsFile, "utf8"));
       const now = Date.now();
       const kept = Object.entries(raw?.pending || {})
-        .filter(([, item]) => item?.delivery && (item.approvalRequired === true || hasActionableNextStep(item.delivery)) && now - (item.savedAt || 0) < approvalTtlMs)
+        .filter(([, item]) => {
+          if (!item?.delivery || now - (item.savedAt || 0) >= approvalTtlMs) return false;
+          const assignments = Array.isArray(item.delivery.assignments) ? item.delivery.assignments : [];
+          return item.approvalRequired === true
+            || item.delivery.choices?.length > 0
+            || (item.agentKey === "project_manager" && assignments.length > 0);
+        })
         .map(([key, item]) => [key, item]);
       if (kept.length) log.info?.(`[orchestrator] restored ${kept.length} pending approval(s) from ${approvalsFile}`);
       return kept;
@@ -173,7 +179,10 @@ export function createOrchestrator({
   function needsHumanDecision({ agentKey, delivery, context, approvalRequired }) {
     if (!context?.requireHumanApproval || context.approvalBypass) return false;
     if (approvalRequired === true || delivery?.choices?.length) return true;
-    return hasActionableNextStep(delivery) && parseConfirmRoles().has(agentKey);
+    const assignments = Array.isArray(delivery?.assignments) ? delivery.assignments : [];
+    // 只有项目经理的派发计划属于“决定性抉择”；其他角色的 next 只是建议，
+    // 会自动交回项目经理处理，不再让用户点确认卡。
+    return agentKey === "project_manager" && assignments.length > 0;
   }
 
   async function onTaskCompleted(agentKey, taskId, payload = {}) {
@@ -255,7 +264,7 @@ export function createOrchestrator({
     if (agentKey === "project_manager" && dispatchContext.selectedAgents) {
       const initialTargets = dispatchContext.selectedAgents.filter((target) => target !== "project_manager" && roles.has(target));
       await Promise.all(initialTargets.map((target) => dispatchTo(target, taskId, {
-        context: { ...dispatchContext, approvalBypass: false },
+        context: { ...dispatchContext, approvalBypass: false, pmCoordination: false },
         parentDelivery: delivery,
         fromAgent: agentKey,
       })));
@@ -271,6 +280,25 @@ export function createOrchestrator({
     }
     rootRounds.set(root, round + 1);
 
+    const routineNext = Boolean(String(delivery.next || "").trim()) && !delivery.choices?.length;
+    if (agentKey !== "project_manager" && routineNext && roles.has("project_manager")) {
+      // 非 PM 没有派发权限：把建议交回 PM 决策，不弹人工确认卡。
+      await dispatchTo("project_manager", taskId, {
+        context: { ...dispatchContext, approvalBypass: false, pmCoordination: true },
+        parentDelivery: delivery,
+        fromAgent: agentKey,
+      });
+      return;
+    }
+    if (agentKey === "project_manager" && routineNext && !dispatchContext.selectedAgents?.length) {
+      // PM 自己能做的常规下一步直接续跑，不弹确认卡。
+      trackContinuation(
+        { taskId, agentKey, chatId: dispatchContext.chatId || null },
+        () => continueWithSelection({ agentKey, taskId, delivery, context: dispatchContext, parentTaskId }, "continue", delivery.next),
+      );
+      return;
+    }
+
     let dispatchedDownstream = false;
     let waitingForDownstream = false;
     for (const rule of matchRoutes(routesConfig.routes, agentKey)) {
@@ -281,7 +309,7 @@ export function createOrchestrator({
         dispatchedDownstream = true;
         await Promise.all(
           targets.map((target) =>
-            dispatchTo(target, taskId, { context: { ...dispatchContext, approvalBypass: false }, parentDelivery: delivery, fromAgent: agentKey }),
+            dispatchTo(target, taskId, { context: { ...dispatchContext, approvalBypass: false, pmCoordination: false }, parentDelivery: delivery, fromAgent: agentKey }),
           ),
         );
       } else if (rule.when === "all_done") {
@@ -298,7 +326,7 @@ export function createOrchestrator({
           dispatchedDownstream = true;
           await Promise.all(
             targets.map((target) =>
-              dispatchTo(target, base, { context: { ...dispatchContext, approvalBypass: false }, parentDelivery: delivery, fromAgent: agentKey }),
+              dispatchTo(target, base, { context: { ...dispatchContext, approvalBypass: false, pmCoordination: false }, parentDelivery: delivery, fromAgent: agentKey }),
             ),
           );
         } else waitingForDownstream = true;
@@ -332,16 +360,22 @@ export function createOrchestrator({
       .map((item) => `- ${item.agentKey}: ${item.summary || "已完成交付"}${item.artifactPaths?.length ? `（产物 ${item.artifactPaths.join(", ")}）` : ""}`)
       .join("\n");
 
+    const pmInstruction = context.pmCoordination
+      ? "作为项目经理，请判断上游建议的下一步：能自己完成的直接交付；确需其他角色时用 assignments 明确派发必要角色并说明理由，不要扩大范围或重复派发。"
+      : "作为项目经理，请基于以上所有机器人交付逐项汇总已完成内容、产物、验证结果和遗留风险，不要只回复‘任务已完成’。";
     const prompt = [
       assignedTask ? `分配任务：${assignedTask}` : "",
       `上游机器人：${fromAgent}；交付摘要：${parentDelivery.summary}`,
+      parentDelivery.next ? `上游建议的下一步：${parentDelivery.next}` : "",
       refs ? `上游产物：\n${refs}` : "",
       priorDeliveries ? `前序机器人交付记录：\n${priorDeliveries}` : "",
-      targetKey === "project_manager" ? "作为项目经理，请基于以上所有机器人交付逐项汇总已完成内容、产物、验证结果和遗留风险，不要只回复‘任务已完成’。" : "",
+      targetKey === "project_manager" ? pmInstruction : "",
       context.selection ? `用户选择：${context.selection}` : "",
       "",
       upstreamDir && upstreamDir !== artifactsDir ? `上游产物目录：${upstreamDir}` : "",
-      `请读取 ${artifactsDir} 中的上游产物，完成分配任务，并调用 deliver_artifact 交付。`,
+      context.pmCoordination
+        ? "请处理上游建议：能自己完成就直接交付；确需其他角色时使用 assignments 明确派发。"
+        : `请读取 ${artifactsDir} 中的上游产物，完成分配任务，并调用 deliver_artifact 交付。`,
       "无需等待澄清；信息不足时请做合理假设并在交付摘要中说明。",
       "不要输出思考过程、工具调用过程、英文工作日志或本提示词；只输出最终中文结果。",
     ].filter(Boolean).join("\n");
