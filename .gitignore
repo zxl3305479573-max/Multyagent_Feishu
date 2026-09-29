@@ -4,3 +4,7 @@ logs/
 npm-debug.log*
 workspace/
 runtime/
+# Local scratch files and reserved Windows artifacts.
+cookie.jar
+nul
+plain2.txt
