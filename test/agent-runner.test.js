@@ -68,10 +68,28 @@ test("worktree isolation stays opt-in and only switches cwd when explicitly enab
     return target;
   };
 
-  const isolated = createAgentRunner({ runner, root: "D:/repo", useWorktree: true, createWorktree: worktreeFactory });
-  await isolated({ key: "frontend_developer" }, "改页面", { taskId: "T-iso" });
+  const collected = [];
+  const collectWorktreeChanges = async (input) => {
+    collected.push(input);
+    return { files: [{ status: "M", path: "src/a.js" }], patchPath: "runtime/workspaces/frontend_developer/T-iso/worktree-changes.patch" };
+  };
+  const isolated = createAgentRunner({
+    runner,
+    root: "D:/repo",
+    useWorktree: true,
+    createWorktree: worktreeFactory,
+    collectWorktreeChanges,
+  });
+  const result = await isolated({ key: "frontend_developer" }, "改页面", { taskId: "T-iso" });
   assert.deepEqual(worktrees, ["D:/repo/runtime/workspaces/frontend_developer/T-iso"]);
   assert.equal(calls[0].cwd, "D:/repo/runtime/workspaces/frontend_developer/T-iso");
+  assert.equal(collected.length, 1);
+  assert.equal(collected[0].agentKey, "frontend_developer");
+  assert.match(collected[0].artifactsDir, /workspace[\\/]default[\\/]artifacts[\\/]T-iso$/);
+  assert.deepEqual(result.worktree, {
+    files: [{ status: "M", path: "src/a.js" }],
+    patchPath: "runtime/workspaces/frontend_developer/T-iso/worktree-changes.patch",
+  });
 
   calls.length = 0;
   const shared = createAgentRunner({ runner, root: "D:/repo", useWorktree: false, createWorktree: worktreeFactory });

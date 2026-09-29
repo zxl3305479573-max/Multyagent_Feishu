@@ -178,6 +178,15 @@ RPC 子进程与 embedded 模式一样以仓库根目录为 cwd，产物、任�
 PI_AGENT_WORKTREE=1
 ```
 
+工作树改动会收集为 `worktree-changes.patch` 供审查，不会自动合并；确认后再显式执行闸门命令，冲突时保持主工作区不变：
+
+```powershell
+npm run worktree -- list
+npm run worktree -- collect --agent frontend_developer --task T-001 --artifacts workspace/student/artifacts/T-001
+npm run worktree -- apply --agent frontend_developer --task T-001 --confirm
+npm run worktree -- cleanup --agent frontend_developer --task T-001
+```
+
 RPC 事件只写入任务、角色、事件类型、工具名和状态等摘要字段，不把模型文本或工具输出复制到事件日志。
 
 ## 设计文档

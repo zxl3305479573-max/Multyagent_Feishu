@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { TaskStore } from "../src/domain/task-store.js";
-import { executeAgentCli, forwardedBitableArgs, renderDiagram, runBitableAction, runNodeScript, runTestCommand, readTaskStatus, validateDelivery } from "../src/agent-cli.js";
+import { executeAgentCli, forwardedBitableArgs, parseArgs, renderDiagram, runBitableAction, runNodeScript, runTestCommand, readTaskStatus, validateDelivery } from "../src/agent-cli.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -88,8 +88,7 @@ test("renderDiagram writes only inside the requested project artifact directory"
   }
 });
 
-async function runAgentCliScript(args) {
-  const script = fileURLToPath(new URL("../scripts/agent-cli.mjs", import.meta.url));
+async function runCliScript(script, args) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [script, ...args], { cwd: repoRoot });
     let stdout = "";
@@ -98,6 +97,10 @@ async function runAgentCliScript(args) {
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
+}
+
+function runAgentCliScript(args) {
+  return runCliScript(fileURLToPath(new URL("../scripts/agent-cli.mjs", import.meta.url)), args);
 }
 
 test("agent CLI test command rejects executable overrides and keeps the controlled command", async () => {
@@ -110,6 +113,23 @@ test("agent CLI test command rejects executable overrides and keeps the controll
 
 test("forwardedBitableArgs keeps only supported maintenance flags", () => {
   assert.deepEqual(forwardedBitableArgs({ write: true, table_id: "tbl-1", action: "check" }), ["--write", "--table-id", "tbl-1"]);
+});
+
+test("parseArgs 把末尾的 --flag 识别为 true", () => {
+  assert.deepEqual(parseArgs(["apply", "--confirm", "--agent", "tester"]), {
+    command: "apply",
+    options: { confirm: true, agent: "tester" },
+  });
+});
+
+test("worktree CLI list returns JSON from the real repository", async () => {
+  const script = fileURLToPath(new URL("../scripts/worktree.mjs", import.meta.url));
+  const result = await runCliScript(script, ["list"]);
+  assert.equal(result.code, 0);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.status, "passed");
+  assert.ok(Array.isArray(payload.worktrees));
+  assert.ok(payload.worktrees.some((item) => item.path));
 });
 
 test("runBitableAction forwards only allowlisted flags to the selected maintenance script", async () => {

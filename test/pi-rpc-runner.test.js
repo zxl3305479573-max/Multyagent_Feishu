@@ -75,3 +75,37 @@ test("Pi RPC consumes a final JSONL event without a trailing newline", async () 
   const result = await runner.run("hello", { timeoutMs: 100 });
   assert.equal(result.events.at(-1).type, "agent_settled");
 });
+
+test("Pi RPC closes stdin and returns promptly after agent_settled", async () => {
+  let ended = false;
+  let killed = false;
+  const runner = new PiRpcRunner({
+    spawn: () => {
+      const listeners = new Map();
+      const child = {
+        stdin: {
+          write() {},
+          end() {
+            ended = true;
+            queueMicrotask(() => listeners.get("exit")?.(0, null));
+          },
+        },
+        stdout: {
+          on(type, fn) {
+            if (type === "data") fn(Buffer.from(`${JSON.stringify({ type: "agent_settled" })}\n`));
+          },
+        },
+        stderr: { on() {} },
+        once(type, fn) { listeners.set(type, fn); return child; },
+        kill() { killed = true; listeners.get("exit")?.(null, "SIGTERM"); },
+      };
+      return child;
+    },
+  });
+
+  const started = Date.now();
+  await runner.run("hello", { timeoutMs: 30_000 });
+  assert.equal(ended, true);
+  assert.equal(killed, false);
+  assert.ok(Date.now() - started < 5_000);
+});

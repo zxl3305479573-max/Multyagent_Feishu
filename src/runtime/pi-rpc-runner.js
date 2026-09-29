@@ -22,6 +22,7 @@ export class PiRpcRunner {
     });
     const events = [];
     let settled = false;
+    let settleTimer;
     let stdoutError;
     let stderr = "";
     let output = "";
@@ -34,7 +35,14 @@ export class PiRpcRunner {
       if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
         output += event.assistantMessageEvent.delta || "";
       }
-      if (event.type === "agent_settled") settled = true;
+      if (event.type === "agent_settled" && !settled) {
+        settled = true;
+        // pi 在 RPC 模式下会继续等待后续输入。收到完成信号后主动关闭 stdin，
+        // 并在短暂宽限期后终止仍未退出的子进程，避免每次任务都空等到超时。
+        try { child.stdin.end(); } catch {}
+        settleTimer = setTimeout(() => { try { child.kill("SIGTERM"); } catch {} }, 1500);
+        settleTimer.unref?.();
+      }
     };
 
     child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
@@ -77,6 +85,7 @@ export class PiRpcRunner {
       throw new Error(`${asError(error).message}${stderr ? `: ${stderr.trim()}` : ""}`);
     } finally {
       clearTimeout(timer);
+      clearTimeout(settleTimer);
       if (!settled) {
         try { child.kill("SIGKILL"); } catch {}
       }

@@ -8,6 +8,7 @@
     "test": "node --test \"test/*.test.js\"",
     "smoke": "node scripts/smoke.mjs",
     "agent:cli": "node scripts/agent-cli.mjs",
+    "worktree": "node scripts/worktree.mjs",
     "bitable:check": "node scripts/check-bitable.mjs",
     "bitable:setup": "node scripts/setup-bitable-board.mjs",
     "bitable:smoke": "node scripts/smoke-bitable.mjs"

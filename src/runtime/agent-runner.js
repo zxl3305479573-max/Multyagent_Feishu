@@ -3,8 +3,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSystemPrompt, diagramSkillPaths } from "../pi-agent.js";
 import { defaultPiRpcRunner } from "./pi-rpc-runner.js";
-import { RPC_CONTEXT_ENV, readRpcDelivery, rpcDeliveryFile, rpcToolPlan } from "./pi-extension.mjs";
-import { createWorktree } from "./worktree.js";
+import { RPC_CONTEXT_ENV, readRpcDelivery, rpcArtifactsDir, rpcDeliveryFile, rpcToolPlan } from "./pi-extension.mjs";
+import { collectWorktreeChanges, createWorktree } from "./worktree.js";
 
 // RPC 子进程与内置模式保持同样的 cwd（仓库根目录），否则产物目录、
 // 任务状态文件和受控 CLI 的相对路径会落到项目工作区里。
@@ -28,6 +28,7 @@ export function createAgentRunner({
   root = process.cwd(),
   useWorktree = process.env.PI_AGENT_WORKTREE === "1",
   createWorktree: worktreeFactory = createWorktree,
+  collectWorktreeChanges: collectChanges = collectWorktreeChanges,
 } = {}) {
   const extensionPath = fileURLToPath(new URL("./pi-extension.mjs", import.meta.url));
   return async function runAgentRpc(agent, prompt, {
@@ -66,6 +67,20 @@ export function createAgentRunner({
       args: rpcArgsFor({ agent, context: rpcContext, systemPrompt, extensionPath }),
     });
     const delivery = await readRpcDelivery({ root, taskId, agentKey: agent.key });
-    return { ...result, delivery, projectName: delivery?.projectName || rpcContext.projectName || null };
+    let worktree = null;
+    if (cwd !== root && taskId && agent.key) {
+      try {
+        const artifactsDir = rpcArtifactsDir({
+          root,
+          taskId,
+          projectName: rpcContext.projectName,
+          artifactsDir: rpcContext.artifactsDir,
+        });
+        worktree = await collectChanges({ root, agentKey: agent.key, taskId, artifactsDir });
+      } catch (error) {
+        worktree = { error: error.message };
+      }
+    }
+    return { ...result, delivery, worktree, projectName: delivery?.projectName || rpcContext.projectName || null };
   };
 }

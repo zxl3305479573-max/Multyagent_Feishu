@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createPolicyFactory } from "../src/pi-agent.js";
 import {
   createRpcExtension,
   readRpcDelivery,
@@ -115,4 +116,47 @@ test("statusQuery RPC sessions do not register delivery or controlled CLI tools"
     tools,
   });
   assert.deepEqual(registered, ["get_task_status"]);
+});
+
+test("RPC policy gate blocks cross-project writes, sensitive files and delete commands", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-extension-gate-"));
+  const handlers = [];
+  let switchProject;
+  const api = {
+    registerTool: () => {},
+    on: (name, handler) => handlers.push({ name, handler }),
+  };
+  const tools = {
+    createPolicyFactory,
+    createDeliverTool: () => ({ name: "deliver_artifact" }),
+    createAgentCliTool: () => ({ name: "agent_cli" }),
+    createTaskStatusTool: () => ({ name: "get_task_status" }),
+    createProjectTool: (options) => { switchProject = options.onProject; return { name: "create_project" }; },
+  };
+  try {
+    createRpcExtension(api, {
+      root,
+      context: { agentKey: "project_manager", taskId: "T-gate", chatId: "chat-gate", projectName: "student" },
+      tools,
+    });
+    const gate = handlers.find((item) => item.name === "tool_call").handler;
+    const ctx = { cwd: root };
+
+    assert.equal(await gate({ toolName: "write", input: { path: "workspace/student/artifacts/plan.md" } }, ctx), undefined);
+    const crossProject = await gate({ toolName: "write", input: { path: "workspace/other/artifacts/plan.md" } }, ctx);
+    assert.equal(crossProject.block, true);
+
+    const sensitive = await gate({ toolName: "read", input: { path: ".env" } }, ctx);
+    assert.equal(sensitive.block, true);
+
+    const deleteCommand = await gate({ toolName: "bash", input: { command: "Remove-Item -Recurse -Force workspace/student" } }, ctx);
+    assert.equal(deleteCommand.block, true);
+
+    switchProject("phone-login");
+    assert.equal(await gate({ toolName: "write", input: { path: "workspace/phone-login/artifacts/plan.md" } }, ctx), undefined);
+    const staleProject = await gate({ toolName: "write", input: { path: "workspace/student/artifacts/plan.md" } }, ctx);
+    assert.equal(staleProject.block, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

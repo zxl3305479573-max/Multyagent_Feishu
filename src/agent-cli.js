@@ -164,7 +164,8 @@ export function parseArgs(argv) {
     const key = rest[i];
     if (!key.startsWith("--")) continue;
     const name = key.slice(2).replaceAll("-", "_");
-    options[name] = rest[i + 1]?.startsWith("--") ? true : rest[++i];
+    const next = rest[i + 1];
+    options[name] = next === undefined || next.startsWith("--") ? true : rest[++i];
   }
   return { command, options };
 }
