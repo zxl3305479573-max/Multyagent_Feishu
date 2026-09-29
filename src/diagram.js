@@ -16,6 +16,9 @@ const FONT_SIZE = 15;
 const LINE_HEIGHT = 20;
 const MAX_LINES = 2;
 const MIN_CANVAS_WIDTH = 720;
+// 同层间/反向边共用的偏移步长；gutter 是画布右侧给反向预留的布线区。
+const LANE_GAP = 12;
+const GUTTER_LABEL_WIDTH = 84;
 
 function escapeXml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -149,16 +152,48 @@ export function renderDiagramSvg(spec) {
   }));
 
   const rowWidths = rows.map((row) => row.nodes.reduce((sum, node) => sum + boxWidths.get(node.id), 0) + GAP_X * (row.nodes.length - 1));
-  const canvasWidth = Math.max(MIN_CANVAS_WIDTH, Math.max(...rowWidths) + PADDING * 2);
-  const canvasHeight = PADDING * 2 + (diagram.title ? TITLE_HEIGHT : 0) + rows.length * BOX_HEIGHT + (rows.length - 1) * GAP_Y;
+  const baseCanvasWidth = Math.max(MIN_CANVAS_WIDTH, Math.max(...rowWidths) + PADDING * 2);
+  const layerIndexOf = new Map();
+  rows.forEach((row, rowIndex) => row.nodes.forEach((node) => layerIndexOf.set(node.id, rowIndex)));
+
+  // 边的三类走法：相邻正向边走层间通道；同层但中间隔着方框的边走行外通道；
+  // 反向边和跨多层的边统一走右侧 gutter，避免竖向路径穿过方框。
+  const forwardByPair = new Map();
+  const gutterEdges = [];
+  const sameLayerStraight = [];
+  const sameLayerRouted = [];
+  for (const edge of diagram.edges) {
+    const fromRow = layerIndexOf.get(edge.from);
+    const toRow = layerIndexOf.get(edge.to);
+    if (toRow > fromRow && toRow === fromRow + 1) {
+      const key = `${fromRow}->${toRow}`;
+      const group = forwardByPair.get(key) || [];
+      group.push(edge);
+      forwardByPair.set(key, group);
+    } else if (toRow === fromRow) {
+      const row = rows[fromRow];
+      const fromIndex = row.nodes.findIndex((node) => node.id === edge.from);
+      const toIndex = row.nodes.findIndex((node) => node.id === edge.to);
+      if (Math.abs(toIndex - fromIndex) > 1) sameLayerRouted.push({ edge, rowIndex: fromRow, lastRow: fromRow === rows.length - 1 });
+      else sameLayerStraight.push(edge);
+    } else {
+      gutterEdges.push(edge);
+    }
+  }
+  gutterEdges.forEach((edge, index) => { edge.lane = index; });
+  const gutterBase = baseCanvasWidth - PADDING + 22;
+  const rightGutterWidth = gutterEdges.length ? 22 + (gutterEdges.length - 1) * LANE_GAP + GUTTER_LABEL_WIDTH : 0;
+  const canvasWidth = baseCanvasWidth + rightGutterWidth;
+  const belowLaneCount = sameLayerRouted.filter((item) => item.lastRow).length;
+  const canvasHeight = PADDING * 2 + (diagram.title ? TITLE_HEIGHT : 0) + rows.length * BOX_HEIGHT + (rows.length - 1) * GAP_Y + belowLaneCount * LANE_GAP;
 
   const boxes = new Map();
   const layerLabels = [];
   rows.forEach((row, rowIndex) => {
-    const startX = (canvasWidth - rowWidths[rowIndex]) / 2;
+    const startX = (baseCanvasWidth - rowWidths[rowIndex]) / 2;
     let x = startX;
     const y = PADDING + (diagram.title ? TITLE_HEIGHT : 0) + rowIndex * (BOX_HEIGHT + GAP_Y);
-    if (row.name) layerLabels.push({ text: row.name, x: startX, y: y - 10 });
+    if (row.name) layerLabels.push({ text: row.name, x: PADDING, y: y - 10 });
     for (const node of row.nodes) {
       const width = boxWidths.get(node.id);
       boxes.set(node.id, { x, y, width, height: BOX_HEIGHT, layer: rowIndex });
@@ -174,66 +209,91 @@ export function renderDiagramSvg(spec) {
     parts.push(`<text x="${canvasWidth / 2}" y="${PADDING + 26}" font-size="20" font-weight="600" text-anchor="middle" fill="#1f2329">${escapeXml(diagram.title)}</text>`);
   }
 
-  const edgeGroups = new Map();
-  for (const edge of diagram.edges) {
-    const from = boxes.get(edge.from);
-    const to = boxes.get(edge.to);
-    const key = `${from.layer}->${to.layer}:${edge.from}->${edge.to}`;
-    const group = edgeGroups.get(key) || [];
-    group.push(edge);
-    edgeGroups.set(key, group);
+  const labelBoxes = [];
+  const overlaps = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+  const adjustLabelY = (x, y, width) => {
+    let candidateY = Math.max(20, y);
+    for (let guard = 0; guard < 12; guard += 1) {
+      const box = { x: x - width / 2, y: candidateY - 16, width, height: 12 };
+      if (!labelBoxes.some((placed) => overlaps(placed, box))) {
+        labelBoxes.push(box);
+        return candidateY;
+      }
+      candidateY -= 15;
+    }
+    return candidateY;
+  };
+  const drawEdge = (edge, path, labelX, labelY) => {
+    parts.push(`<path data-edge="${edge.from}->${edge.to}" d="${path}" fill="none" stroke="#4f5d75" stroke-width="1.6" marker-end="url(#arrow)"/>`);
+    if (!edge.label) return;
+    const width = Math.ceil(textWidth(edge.label) + 10);
+    const placedY = adjustLabelY(labelX, labelY, width);
+    parts.push(`<rect x="${labelX - width / 2}" y="${placedY - 16}" width="${width}" height="12" rx="2" fill="#f5f5f5"/>`);
+    parts.push(`<text x="${labelX}" y="${placedY - 6}" font-size="11" text-anchor="middle" fill="#7a8399">${escapeXml(edge.label)}</text>`);
+  };
+
+  for (const group of forwardByPair.values()) {
+    group.forEach((edge, index) => {
+      const from = boxes.get(edge.from);
+      const to = boxes.get(edge.to);
+      const fromCx = from.x + from.width / 2;
+      const toCx = to.x + to.width / 2;
+      const gapTop = from.y + from.height;
+      const gapBottom = to.y;
+      const offset = (index - (group.length - 1) / 2) * LANE_GAP;
+      const midY = Math.min(gapBottom - 8, Math.max(gapTop + 8, (gapTop + gapBottom) / 2 + offset));
+      drawEdge(
+        edge,
+        roundedPath([[fromCx, gapTop], [fromCx, midY], [toCx, midY], [toCx, gapBottom]]),
+        (fromCx + toCx) / 2,
+        midY - 6,
+      );
+    });
   }
 
-  for (const edge of diagram.edges) {
+  for (const edge of sameLayerStraight) {
+    const from = boxes.get(edge.from);
+    const to = boxes.get(edge.to);
+    const rightward = to.x >= from.x;
+    const startX = rightward ? from.x + from.width : from.x;
+    const endX = rightward ? to.x : to.x + to.width;
+    const y = from.y + from.height / 2;
+    drawEdge(edge, roundedPath([[startX, y], [endX, y]]), (startX + endX) / 2, y - 8);
+  }
+
+  const aboveLane = new Map();
+  let belowLane = 0;
+  for (const item of sameLayerRouted) {
+    const { edge } = item;
     const from = boxes.get(edge.from);
     const to = boxes.get(edge.to);
     const fromCx = from.x + from.width / 2;
     const toCx = to.x + to.width / 2;
-    let path;
-    let labelX;
-    let labelY;
-    const group = edgeGroups.get(`${from.layer}->${to.layer}:${edge.from}->${edge.to}`) || [edge];
-    const groupIndex = group.indexOf(edge);
-    if (to.layer > from.layer) {
-      const startY = from.y + from.height;
-      const endY = to.y;
-      const midY = (startY + endY) / 2 + (groupIndex - (group.length - 1) / 2) * 12;
-      path = roundedPath([[fromCx, startY], [fromCx, midY], [toCx, midY], [toCx, endY]]);
-      labelX = (fromCx + toCx) / 2;
-      labelY = midY - 6;
-    } else if (to.layer === from.layer) {
-      const rightward = toCx >= fromCx;
-      const startX = rightward ? from.x + from.width : from.x;
-      const endX = rightward ? to.x : to.x + to.width;
-      const y = from.y + from.height / 2;
-      path = roundedPath([[startX, y], [endX, y]]);
-      labelX = (startX + endX) / 2;
-      labelY = y - 8;
+    if (item.lastRow) {
+      const laneY = from.y + from.height + 18 + belowLane * LANE_GAP;
+      belowLane += 1;
+      drawEdge(edge, roundedPath([[fromCx, from.y + from.height], [fromCx, laneY], [toCx, laneY], [toCx, to.y + to.height]]), (fromCx + toCx) / 2, laneY + 6);
     } else {
-      const startX = from.x + from.width / 2;
-      const startY = from.y + from.height;
-      const endX = to.x + to.width / 2;
-      const endY = to.y;
-      const direction = Math.sign(endY - startY) || 1;
-      const gap = Math.abs(endY - startY);
-      if (gap > 44) {
-        const midY = (startY + endY) / 2 + groupIndex * 12;
-        path = roundedPath([[startX, startY], [startX, midY], [endX, midY], [endX, endY]]);
-        labelX = (startX + endX) / 2;
-        labelY = midY - 6 * direction;
-      } else {
-        const sideX = from.x + from.width + 24 + groupIndex * 14;
-        path = roundedPath([[from.x + from.width, from.y + from.height / 2], [sideX, from.y + from.height / 2], [sideX, endY - 20], [endX, endY - 20], [endX, endY]]);
-        labelX = (from.x + from.width + sideX) / 2;
-        labelY = from.y + from.height / 2 - 8;
-      }
+      const lane = aboveLane.get(item.rowIndex) || 0;
+      aboveLane.set(item.rowIndex, lane + 1);
+      const laneY = from.y - 16 - lane * LANE_GAP;
+      drawEdge(edge, roundedPath([[fromCx, from.y], [fromCx, laneY], [toCx, laneY], [toCx, to.y]]), (fromCx + toCx) / 2, laneY - 6);
     }
-    parts.push(`<path d="${path}" fill="none" stroke="#4f5d75" stroke-width="1.6" marker-end="url(#arrow)"/>`);
-    if (edge.label) {
-      const width = Math.ceil(textWidth(edge.label) + 10);
-      parts.push(`<rect x="${labelX - width / 2}" y="${labelY - 16}" width="${width}" height="12" rx="2" fill="#f5f5f5"/>`);
-      parts.push(`<text x="${labelX}" y="${labelY - 6}" font-size="11" text-anchor="middle" fill="#7a8399">${escapeXml(edge.label)}</text>`);
-    }
+  }
+
+  for (const edge of gutterEdges) {
+    const from = boxes.get(edge.from);
+    const to = boxes.get(edge.to);
+    const gutterX = gutterBase + edge.lane * LANE_GAP;
+    const startY = from.y + from.height / 2;
+    const endY = to.y + to.height / 2;
+    const labelWidth = edge.label ? Math.ceil(textWidth(edge.label) + 10) : 0;
+    drawEdge(
+      edge,
+      roundedPath([[from.x + from.width, startY], [gutterX, startY], [gutterX, endY], [to.x + to.width, endY]]),
+      gutterX + (labelWidth ? labelWidth / 2 + 4 : 0),
+      (startY + endY) / 2 - 6,
+    );
   }
 
   for (const label of layerLabels) {

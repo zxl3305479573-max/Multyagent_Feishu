@@ -71,3 +71,81 @@ test("renderDiagramPng 对空描述返回 null 而不是抛异常", () => {
   assert.equal(renderDiagramPng({ nodes: [] }), null);
   assert.equal(renderDiagramPng(null), null);
 });
+
+const ROUTING_SPEC = {
+  title: "分层架构",
+  nodes: [
+    { id: "feishu", label: "飞书项目群 · 六机器人", layer: "接入层" },
+    { id: "gw", label: "网关 · 去重/身份回帖", layer: "接入层" },
+    { id: "orch", label: "任务编排层 · 星型中介", layer: "编排层" },
+    { id: "roles", label: "六角色平级会话", layer: "运行时" },
+    { id: "policy", label: "策略层 · tool_call 拦截", layer: "策略层" },
+    { id: "domain", label: "领域层 · 交付包/DAG/状态机", layer: "策略层" },
+    { id: "store", label: "TaskStore · 唯一事实来源", layer: "数据层" },
+    { id: "art", label: "产物仓库 workspace", layer: "数据层" },
+    { id: "obs", label: "观测 · 看板/Trace 投影", layer: "数据层" },
+  ],
+  edges: [
+    { from: "feishu", to: "gw" },
+    { from: "gw", to: "orch", label: "task_id" },
+    { from: "orch", to: "roles", label: "dispatch" },
+    { from: "roles", to: "orch", label: "交付包" },
+    { from: "roles", to: "policy", label: "tool_call" },
+    { from: "policy", to: "domain" },
+    { from: "domain", to: "art", label: "write" },
+    { from: "domain", to: "store", label: "状态" },
+    { from: "store", to: "obs", label: "投影" },
+    { from: "art", to: "orch", label: "产物引用" },
+  ],
+};
+
+function pathPoints(d) {
+  const numbers = [...d.matchAll(/-?\d+(?:\.\d+)?/g)].map(Number);
+  const points = [];
+  for (let index = 0; index + 1 < numbers.length; index += 2) {
+    points.push({ x: numbers[index], y: numbers[index + 1] });
+  }
+  return points;
+}
+
+function insideBox(box, point) {
+  return point.x > box.x + 1 && point.x < box.x + box.width - 1 && point.y > box.y + 1 && point.y < box.y + box.height - 1;
+}
+
+test("同层跨节点边、反向边和标签不会穿框或重叠", () => {
+  const svg = renderDiagramSvg(ROUTING_SPEC);
+  const nodeOrder = ROUTING_SPEC.nodes.map((node) => node.id);
+  const boxes = [...svg.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="54"/g)]
+    .map((match, index) => ({ id: nodeOrder[index], x: Number(match[1]), y: Number(match[2]), width: Number(match[3]), height: 54 }));
+  assert.equal(boxes.length, 9);
+
+  const paths = [...svg.matchAll(/<path data-edge="([^"]+)" d="([^"]+)"/g)]
+    .map((match) => ({ edge: match[1], points: pathPoints(match[2]) }));
+  assert.equal(paths.length, 10);
+
+  for (const { edge, points } of paths) {
+    const [fromId, toId] = edge.split("->");
+    for (const point of points) {
+      for (const box of boxes) {
+        if (box.id === fromId || box.id === toId) continue;
+        assert.equal(insideBox(box, point), false, `${edge} 穿过方框 ${box.id}（${JSON.stringify(point)}）`);
+      }
+    }
+  }
+
+  const maxRight = Math.max(...boxes.map((box) => box.x + box.width));
+  const backward = paths.find((item) => item.edge === "art->orch");
+  assert.ok(backward.points.some((point) => point.x > maxRight), "反向边应走右侧通道");
+
+  const labels = [...svg.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="12" rx="2"/g)]
+    .map((match) => ({ x: Number(match[1]), y: Number(match[2]), width: Number(match[3]), height: 12 }));
+  assert.equal(labels.length, 8);
+  for (let i = 0; i < labels.length; i += 1) {
+    for (let j = i + 1; j < labels.length; j += 1) {
+      const a = labels[i];
+      const b = labels[j];
+      const overlap = a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+      assert.equal(overlap, false, `标签 ${i} 与 ${j} 重叠`);
+    }
+  }
+});
