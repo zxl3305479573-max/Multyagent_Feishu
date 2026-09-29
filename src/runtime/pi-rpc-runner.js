@@ -12,8 +12,8 @@ export class PiRpcRunner {
     this.log = log;
   }
 
-  async run(prompt, { cwd, sessionDir, timeoutMs = 900_000, env = {}, onEvent } = {}) {
-    const args = [...this.args];
+  async run(prompt, { cwd, sessionDir, timeoutMs = 900_000, env = {}, onEvent, args: extraArgs = [] } = {}) {
+    const args = [...this.args, ...extraArgs];
     if (sessionDir) args.push("--session-dir", sessionDir);
     const child = this.spawn(this.command, args, {
       cwd,

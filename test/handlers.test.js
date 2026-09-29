@@ -20,11 +20,24 @@ test("RPC 运行模式把任务上下文和安全事件回传到网关", async (
 
   assert.equal(result.text, "RPC 完成");
   assert.equal(result.projectName, "student");
-  assert.equal(calls[0].prompt, "执行回归测试");
+  assert.match(calls[0].prompt, /执行回归测试/);
+  assert.match(calls[0].prompt, /T-rpc/);
   assert.equal(calls[0].options.projectName, "student");
   assert.equal(calls[0].options.taskId, "T-rpc");
   assert.equal(calls[0].options.timeoutMs, 12_000);
+  assert.match(calls[0].options.systemPrompt, /tester/);
   assert.deepEqual(events, [{ task_id: "T-rpc", agent: "tester", type: "rpc_event", rpc_type: "tool_execution_start", tool: "bash", status: "running" }]);
+});
+
+test("RPC 运行模式把子进程落盘的交付包返回给网关", async () => {
+  const delivery = { agentKey: "tester", summary: "复验通过", projectName: "student", artifactPaths: [], final: false };
+  const runAgent = createRunAgent({
+    mode: "rpc",
+    rpcRun: async () => ({ text: "完成", delivery, exit: { code: 0, signal: null } }),
+  });
+  const result = await runAgent({ key: "tester", displayName: "测试" }, "执行回归测试", { taskId: "T-rpc", projectName: "student" });
+  assert.deepEqual(result.delivery, delivery);
+  assert.equal(result.projectName, "student");
 });
 
 test("默认运行模式使用内置 Agent，不创建 RPC 进程", async () => {

@@ -205,3 +205,26 @@ test("agent_cli 对非法图表 JSON 返回可读的结构化失败", async () =
   assert.match(result.details.error, /diagramJson.*valid JSON/);
   assert.match(result.content[0].text, /valid JSON/);
 });
+
+test("agent_cli 只向机器人开放只读 bitable-check，不开放建表与写表动作", async () => {
+  const calls = [];
+  const tool = createAgentCliTool({
+    taskId: "T-cli",
+    getProjectName: () => "student",
+    agentKey: "auditor",
+    execute: async (action, input) => {
+      calls.push({ action, input });
+      return { status: "passed", action: "check" };
+    },
+  });
+
+  const result = await tool.execute("call-bitable", { action: "bitable-check" });
+  assert.deepEqual(result.details, { status: "passed", action: "check" });
+  assert.equal(calls[0].action, "bitable-check");
+  assert.equal(calls[0].input.projectName, "student");
+
+  const denied = await tool.execute("call-bitable-setup", { action: "bitable" });
+  assert.equal(denied.details.status, "failed");
+  assert.match(denied.details.error, /unsupported agent CLI action/);
+  assert.equal(calls.length, 1);
+});

@@ -20,7 +20,7 @@
 ## 已知限制
 
 - 当前任务存储为本地 JSON，尚未升级为 SQLite 或事件溯源存储。
-- Pi RPC Runner 已实现并可通过 `PI_AGENT_RUNTIME=rpc` 接入网关主链路；统一工具执行前策略闸门和交接包 Schema 仍待后续阶段补齐。
+- Pi RPC Runner 已实现并可通过 `PI_AGENT_RUNTIME=rpc` 接入网关主链路；RPC 模式与内置模式共用同一套工具白名单、动态写入策略闸门、交付协议和 `agent_cli`，统一执行前策略闸门已落地；交接包 Schema 的进一步强约束仍待后续阶段补齐。
 - `npm start` 的真实飞书事件接收仍需要在已配置凭据和项目群中进行现场验证。
 
 ## 结论

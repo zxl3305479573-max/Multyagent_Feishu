@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { TaskStore } from "../src/domain/task-store.js";
-import { executeAgentCli, forwardedBitableArgs, renderDiagram, runTestCommand, readTaskStatus, validateDelivery } from "../src/agent-cli.js";
+import { executeAgentCli, forwardedBitableArgs, renderDiagram, runBitableAction, runNodeScript, runTestCommand, readTaskStatus, validateDelivery } from "../src/agent-cli.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -88,23 +88,78 @@ test("renderDiagram writes only inside the requested project artifact directory"
   }
 });
 
-test("agent CLI test command returns JSON and a nonzero exit code on failure", async () => {
+async function runAgentCliScript(args) {
   const script = fileURLToPath(new URL("../scripts/agent-cli.mjs", import.meta.url));
-  const result = await new Promise((resolve) => {
-    const child = spawn(process.execPath, [script, "test", "--command", process.execPath, "--args", "-e", "process.exit(3)"], { cwd: repoRoot });
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [script, ...args], { cwd: repoRoot });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
+}
+
+test("agent CLI test command rejects executable overrides and keeps the controlled command", async () => {
+  const result = await runAgentCliScript(["test", "--command", process.execPath, "--args", "-e", "process.exit(3)"]);
   assert.equal(result.code, 1);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.status, "failed");
+  assert.match(payload.error, /command|args|unsupported|not allowed/i);
 });
 
 test("forwardedBitableArgs keeps only supported maintenance flags", () => {
   assert.deepEqual(forwardedBitableArgs({ write: true, table_id: "tbl-1", action: "check" }), ["--write", "--table-id", "tbl-1"]);
+});
+
+test("runBitableAction forwards only allowlisted flags to the selected maintenance script", async () => {
+  const calls = [];
+  const result = await runBitableAction({
+    action: "check",
+    root: repoRoot,
+    options: { write: true, table_id: "tbl-1", action: "check" },
+    execute: async (input) => { calls.push(input); return { status: "passed" }; },
+  });
+  assert.equal(result.status, "passed");
+  assert.equal(result.action, "check");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, process.execPath);
+  assert.deepEqual(calls[0].args, [join("scripts", "check-bitable.mjs"), "--write", "--table-id", "tbl-1"]);
+  assert.equal(calls[0].cwd, repoRoot);
+});
+
+test("runBitableAction rejects maintenance actions outside the allowlist", async () => {
+  await assert.rejects(() => runBitableAction({ action: "drop", execute: async () => ({ status: "passed" }) }), /unsupported bitable action/);
+});
+
+test("runNodeScript preserves structured JSON diagnostics and reports failures", async () => {
+  const ok = await runNodeScript({
+    command: process.execPath,
+    args: ["-e", "console.log(JSON.stringify({ code: 0, ok: true }))"],
+    cwd: repoRoot,
+  });
+  assert.equal(ok.status, "passed");
+  assert.deepEqual(ok.result, { code: 0, ok: true });
+
+  const bad = await runNodeScript({
+    command: process.execPath,
+    args: ["-e", "console.error('boom'); process.exit(2)"],
+    cwd: repoRoot,
+  });
+  assert.equal(bad.status, "failed");
+  assert.equal(bad.exit_code, 2);
+  assert.match(bad.error, /boom/);
+});
+
+test("agent side exposes only the read-only bitable-check action", async () => {
+  const calls = [];
+  const result = await executeAgentCli("bitable-check", {
+    execute: async (input) => { calls.push(input); return { status: "passed" }; },
+  });
+  assert.equal(result.status, "passed");
+  assert.equal(result.action, "check");
+  assert.deepEqual(calls[0].args, [join("scripts", "check-bitable.mjs")]);
+  await assert.rejects(() => executeAgentCli("bitable-setup", {}), /unsupported agent CLI action/);
 });
 
 test("executeAgentCli exposes only the structured actions used by agents", async () => {

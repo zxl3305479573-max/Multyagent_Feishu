@@ -14,7 +14,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { checkWriteAllowed, isDeleteCommand, resolveWritePaths } from "./policy.js";
 import {
   createAgentSession,
@@ -308,7 +308,7 @@ export function mapPiToolEvent(event = {}, context = {}, previous = {}) {
   return [];
 }
 
-function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, onDeliver }) {
+export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, onDeliver }) {
   return defineTool({
     name: "deliver_artifact",
     label: "交付产物",
@@ -365,7 +365,7 @@ function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentNam
         agentName,
       };
       await saveDelivery(artifactsDir, agentKey, delivery);
-      onDeliver?.(delivery);
+      await onDeliver?.(delivery);
       return {
         content: [{ type: "text", text: `已交付：${sanitizeAgentReply(params.summary)}` }],
         details: {},
@@ -388,7 +388,7 @@ function normalizeAssignments(value) {
     .filter((item) => !seen.has(item.agentKey) && seen.add(item.agentKey));
 }
 
-function createProjectTool({ onProject }) {
+export function createProjectTool({ onProject, root = process.cwd() }) {
   return defineTool({
     name: "create_project",
     label: "创建项目",
@@ -401,14 +401,14 @@ function createProjectTool({ onProject }) {
       if (!/^[a-z][a-z0-9-]*$/.test(name)) {
         return { content: [{ type: "text", text: `项目名 "${name}" 无效。需小写字母开头，仅含小写字母、数字、连字符，例如 phone-login。` }], details: {} };
       }
-      await ensureArtifactsDir(join(process.cwd(), "workspace", name));
+      await ensureArtifactsDir(join(root, "workspace", name));
       onProject?.(name);
       return { content: [{ type: "text", text: `项目 ${name} 已就绪（workspace/${name}/）。` }], details: {} };
     },
   });
 }
 
-function createTaskStatusTool({ taskId, chatId }) {
+export function createTaskStatusTool({ taskId, chatId }) {
   return defineTool({
     name: "get_task_status",
     label: "查询任务状态",
@@ -425,13 +425,18 @@ function createTaskStatusTool({ taskId, chatId }) {
   });
 }
 
-export function createAgentCliTool({ taskId, projectName, getProjectName, chatId, agentKey, execute = executeAgentCli }) {
+function resolveTaskFile(root) {
+  const configured = process.env.PI_DOMAIN_TASKS_FILE || "runtime/domain-tasks.json";
+  return isAbsolute(configured) ? configured : join(root, configured);
+}
+
+export function createAgentCliTool({ taskId, projectName, getProjectName, chatId, agentKey, root = process.cwd(), execute = executeAgentCli }) {
   return defineTool({
     name: "agent_cli",
     label: "受控 CLI",
     description: "执行受控确定性操作并返回精简 JSON。action 只能是 test、task-status、validate-delivery 或 render-diagram；不支持任意 shell 命令。",
     parameters: Type.Object({
-      action: Type.String({ description: "test | task-status | validate-delivery | render-diagram" }),
+      action: Type.String({ description: "test | task-status | validate-delivery | render-diagram | bitable-check" }),
       command: Type.Optional(Type.String({ description: "test 使用的可执行文件，默认 node" })),
       args: Type.Optional(Type.Array(Type.String(), { description: "test 命令参数数组" })),
       taskId: Type.Optional(Type.String({ description: "任务编号，默认当前任务" })),
@@ -441,16 +446,23 @@ export function createAgentCliTool({ taskId, projectName, getProjectName, chatId
     }),
     async execute(_toolCallId, params) {
       const action = String(params.action || "").trim();
+      const allowedActions = new Set(["test", "task-status", "validate-delivery", "render-diagram", "bitable-check"]);
+      if (!allowedActions.has(action)) {
+        const result = { status: "failed", error: `unsupported agent CLI action: ${action}` };
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      }
       const effectiveTaskId = params.taskId || taskId;
       const effectiveProject = params.projectName || getProjectName?.() || projectName;
       const input = {
+        root,
         taskId: effectiveTaskId,
         projectName: effectiveProject,
         chatId,
         agent: agentKey,
         artifactPaths: params.artifactPaths || [],
         ...(action === "render-diagram" ? { spec: params.diagramJson } : {}),
-        ...(action === "test" ? { command: process.execPath, args: ["--test", "test"] } : {}),
+        ...(action === "test" ? { command: process.execPath, args: ["--test", "test"], cwd: root } : {}),
+        ...(action === "task-status" ? { taskFile: resolveTaskFile(root) } : {}),
       };
       if (action === "render-diagram") {
         try {

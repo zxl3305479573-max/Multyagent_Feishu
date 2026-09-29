@@ -57,6 +57,39 @@ export function runTestCommand({ command = process.execPath, args = [], cwd = pr
   });
 }
 
+export function runNodeScript({ command = process.execPath, args = [], cwd = process.cwd(), timeoutMs = 120_000 } = {}) {
+  return new Promise((resolveResult) => {
+    const started = Date.now();
+    const child = spawn(command, args, { cwd, windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolveResult({ status: "failed", exit_code: null, duration_ms: Date.now() - started, error: clip(error.message) });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const failed = timedOut || code !== 0;
+      let payload = null;
+      try { payload = JSON.parse(stdout.trim()); } catch {}
+      resolveResult({
+        status: failed ? "failed" : "passed",
+        exit_code: code,
+        duration_ms: Date.now() - started,
+        ...(payload && typeof payload === "object" ? { result: payload } : { output: clip(stdout) }),
+        ...(failed ? { error: clip(timedOut ? "script timed out" : stderr || stdout) } : {}),
+      });
+    });
+  });
+}
+
 export async function readTaskStatus({ taskId, chatId = null, taskFile = process.env.PI_DOMAIN_TASKS_FILE || "runtime/domain-tasks.json" } = {}) {
   if (!taskId) throw new Error("taskId is required");
   return new TaskStore(taskFile).getStatus(taskId, chatId);
@@ -147,6 +180,25 @@ export function forwardedBitableArgs(options = {}) {
   return args;
 }
 
+export const BITABLE_SCRIPTS = Object.freeze({
+  check: "check-bitable.mjs",
+  setup: "setup-bitable-board.mjs",
+  smoke: "smoke-bitable.mjs",
+  "trace-setup": "create-bitable-trace.mjs",
+});
+
+export async function runBitableAction({ action, root = process.cwd(), options = {}, execute = runNodeScript } = {}) {
+  const script = BITABLE_SCRIPTS[action];
+  if (!script) throw new Error(`unsupported bitable action: ${action}`);
+  const result = await execute({
+    command: process.execPath,
+    args: [join("scripts", script), ...forwardedBitableArgs(options)],
+    cwd: root,
+    timeoutMs: 120_000,
+  });
+  return { action, ...result };
+}
+
 export async function executeAgentCli(action, input = {}) {
   switch (action) {
     case "test":
@@ -157,6 +209,10 @@ export async function executeAgentCli(action, input = {}) {
       return validateDelivery(input);
     case "render-diagram":
       return renderDiagram(input);
+    case "bitable":
+      return runBitableAction(input);
+    case "bitable-check":
+      return runBitableAction({ ...input, action: "check" });
     default:
       throw new Error(`unsupported agent CLI action: ${action}`);
   }

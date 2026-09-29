@@ -155,6 +155,8 @@ npm run agent:cli -- bitable --action check
 
 CLI 的写入操作必须带项目名，目标路径会限制在 `workspace/<project>/` 下；它不接管飞书消息、人工审批或 Agent 派发，这些仍由网关和编排器负责。
 
+机器人内部的 `agent_cli` 还提供只读的 `bitable-check`；建表、写表和 smoke 维护动作仍只允许人工在终端执行。
+
 ### Agent 运行模式
 
 默认使用进程内 Pi 会话：
@@ -163,11 +165,17 @@ CLI 的写入操作必须带项目名，目标路径会限制在 `workspace/<pro
 PI_AGENT_RUNTIME=embedded
 ```
 
-需要进程隔离时可切换到 RPC runner。网关会为每个任务传入独立项目目录和会话目录，并以 `agent_settled` 作为完成信号；超时会终止子进程并记录失败：
+需要进程隔离时可切换到 RPC runner。RPC 子进程会加载同一个策略扩展，因此角色工具白名单、动态写入路径、交付协议、状态查询、项目创建和 `agent_cli` 与 embedded 模式一致；网关以 `agent_settled` 作为完成信号，超时会终止子进程并记录失败：
 
 ```powershell
 PI_AGENT_RUNTIME=rpc
 PI_RPC_COMMAND=pi
+```
+
+RPC 子进程与 embedded 模式一样以仓库根目录为 cwd，产物、任务状态文件和交付包仍按当前项目解析。需要 Git 工作树隔离时显式开启（默认关闭，避免 RPC 会话只看到 HEAD 而漏掉当前未提交改动）：
+
+```powershell
+PI_AGENT_WORKTREE=1
 ```
 
 RPC 事件只写入任务、角色、事件类型、工具名和状态等摘要字段，不把模型文本或工具输出复制到事件日志。

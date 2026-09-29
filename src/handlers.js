@@ -1,5 +1,5 @@
 // 真实 MultyAgent 执行逻辑的集成边界：默认使用内置 Pi，会话也可切换到 RPC 子进程。
-import { runAgent as runEmbeddedAgent } from "./pi-agent.js";
+import { buildPrompt, buildSystemPrompt, runAgent as runEmbeddedAgent } from "./pi-agent.js";
 import { createAgentRunner } from "./runtime/agent-runner.js";
 
 function rpcTraceEvent(event, { taskId, agentKey }) {
@@ -21,9 +21,13 @@ function rpcTraceEvent(event, { taskId, agentKey }) {
 export function createRunAgent({ mode = process.env.PI_AGENT_RUNTIME || "embedded", embedded = runEmbeddedAgent, rpcRun = createAgentRunner() } = {}) {
   return async function runAgent(agent, prompt, context = {}, options = {}) {
     if (mode !== "rpc") return embedded(agent, prompt, context, options);
-    const result = await rpcRun(agent, prompt, {
-      projectName: context.projectName || "default",
+    const projectName = context.projectName || "default";
+    const rpcContext = { ...context, projectName };
+    const result = await rpcRun(agent, buildPrompt(prompt, rpcContext), {
+      projectName,
       taskId: context.taskId,
+      systemPrompt: buildSystemPrompt(agent, context.projectName || null),
+      context: rpcContext,
       timeoutMs: options.timeoutMs || (Number(agent.max_runtime_seconds) > 0 ? Number(agent.max_runtime_seconds) * 1000 : undefined),
       env: options.env,
       onEvent: (event) => {
@@ -33,8 +37,8 @@ export function createRunAgent({ mode = process.env.PI_AGENT_RUNTIME || "embedde
     });
     return {
       text: String(result?.text || "").trim(),
-      delivery: null,
-      projectName: context.projectName || null,
+      delivery: result?.delivery || null,
+      projectName: result?.delivery?.projectName || context.projectName || null,
       rpc: { exit: result?.exit || null },
     };
   };
