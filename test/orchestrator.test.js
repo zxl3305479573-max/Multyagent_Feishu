@@ -320,7 +320,13 @@ test("确认后端的下一步后沿路由完成测试、审计，并由项目�
   }
 
   await orch.onTaskCompleted("backend_developer", "T-flow:backend_developer", {
-    delivery: { agentKey: "backend_developer", summary: "后端修复已完成", next: "派发测试复验，最后由项目经理总结", artifactPaths: [] },
+    delivery: {
+      agentKey: "backend_developer",
+      summary: "后端修复已完成",
+      next: "派发测试复验，最后由项目经理总结",
+      artifactPaths: [],
+      assignments: [{ agentKey: "tester", task: "复验后端修复" }],
+    },
     parentTaskId: "T-flow",
     context: {
       chatId: "flow-chat",
@@ -397,7 +403,7 @@ test("PM 交付既无 assignments 也无 choices 且无审批上下文时仍结�
   assert.equal(await orch.resolveLatest("c1"), null);
 });
 
-test("PM 交付只有 next 时，确认后按配置路由派发下游", async () => {
+test("PM 交付只有 next 时，确认后继续由项目经理执行", async () => {
   const runs = [];
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };
   const runAgent = async (agent) => {
@@ -421,7 +427,7 @@ test("PM 交付只有 next 时，确认后按配置路由派发下游", async ()
   const resolved = await orch.resolveLatest("c1", "approve");
   assert.equal(resolved?.approved, true, "卡片既然出按钮，点击就不能落空");
   await orch.whenIdle();
-  assert.deepEqual(runs, ["architect"], "确认 next 后应派发配置中的下一角色");
+  assert.deepEqual(runs, ["project_manager"], "确认 next 后应由原角色继续执行，而不是派发给配置路由");
 });
 
 test("派发下游时继承上游交付的项目名，产物目录与该角色白名单保持一致", async () => {
@@ -675,4 +681,47 @@ test("不传 approvalsFile 时不落盘", async () => {
     context: { chatId: "c1", requireHumanApproval: true },
   });
   assert.equal(existsSync(file), false, "未指定路径时不应写文件");
+});
+
+test("PM 可直接执行的 next 确认后仍由项目经理继续，不派发下游", async () => {
+  const runs = [];
+  const prompts = [];
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const runAgent = async (agent, prompt) => {
+    runs.push(agent.key);
+    prompts.push(prompt);
+    if (runs.length === 1) {
+      return {
+        text: "目标已定",
+        delivery: {
+          agentKey: agent.key,
+          summary: "目标已定",
+          next: "由项目经理补充范围、交付边界与验收标准",
+          artifactPaths: [],
+        },
+      };
+    }
+    return {
+      text: "需求规格已完成",
+      delivery: { agentKey: agent.key, summary: "需求规格已完成", final: true, artifactPaths: [] },
+    };
+  };
+  const orch = createOrchestrator({ runAgent, log: { info() {}, warn() {}, error() {} } });
+  orch.registerRole({ key: "project_manager", displayName: "项目经理", appId: "x" }, client);
+  orch.registerRole({ key: "architect", displayName: "架构设计师", appId: "x" }, client);
+
+  await orch.onTaskCompleted("project_manager", "T-pm-self", {
+    delivery: {
+      agentKey: "project_manager",
+      summary: "目标已定",
+      next: "由项目经理补充范围、交付边界与验收标准",
+      artifactPaths: [],
+    },
+    context: { chatId: "c-pm-self", requireHumanApproval: true },
+  });
+
+  assert.equal((await orch.resolveLatest("c-pm-self", "approve"))?.approved, true);
+  await orch.whenIdle();
+  assert.deepEqual(runs, ["project_manager"], "PM 自己能做的下一步不应派发给架构设计师");
+  assert.match(prompts[0], /由项目经理补充范围、交付边界与验收标准/);
 });

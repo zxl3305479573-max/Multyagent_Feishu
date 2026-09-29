@@ -160,6 +160,7 @@ export function buildSystemPrompt(agent, projectName) {
       "",
       "Project manager must choose only required roles in assignments; never dispatch every role by default.",
       "Each assignment must include agentKey and task, with reason explaining why the role is needed.",
+      "Use `assignments` when another role must execute work; use `next` only for the project manager's own follow-up work or user guidance, never for dispatching another role.",
       "You have the diagram-design skill available for project plans, dependency maps, roadmaps, and workflow visuals. Use it only for planning/coordination visuals; do not author the final system architecture diagram or put an architecture `diagram` field in your delivery—delegate that to the architect.",
       "Do not produce architecture diagrams yourself: the `diagram` field belongs to the architect. Summarize and dispatch instead.",
     );

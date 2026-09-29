@@ -407,14 +407,14 @@ export function createOrchestrator({
     const assignments = Array.isArray(pending.delivery?.assignments) ? pending.delivery.assignments : [];
     const asksUser = Boolean(pending.delivery?.choices?.length);
     const hasNext = Boolean(String(pending.delivery?.next || "").trim());
-    // 派发清单或阶段完成卡沿用原语义（放行下游 / 结算），不重复跑该角色；
-    // 角色自己的提问卡则把用户选择交回原角色继续推进。两者都放后台。
+    // 只有显式 assignments 才是派发信号；choices 和 next 都表示原角色继续推进，
+    // 避免项目经理能自己做的下一步被配置路由误发给下游。
     trackContinuation(
       { taskId: pending.taskId, agentKey: pending.agentKey, chatId },
       () => {
         if (assignments.length) return onTaskCompleted(pending.agentKey, pending.taskId, { ...pending, context: { ...pending.context, approvalBypass: true, selection } });
         if (asksUser) return continueWithSelection(pending, selection);
-        if (hasNext) return onTaskCompleted(pending.agentKey, pending.taskId, { ...pending, context: { ...pending.context, approvalBypass: true, selection } });
+        if (hasNext) return continueWithSelection(pending, selection, pending.delivery.next);
         return onTaskCompleted(pending.agentKey, pending.taskId, { ...pending, context: { ...pending.context, approvalBypass: true, selection } });
       },
     );
