@@ -35,8 +35,8 @@ import { registerActiveSession } from "./session-control.js";
 import { validateTaskPlan } from "./task-plan.js";
 
 const MODEL_PROVIDER = process.env.PI_AGENT_PROVIDER || "deepseek";
-// deepseek-chat is the stable API model; override with PI_AGENT_MODEL when needed.
-const MODEL_ID = process.env.PI_AGENT_MODEL || "deepseek-chat";
+// deepseek-flash is the default runtime model; override with PI_AGENT_MODEL when needed.
+const MODEL_ID = process.env.PI_AGENT_MODEL || "deepseek-flash";
 const THINKING_LEVEL = process.env.PI_AGENT_THINKING || "off";
 
 // The diagram-design skill is intentionally scoped to the planning/design

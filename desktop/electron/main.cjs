@@ -6,6 +6,7 @@ const { createGatewayProcess } = require("./gateway-process.cjs");
 
 const root = join(__dirname, "..", "..");
 let win = null; let tray = null; let quitting = false; let gateway = null; let credentials = null; let gatewayStopping = false;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const LEGACY_CREDENTIAL_KEY = /^(?:FEISHU_[A-Z0-9_]+_(?:APP_ID|APP_SECRET)|DEEPSEEK_API_KEY|OPENAI_API_KEY)$/;
 const LEGACY_ENV_FILES = [
   process.env.MULTYAGENT_LEGACY_ENV_FILE,
@@ -94,6 +95,10 @@ async function start() {
     },
   });
   gateway.start();
+  // The renderer reads the session token immediately on load. Wait until the
+  // gateway has published its token and health endpoint so first launch does
+  // not look disconnected and force a manual service restart.
+  await waitForGateway();
   ipcMain.handle("desktop:credentials:list", () => credentials.list());
   ipcMain.handle("desktop:credentials:set", (_event, key, value) => credentials.set(key, value));
   ipcMain.handle("desktop:credentials:remove", (_event, key) => credentials.remove(key));
@@ -109,7 +114,12 @@ async function start() {
   tray = new Tray(nativeImage.createEmpty()); tray.setToolTip("MultyAgent Agent 工作台");
   tray.setContextMenu(Menu.buildFromTemplate([{ label: "显示工作台", click: showWindow }, { type: "separator" }, { label: "退出", click: () => { quitting = true; app.quit(); } }])); tray.on("click", showWindow);
 }
-app.whenReady().then(start).catch((error) => { console.error(error); app.quit(); });
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => showWindow());
+  app.whenReady().then(start).catch((error) => { console.error(error); app.quit(); });
+}
 app.on("before-quit", (event) => {
   quitting = true;
   if (gateway && !gatewayStopping) {
