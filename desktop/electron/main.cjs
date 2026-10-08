@@ -50,7 +50,7 @@ async function migrateLegacyCredentials() {
 function showWindow() { if (!win) return; win.show(); win.focus(); }
 
 async function createWindow() {
-  win = new BrowserWindow({ width: 1320, height: 900, minWidth: 960, minHeight: 640, webPreferences: { preload: join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  win = new BrowserWindow({ width: 1320, height: 900, minWidth: 720, minHeight: 560, webPreferences: { preload: join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   win.on("close", (event) => { if (!quitting) { event.preventDefault(); win.hide(); } });
   if (process.env.ELECTRON_RENDERER_URL) await win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else await win.loadFile(join(root, "dist", "desktop", "index.html"));
