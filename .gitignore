@@ -1,4 +1,7 @@
 node_modules/
+dist/
+release/
+.electron-builder-cache/
 .env
 logs/
 npm-debug.log*

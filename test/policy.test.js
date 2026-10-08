@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { checkWriteAllowed, isDeleteCommand, isDenied, isWithin, resolvePath, resolveWritePaths } from "../src/policy.js";
+import { checkNetworkAllowed, checkWriteAllowed, isDeleteCommand, isDenied, isWithin, resolvePath, resolveWritePaths } from "../src/policy.js";
 import { createPolicyFactory } from "../src/pi-agent.js";
 
 const cwd = process.cwd();
@@ -18,6 +18,54 @@ test("dynamic policy follows project changes and never falls back to default", a
   projectName = "student";
   assert.equal((await check("workspace/student/artifacts/plan.md"))?.block, undefined);
   assert.equal((await check("workspace/default/artifacts/plan.md"))?.block, true);
+});
+
+test("network policy blocks network commands unless the exact domain is allowlisted", () => {
+  assert.equal(checkNetworkAllowed("curl https://example.com/api", { enabled: false, domains: [] }).allowed, false);
+  assert.equal(checkNetworkAllowed("curl https://example.com/api", { enabled: true, domains: ["example.com"] }).allowed, true);
+  assert.equal(checkNetworkAllowed("curl https://evil.example.net", { enabled: true, domains: ["example.com"] }).allowed, false);
+  assert.equal(checkNetworkAllowed("git clone https://gitlab.com/org/repo.git", { enabled: true, domains: ["gitlab.com"] }).allowed, true);
+  assert.equal(checkNetworkAllowed("npm install --registry=https://registry.example.org", { enabled: true, domains: ["registry.example.org"] }).allowed, true);
+  assert.equal(checkNetworkAllowed("npm test", { enabled: false, domains: [] }).allowed, true);
+});
+
+test("task network policy narrows role access", async () => {
+  const factory = createPolicyFactory(
+    { key: "frontend_developer" },
+    () => "student",
+    () => ({ networkPolicy: { enabled: true, domains: ["example.com"] } }),
+  );
+  let onToolCall;
+  factory({
+    on(name, handler) {
+      if (name === "tool_call") onToolCall = handler;
+    },
+  });
+  assert.equal(
+    (await onToolCall(
+      { toolName: "bash", input: { command: "curl https://example.com/api" } },
+      { cwd },
+    ))?.block,
+    undefined,
+  );
+  assert.equal(
+    (await onToolCall(
+      { toolName: "bash", input: { command: "curl https://github.com/org/repo" } },
+      { cwd },
+    ))?.block,
+    true,
+  );
+});
+
+test("task permissions can further narrow role tools and file writes", async () => {
+  const factory = createPolicyFactory({ key: "frontend_developer" }, () => "student", () => ({
+    toolAllowlist: ["read"],
+    fileWriteAllowlist: ["workspace/student/artifacts"],
+  }));
+  let onToolCall;
+  factory({ on(name, handler) { if (name === "tool_call") onToolCall = handler; } });
+  assert.equal((await onToolCall({ toolName: "bash", input: { command: "echo hi" } }, { cwd }))?.block, true);
+  assert.equal((await onToolCall({ toolName: "write", input: { path: "workspace/student/frontend/app.js" } }, { cwd }))?.block, true);
 });
 
 test("every role resolves its owned write paths against the active project", async () => {

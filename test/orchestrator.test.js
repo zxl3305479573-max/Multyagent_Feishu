@@ -133,6 +133,25 @@ test("派发时发送接收回执（让派发在群里可见）", async () => {
   );
 });
 
+test("桌面通道派发只记录事件，不向飞书发送卡片", async () => {
+  let messages = 0;
+  let ran = 0;
+  const client = { im: { message: { create: async () => { messages += 1; return { code: 0 }; } } } };
+  const orch = createOrchestrator({
+    runAgent: async () => { ran += 1; return { text: "done", delivery: { summary: "done", artifactPaths: [], next: "无需后续操作", final: true } }; },
+    log: { info() {}, error() {}, warn() {} },
+  });
+  orch.registerRole({ key: "project_manager", displayName: "PM", appId: "x" }, client);
+  orch.registerRole({ key: "architect", displayName: "AR", appId: "x" }, client);
+  await orch.onTaskCompleted("project_manager", "T-desktop", {
+    delivery: { summary: "plan", assignments: [{ agentKey: "architect", task: "design" }], artifactPaths: [], next: "执行计划" },
+    context: { chatId: "desktop-local", channel: "desktop", projectName: "demo" },
+  });
+  await orch.whenIdle();
+  assert.equal(ran, 1);
+  assert.equal(messages, 0);
+});
+
 test("dispatch_started events include the assigned task but not the generated prompt", async () => {
   const events = [];
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };
@@ -150,6 +169,27 @@ test("dispatch_started events include the assigned task but not the generated pr
   const started = events.find((event) => event.type === "dispatch_started");
   assert.equal(started.assigned_task, "Design the service API");
   assert.equal("prompt" in started, false);
+});
+
+test("structured PM plans execute stages sequentially while assignments in one stage run in parallel", async () => {
+  const dispatched = [];
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const orch = createOrchestrator({
+    runAgent: async (agent) => {
+      dispatched.push(agent.key);
+      return { text: "done", delivery: { summary: "done", artifactPaths: [], artifactsDir: "d", final: agent.key === "project_manager" } };
+    },
+    log: { info() {}, error() {}, warn() {} },
+  });
+  for (const key of ["project_manager", "architect", "tester"]) orch.registerRole({ key, displayName: key, appId: "x" }, client);
+  const plan = { project: "demo", goal: "verify", stages: [
+    { id: "design", assignments: [{ id: "design", agentKey: "architect", task: "design" }] },
+    { id: "verify", assignments: [{ id: "verify", agentKey: "tester", task: "verify", dependsOn: ["design"] }] },
+  ] };
+  await orch.onTaskCompleted("project_manager", "T-plan", { delivery: { summary: "plan", plan, assignments: [{ id: "design", agentKey: "architect", task: "design" }], artifactPaths: [], artifactsDir: "d" }, context: { chatId: "c1", projectName: "demo" } });
+  assert.deepEqual(dispatched, ["architect", "tester", "project_manager"]);
+  await orch.whenIdle();
+  assert.deepEqual(dispatched, ["architect", "tester", "project_manager"]);
 });
 
 test("根任务暂停时不派发下游", async () => {

@@ -14,8 +14,9 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
-import { checkWriteAllowed, isDeleteCommand, resolveWritePaths } from "./policy.js";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { checkNetworkAllowed, checkWriteAllowed, isDeleteCommand, resolveWritePaths } from "./policy.js";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -31,6 +32,7 @@ import { readProjectSummary } from "./project-summary.js";
 import { loadTaskStatus } from "./task-status.js";
 import { isTerminated } from "./tasks.js";
 import { registerActiveSession } from "./session-control.js";
+import { validateTaskPlan } from "./task-plan.js";
 
 const MODEL_PROVIDER = process.env.PI_AGENT_PROVIDER || "deepseek";
 // deepseek-chat is the stable API model; override with PI_AGENT_MODEL when needed.
@@ -46,9 +48,13 @@ export function diagramSkillPaths(agentKey) {
   if (agentKey !== "architect" && agentKey !== "project_manager") return [];
   const configured = process.env.PI_DIAGRAM_SKILL_PATH?.trim()
     || process.env.PI_ARCHITECT_DIAGRAM_SKILL_PATH?.trim();
-  const defaultPath = join(homedir(), ".codex", "skills", "diagram-design");
-  const skillPath = configured || defaultPath;
-  return existsSync(skillPath) ? [skillPath] : [];
+  const candidates = [
+    configured,
+    join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "diagram-design"),
+    join(homedir(), ".codex", "skills", "diagram-design"),
+  ].filter(Boolean);
+  const skillPath = candidates.find((candidate) => existsSync(candidate));
+  return skillPath ? [skillPath] : [];
 }
 
 // Backward-compatible name for callers that used the original architect-only
@@ -88,7 +94,7 @@ function getModelRuntime() {
 }
 
 // 每个角色一个策略工厂：闭包捕获该角色的写路径白名单/黑名单。
-export function createPolicyFactory(agent, projectNameOrGetter) {
+export function createPolicyFactory(agent, projectNameOrGetter, taskPermissionsGetter = null) {
   const cfg = policy.agents?.[agent.key] ?? {};
   const getProjectName = typeof projectNameOrGetter === "function"
     ? projectNameOrGetter
@@ -96,6 +102,10 @@ export function createPolicyFactory(agent, projectNameOrGetter) {
   const denyPaths = cfg.denyPaths || [];
   return (pi) => {
     pi.on("tool_call", async (event, ctx) => {
+      const taskPermissions = typeof taskPermissionsGetter === "function" ? (taskPermissionsGetter() || {}) : {};
+      if (Array.isArray(taskPermissions.toolAllowlist) && taskPermissions.toolAllowlist.length && !taskPermissions.toolAllowlist.includes(event.toolName)) {
+        return { block: true, reason: `当前任务白名单不允许工具：${event.toolName}` };
+      }
       // 1. 敏感文件拦截（全局，所有工具）
       const raw = [event.input?.path, event.input?.command, event.input?.pattern]
         .filter(Boolean)
@@ -110,6 +120,12 @@ export function createPolicyFactory(agent, projectNameOrGetter) {
         }
       }
       // 3. 写入路径拦截（write/edit）
+      if (event.toolName === "bash" || event.toolName === "powershell") {
+        const roleNetwork = { enabled: cfg.networkAccess === true, domains: cfg.networkDomains || [] };
+        const networkPolicy = taskPermissions.networkPolicy && typeof taskPermissions.networkPolicy === "object" ? taskPermissions.networkPolicy : roleNetwork;
+        const network = checkNetworkAllowed(event.input?.command, networkPolicy);
+        if (!network.allowed) return { block: true, reason: `network policy denied command: ${network.reason}` };
+      }
       if (event.toolName === "write" || event.toolName === "edit") {
         const currentProject = getProjectName();
         if (cfg.writePaths?.length && !currentProject) {
@@ -120,6 +136,19 @@ export function createPolicyFactory(agent, projectNameOrGetter) {
         if (!check.allowed) {
           return { block: true, reason: check.reason };
         }
+        if (Array.isArray(taskPermissions.fileWriteAllowlist) && taskPermissions.fileWriteAllowlist.length) {
+          const taskCheck = checkWriteAllowed(ctx.cwd, event.input?.path, { writePaths: taskPermissions.fileWriteAllowlist, denyPaths });
+          if (!taskCheck.allowed) return { block: true, reason: "当前任务文件写入白名单拒绝该路径" };
+        }
+      }
+      if (["read", "grep", "find", "ls"].includes(event.toolName) && Array.isArray(taskPermissions.fileReadAllowlist) && taskPermissions.fileReadAllowlist.length) {
+        const requested = String(event.input?.path || event.input?.pattern || "");
+        const normalized = requested.replaceAll("\\", "/");
+        const allowed = taskPermissions.fileReadAllowlist.some((root) => {
+          const base = String(root).replaceAll("\\", "/").replace(/\/$/, "");
+          return normalized === base || normalized.startsWith(`${base}/`);
+        });
+        if (!allowed) return { block: true, reason: "当前任务文件读取白名单拒绝该路径" };
       }
     });
   };
@@ -206,7 +235,7 @@ export function buildSystemPrompt(agent, projectName) {
 // 每个角色缓存一份 loader（系统提示不同），首次创建后复用。
 const loaderCache = new Map();
 
-function getLoader(agent, projectNameOrGetter) {
+function getLoader(agent, projectNameOrGetter, taskPermissionsGetter = null) {
   const dynamicProject = typeof projectNameOrGetter === "function";
   const getProjectName = dynamicProject ? projectNameOrGetter : () => projectNameOrGetter;
   const projectName = getProjectName();
@@ -218,7 +247,7 @@ function getLoader(agent, projectNameOrGetter) {
       agentDir: getAgentDir(),
       additionalSkillPaths: diagramSkillPaths(agent.key),
       systemPromptOverride: () => buildSystemPrompt(agent, getProjectName()),
-      extensionFactories: [createPolicyFactory(agent, getProjectName)],
+      extensionFactories: [createPolicyFactory(agent, getProjectName, taskPermissionsGetter)],
     });
     loaderPromise = loader.reload().then(() => loader);
     if (!dynamicProject) loaderCache.set(cacheKey, loaderPromise);
@@ -226,8 +255,16 @@ function getLoader(agent, projectNameOrGetter) {
   return loaderPromise;
 }
 
-function sessionDirFor(agent) {
-  return join(process.cwd(), "runtime", "sessions", agent.key);
+export function sessionDirFor(agent, projectName) {
+  const project = /^[a-z][a-z0-9-]*$/.test(String(projectName || "")) ? projectName : "unassigned";
+  return join(process.cwd(), "runtime", "sessions", project, agent.key);
+}
+
+export function sessionFileBelongsToDir(sessionFile, sessionDir) {
+  if (!sessionFile || !sessionDir) return false;
+  const candidate = isAbsolute(sessionFile) ? sessionFile : resolve(sessionFile);
+  const relativePath = relative(resolve(sessionDir), candidate);
+  return Boolean(relativePath) && !relativePath.startsWith("..") && !isAbsolute(relativePath);
 }
 
 export function buildPrompt(text, context) {
@@ -322,7 +359,7 @@ export function mapPiToolEvent(event = {}, context = {}, previous = {}) {
   return [];
 }
 
-export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, onDeliver }) {
+export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, roleLimits = {}, onDeliver }) {
   return defineTool({
     name: "deliver_artifact",
     label: "交付产物",
@@ -346,6 +383,7 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         task: Type.String(),
         reason: Type.Optional(Type.String()),
       }))),
+      plan: Type.Optional(Type.Any({ description: "项目经理使用的结构化阶段计划；包含 project、goal、stages 和权限快照" })),
       diagram: Type.Optional(Type.Object({
         title: Type.Optional(Type.String({ description: "流程图标题" })),
         nodes: Type.Array(Type.Object({
@@ -362,6 +400,17 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
     }),
     async execute(_toolCallId, params) {
       const artifactsDir = getArtifactsDir();
+      let plan = null;
+      if (params.plan !== undefined) {
+        if (agentKey !== "project_manager") {
+          return { content: [{ type: "text", text: "计划校验失败：只有项目经理可以提交结构化阶段计划" }], details: {} };
+        }
+        const checked = validateTaskPlan(params.plan, { projectName: getProjectName?.() || null, roleLimits });
+        if (!checked.valid) {
+          return { content: [{ type: "text", text: `计划校验失败：${checked.errors.join("；")}` }], details: { planErrors: checked.errors } };
+        }
+        plan = checked.plan;
+      }
       const delivery = {
         summary: sanitizeAgentReply(params.summary),
         artifactPaths: params.artifactPaths || [],
@@ -370,7 +419,8 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         assumptions: params.assumptions || [],
         risks: params.risks || [],
         choices: params.choices || [],
-        assignments: normalizeAssignments(params.assignments, { selfAgentKey: agentKey, allowDispatch: agentKey === "project_manager" }),
+        assignments: normalizeAssignments(params.assignments || (plan?.stages?.[0]?.assignments || []), { selfAgentKey: agentKey, allowDispatch: agentKey === "project_manager" }),
+        plan,
         diagram: params.diagram || null,
         final: params.final === true,
         artifactsDir,
@@ -396,9 +446,15 @@ export function normalizeAssignments(value, { selfAgentKey = null, maxAssignment
   return value
     .filter((item) => item && allowed.has(item.agentKey) && item.agentKey !== selfAgentKey && typeof item.task === "string" && item.task.trim())
     .map((item) => ({
+      ...(item.id ? { id: String(item.id).trim() } : {}),
       agentKey: item.agentKey,
       task: item.task.trim(),
       reason: typeof item.reason === "string" ? item.reason.trim() : "",
+      ...(Array.isArray(item.dependsOn) ? { dependsOn: item.dependsOn.filter((dependency) => typeof dependency === "string") } : {}),
+      ...(Array.isArray(item.toolAllowlist) ? { toolAllowlist: item.toolAllowlist.filter((tool) => typeof tool === "string") } : {}),
+      ...(Array.isArray(item.fileReadAllowlist) ? { fileReadAllowlist: item.fileReadAllowlist.filter((path) => typeof path === "string") } : {}),
+      ...(Array.isArray(item.fileWriteAllowlist) ? { fileWriteAllowlist: item.fileWriteAllowlist.filter((path) => typeof path === "string") } : {}),
+      ...(item.networkPolicy && typeof item.networkPolicy === "object" ? { networkPolicy: item.networkPolicy } : {}),
     }))
     .filter((item) => !seen.has(item.agentKey) && seen.add(item.agentKey))
     .slice(0, maxAssignments);
@@ -511,16 +567,20 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
   }
 
   let activeProject = context.projectName || null;
-  const loader = await getLoader(agent, () => activeProject);
+  const loader = await getLoader(agent, () => activeProject, () => context.taskPermissions);
   const cfg = policy.agents?.[agent.key] ?? {};
-  const sessionDir = sessionDirFor(agent);
+  const sessionDir = sessionDirFor(agent, context.projectName);
   await mkdir(sessionDir, { recursive: true });
   // session 文件可能因清理/迁移而丢失：存在才复用，否则新建，避免写入时 ENOENT。
   let sessionManager;
-  if (sessionFile && existsSync(sessionFile)) {
-    sessionManager = SessionManager.open(sessionFile, sessionDir);
+  const candidateSessionFile = sessionFile ? (isAbsolute(sessionFile) ? sessionFile : resolve(sessionFile)) : null;
+  const sessionBelongsToProject = sessionFileBelongsToDir(candidateSessionFile, sessionDir);
+  if (sessionBelongsToProject && existsSync(candidateSessionFile)) {
+    sessionManager = SessionManager.open(candidateSessionFile, sessionDir);
   } else {
-    if (sessionFile) {
+    if (sessionFile && !sessionBelongsToProject) {
+      console.warn(`[pi-agent] session 不属于当前项目/Agent，已隔离新建会话: ${sessionFile}`);
+    } else if (sessionFile) {
       console.warn(`[pi-agent] session 文件不存在，已新建会话: ${sessionFile}`);
     }
     sessionManager = SessionManager.create(process.cwd(), sessionDir);
@@ -533,6 +593,11 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
     getProjectName: () => activeProject,
     agentKey: agent.key,
     agentName: agent.displayName,
+    roleLimits: {
+      ...cfg,
+      readPaths: (cfg.readPaths || cfg.writePaths || []).map((path) => String(path).replaceAll("{project}", activeProject || "default")),
+      writePaths: (cfg.writePaths || []).map((path) => String(path).replaceAll("{project}", activeProject || "default")),
+    },
     onDeliver: (d) => { delivery = d; },
   });
 

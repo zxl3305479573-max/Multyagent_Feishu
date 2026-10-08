@@ -1,0 +1,26 @@
+appId: com.multyagent.feishu.workbench
+productName: MultyAgent Agent 工作台
+directories:
+  output: release
+files:
+  - dist/desktop/**/*
+  - desktop/electron/**/*
+  - src/**/*
+  - skills/**/*
+  - config/**/*
+  - package.json
+  - package-lock.json
+# The gateway is a Node child process, so its source and dependencies must stay
+# on a normal filesystem path rather than inside an asar virtual archive.
+asar: false
+# dist/ is intentionally ignored by Git, but it is a required runtime asset.
+disableDefaultIgnoredFiles: true
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

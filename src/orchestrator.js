@@ -7,6 +7,7 @@ import { appendProjectSummary } from "./project-summary.js";
 import { isPaused, isTerminated, setPaused, setTerminated } from "./tasks.js";
 import { artifactsDirFor } from "./artifacts.js";
 import { abortActiveSessions } from "./session-control.js";
+import { readyPlanAssignments } from "./plan-scheduler.js";
 
 const routesConfig = JSON.parse(
   await readFile(new URL("../config/routes.json", import.meta.url), "utf8"),
@@ -45,6 +46,8 @@ export function createOrchestrator({
   const approvals = new Map(restoreApprovals());
   const checkpoints = new Map(restoreCheckpoints());
   const background = new Set();
+  const planRuns = new Map();
+  const isDesktopContext = (context) => context?.channel === "desktop";
 
   function restoreApprovals() {
     if (!approvalsFile) return [];
@@ -241,15 +244,43 @@ export function createOrchestrator({
         log.warn?.(`[orchestrator] project summary append failed: ${error.message}`);
       }
     }
+    if (agentKey === "project_manager" && delivery.plan?.stages?.length) {
+      planRuns.set(rootTaskId, {
+        plan: delivery.plan,
+        completed: new Set(),
+        started: new Set((delivery.assignments || []).map((item) => item.id).filter(Boolean)),
+      });
+    } else {
+      const run = planRuns.get(rootTaskId);
+      if (run) {
+        const finished = [...run.started].find((id) => run.plan.stages.some((stage) => (stage.assignments || []).some((item) => item.id === id && item.agentKey === agentKey)));
+        if (finished) { run.started.delete(finished); run.completed.add(finished); }
+      }
+    }
     let settleEmptyAssignments = false;
     if (agentKey === "project_manager" && !delivery.final && Object.prototype.hasOwnProperty.call(delivery, "assignments")) {
       const assignments = Array.isArray(delivery.assignments) ? delivery.assignments : [];
-      await onEvent({ type: "task_plan_created", task_id: taskId, parent_task_id: parentTaskId || null, agents: assignments.map((item) => item.agentKey), chat_id: dispatchContext.chatId || null });
+      await onEvent({
+        type: "task_plan_created",
+        task_id: taskId,
+        parent_task_id: parentTaskId || null,
+        agents: assignments.map((item) => item.agentKey),
+        plan_project: delivery.plan?.project || dispatchContext.projectName || delivery.projectName || null,
+        plan_stage_count: Array.isArray(delivery.plan?.stages) ? delivery.plan.stages.length : null,
+        plan_assignment_ids: Array.isArray(delivery.plan?.stages) ? delivery.plan.stages.flatMap((stage) => (stage.assignments || []).map((item) => item.id)).filter(Boolean) : [],
+        chat_id: dispatchContext.chatId || null,
+      });
       if (assignments.length) {
         dispatchContext = {
           ...dispatchContext,
           selectedAgents: assignments.map((item) => item.agentKey),
           assignmentTasks: Object.fromEntries(assignments.map((item) => [item.agentKey, item.task])),
+          assignmentPermissions: Object.fromEntries(assignments.map((item) => [item.agentKey, {
+            toolAllowlist: item.toolAllowlist || [],
+            fileReadAllowlist: item.fileReadAllowlist || [],
+            fileWriteAllowlist: item.fileWriteAllowlist || [],
+            networkPolicy: item.networkPolicy || { enabled: false, domains: [] },
+          }])),
         };
       } else settleEmptyAssignments = !String(delivery.next || "").trim() && !delivery.choices?.length && !needsHumanDecision({ agentKey, delivery, context: dispatchContext, approvalRequired });
     }
@@ -285,6 +316,38 @@ export function createOrchestrator({
         parentDelivery: delivery,
         fromAgent: agentKey,
       })));
+      return;
+    }
+    const planRun = planRuns.get(rootTaskId);
+    if (planRun && agentKey !== "project_manager") {
+      const ready = readyPlanAssignments(planRun.plan, [...planRun.completed], [...planRun.started]);
+      if (ready.length) {
+        ready.forEach((assignment) => planRun.started.add(assignment.id));
+        const nextContext = {
+          ...dispatchContext,
+          selectedAgents: ready.map((assignment) => assignment.agentKey),
+          assignmentTasks: Object.fromEntries(ready.map((assignment) => [assignment.agentKey, assignment.task])),
+          assignmentPermissions: Object.fromEntries(ready.map((assignment) => [assignment.agentKey, {
+            toolAllowlist: assignment.toolAllowlist || [],
+            fileReadAllowlist: assignment.fileReadAllowlist || [],
+            fileWriteAllowlist: assignment.fileWriteAllowlist || [],
+            networkPolicy: assignment.networkPolicy || { enabled: false, domains: [] },
+          }])),
+        };
+        await Promise.all(ready.map((assignment) => dispatchTo(assignment.agentKey, taskId, { context: nextContext, parentDelivery: delivery, fromAgent: "project_manager" })));
+        return;
+      }
+      const remaining = planRun.plan.stages.flatMap((stage) => stage.assignments || []).some((assignment) => !planRun.completed.has(assignment.id));
+      if (remaining) return;
+      planRuns.delete(rootTaskId);
+      await onEvent({ type: "task_plan_completed", task_id: rootTaskId, plan_project: planRun.plan.project || null });
+      if (roles.has("project_manager")) {
+        await dispatchTo("project_manager", taskId, {
+          context: { ...dispatchContext, pmCoordination: true, approvalBypass: false },
+          parentDelivery: delivery,
+          fromAgent: agentKey,
+        });
+      }
       return;
     }
     // 终止条件二：单任务派发轮次上限，防协作死循环
@@ -372,6 +435,7 @@ export function createOrchestrator({
     const upstreamDir = parentDelivery.artifactsDir;
     const refs = (parentDelivery.artifactPaths || []).map((p) => `- ${p}`).join("\n");
     const assignedTask = context.assignmentTasks?.[targetKey];
+    const taskPermissions = context.assignmentPermissions?.[targetKey] || null;
     const priorDeliveries = (deliveryHistory.get(rootTaskId) || [])
       .filter((item) => item.taskId !== subTaskId)
       .map((item) => `- ${item.agentKey}: ${item.summary || "已完成交付"}${item.artifactPaths?.length ? `（产物 ${item.artifactPaths.join(", ")}）` : ""}`)
@@ -400,7 +464,7 @@ export function createOrchestrator({
     try {
       log.info(`[dispatch] ${fromAgent} -> ${agent.displayName} (subtask ${String(subTaskId).slice(0, 8)})`);
       await onEvent({ type: "dispatch_started", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, assigned_task: assignedTask || null });
-      await sendCard(client, context.chatId, buildTaskReceivedCard(agent, subTaskId, assignedTask || parentDelivery.summary));
+      if (!isDesktopContext(context)) await sendCard(client, context.chatId, buildTaskReceivedCard(agent, subTaskId, assignedTask || parentDelivery.summary));
       const projectSummary = await loadProjectSummaryFor(targetKey, projectName, { root: process.cwd() });
       const result = await runAgent(agent, prompt, {
         taskId: subTaskId,
@@ -408,16 +472,18 @@ export function createOrchestrator({
         agentKey: agent.key,
         appId: agent.appId,
         chatId: context.chatId,
+        channel: context.channel,
         projectName,
         artifactsDir,
         projectSummary,
+        taskPermissions,
         onEvent,
       });
       if (result.cancelled || await isTerminated(rootTaskId)) {
         await onEvent({ type: "dispatch_cancelled", from: fromAgent, target: targetKey, task_id: subTaskId, parent_task_id: rootTaskId });
         return;
       }
-      await sendResultCard(client, context.chatId, result, { log, taskId: subTaskId });
+      if (!isDesktopContext(context)) await sendResultCard(client, context.chatId, result, { log, taskId: subTaskId });
       log.info(JSON.stringify({ type: "dispatch", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, status: "completed" }));
       await onEvent({ type: "dispatch_completed", agent: targetKey, from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, has_delivery: Boolean(result.delivery), artifact_count: result.delivery?.artifactPaths?.length || 0 });
       await onTaskCompleted(agent.key, subTaskId, {
@@ -434,9 +500,11 @@ export function createOrchestrator({
       }
       log.error(JSON.stringify({ type: "dispatch", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, status: "failed", error: error.message }));
       await onEvent({ type: "dispatch_failed", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, error: error.message });
-      try {
-        await sendText(client, context.chatId, `Task failed: ${error.message}`);
-      } catch {
+      if (!isDesktopContext(context)) {
+        try {
+          await sendText(client, context.chatId, `Task failed: ${error.message}`);
+        } catch {
+        }
       }
     }
   }
@@ -500,6 +568,7 @@ export function createOrchestrator({
         agentKey: agent.key,
         appId: agent.appId,
         chatId,
+        channel: pending.context?.channel,
         projectName,
         artifactsDir,
         onEvent,
@@ -508,7 +577,7 @@ export function createOrchestrator({
         await onEvent({ type: "dispatch_cancelled", agent: agent.key, task_id: pending.taskId, parent_task_id: rootTaskId });
         return;
       }
-      await sendResultCard(client, chatId, result, { log, taskId: pending.taskId });
+      if (!isDesktopContext(pending.context)) await sendResultCard(client, chatId, result, { log, taskId: pending.taskId });
       if (result.delivery) {
         await onTaskCompleted(agent.key, pending.taskId, {
           delivery: result.delivery,
@@ -525,9 +594,11 @@ export function createOrchestrator({
       }
       log.error(JSON.stringify({ type: "selection", agent: agent.key, status: "failed", error: error.message }));
       await onEvent({ type: "selection_failed", agent: agent.key, task_id: pending.taskId, error: error.message });
-      try {
-        await sendText(client, chatId, `Task failed: ${error.message}`);
-      } catch {
+      if (!isDesktopContext(pending.context)) {
+        try {
+          await sendText(client, chatId, `Task failed: ${error.message}`);
+        } catch {
+        }
       }
       throw error;
     }

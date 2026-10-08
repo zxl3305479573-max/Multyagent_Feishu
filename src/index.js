@@ -1,6 +1,8 @@
 import "dotenv/config";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { dirname } from "node:path";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
 import { createRunAgent } from "./handlers.js";
 import { createCardActionHandler, createRoleHandler } from "./gateway.js";
@@ -11,6 +13,10 @@ import { createBitableSync, createBoardEventSink, createCompactLogger, reconcile
 import { createBitableTraceSync, reconcileTraceFields } from "./bitable-trace-sync.js";
 import { createBitableControl } from "./bitable-control.js";
 import { configureTaskStore, setPaused } from "./tasks.js";
+import { createDesktopHost } from "./desktop-host.js";
+import { createDesktopTaskSubmitter } from "./desktop-task.js";
+import { archiveProjectHistory, exportProjectSnapshot, restoreProjectHistory } from "./project-history.js";
+import { createProjectRegistry } from "./project-registry.js";
 
 const config = JSON.parse(await readFile(new URL("../config/agents.json", import.meta.url), "utf8"));
 const runAgent = createRunAgent();
@@ -20,6 +26,7 @@ const feishuClientLogger = createCompactLogger();
 // Replaced by the board sink once the Bitable target is resolved; the arrow
 // wrappers below read it at call time so ordering stays flexible.
 let recordEvent;
+let desktopHost = null;
 
 // 单实例守卫：同一套应用凭据只允许一个长连接网关。
 // 两个网关同时运行时，事件与卡片回调只会投给其中一个，
@@ -188,6 +195,79 @@ if (bitableControl) {
 
 if (bitableTraceProjection) void bitableTraceProjection.flush();
 
+// Desktop control is deliberately loopback-only. Electron reads the generated
+// token from the runtime file and uses the same gateway task/event sources as
+// Feishu; no second orchestration or task store is created.
+if (process.env.PI_DESKTOP_CONTROL !== "false") {
+  const desktopToken = process.env.PI_DESKTOP_TOKEN || randomBytes(32).toString("hex");
+  const desktopTokenFile = process.env.PI_DESKTOP_TOKEN_FILE || "runtime/desktop-session.token";
+  const projectRegistry = createProjectRegistry({ file: process.env.PI_PROJECTS_FILE || "runtime/projects.json" });
+  await mkdir(dirname(desktopTokenFile), { recursive: true });
+  const gatewayRecordEvent = recordEvent;
+  const publishRecordEvent = async (event) => {
+    const entry = await gatewayRecordEvent(event);
+    desktopHost?.publish(entry);
+    return entry;
+  };
+  const submitTask = boardOwner?.agent
+    ? createDesktopTaskSubmitter({
+      taskStore,
+      orchestrator,
+      runAgent,
+      projectManagerAgent: boardOwner.agent,
+      recordEvent: publishRecordEvent,
+    })
+    : null;
+  const exportProject = async ({ projectName, outputFile } = {}) => {
+    const project = String(projectName || "").trim();
+    if (!project) throw new Error("projectName is required");
+    const target = outputFile || `runtime/exports/${project}-${Date.now()}.json`;
+    const result = await exportProjectSnapshot({ project, taskStore, eventsFile: process.env.PI_EVENTS_FILE || "runtime/events.jsonl", outputFile: target });
+    await publishRecordEvent({ type: "project_exported", project_name: project, output_file: result.output_file, artifact_count: result.artifact_refs.length, channel: "desktop" });
+    return { projectName: project, outputFile: result.output_file, taskCount: result.tasks.length, eventCount: result.events.length, artifactCount: result.artifact_refs.length };
+  };
+  const cleanupHistory = async ({ projectName, keep = 1000 } = {}) => {
+    const project = String(projectName || "").trim();
+    if (!project) throw new Error("projectName is required");
+    const result = await archiveProjectHistory({ project, keep, eventsFile: process.env.PI_EVENTS_FILE || "runtime/events.jsonl", archiveFile: `runtime/events-archive/${project}.jsonl` });
+    await publishRecordEvent({ type: "project_history_archived", project_name: project, archived_count: result.archived, kept_count: result.kept, archive_file: result.archiveFile, channel: "desktop" });
+    return result;
+  };
+  const restoreHistory = async ({ projectName } = {}) => {
+    const project = String(projectName || "").trim();
+    if (!project) throw new Error("projectName is required");
+    const result = await restoreProjectHistory({ project, eventsFile: process.env.PI_EVENTS_FILE || "runtime/events.jsonl", archiveFile: `runtime/events-archive/${project}.jsonl` });
+    await publishRecordEvent({ type: "project_history_restored", project_name: project, restored_count: result.restored, archive_file: result.archiveFile, channel: "desktop" });
+    return result;
+  };
+  const createProject = async ({ projectName, storagePath } = {}) => {
+    const project = await projectRegistry.create({ name: projectName, storagePath });
+    await publishRecordEvent({ type: "project_created", project_name: project.name, storage_path: project.storagePath, channel: "desktop" });
+    return { projectName: project.name, storagePath: project.storagePath };
+  };
+  desktopHost = createDesktopHost({
+    token: desktopToken,
+    eventsFile: process.env.PI_EVENTS_FILE || "runtime/events.jsonl",
+    taskStore,
+    orchestrator,
+    agents: config.agents.map(({ key, displayName, enabled }) => ({ key, displayName, enabled })),
+    recordEvent: publishRecordEvent,
+    submitTask,
+    createProject,
+    listProjects: async (taskProjects) => (await projectRegistry.list(taskProjects)).map((item) => item.name),
+    exportProject,
+    cleanupHistory,
+    restoreHistory,
+    host: "127.0.0.1",
+    port: Number(process.env.PI_DESKTOP_PORT) || 0,
+  });
+  const address = await desktopHost.listen();
+  await writeFile(desktopTokenFile, `${JSON.stringify({ token: desktopToken, port: address.port })}\n`, { encoding: "utf8" });
+  recordEvent = publishRecordEvent;
+  console.log(`[desktop] control ready ws://127.0.0.1:${address.port}/desktop token=${desktopTokenFile}`);
+  process.on("exit", () => { void desktopHost?.close(); });
+}
+
 for (const { definition, agent, client, appId, appSecret, identity } of prepared) {
   orchestrator.registerRole(agent, client);
   const handler = createRoleHandler({
@@ -221,7 +301,7 @@ for (const { definition, agent, client, appId, appSecret, identity } of prepared
 
 if (!active.length) {
   console.error("No configured Feishu bots. Copy .env.example to .env and fill at least one App ID and App Secret.");
-  process.exitCode = 1;
+  if (process.env.PI_DESKTOP_CONTROL === "false") process.exitCode = 1;
 } else {
   console.log(`[ready] pid=${process.pid} active agents: ${active.join(", ")}`);
 }

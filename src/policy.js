@@ -55,6 +55,40 @@ export function isDeleteCommand(command) {
   return DELETE_PATTERNS.some((re) => re.test(String(command || "")));
 }
 
+const NETWORK_PATTERNS = [
+  /https?:\/\//i,
+  /\b(?:curl|wget|invoke-webrequest|iwr|irm)\b/i,
+  /\b(?:git\s+(?:clone|fetch|pull|push)|npm\s+(?:install|i)|pnpm\s+(?:install|add)|yarn\s+(?:add|install)|pip\s+install|python(?:3)?\s+-m\s+pip\s+install|go\s+get|docker\s+pull)\b/i,
+];
+
+function networkHosts(command) {
+  const text = String(command || "");
+  const hosts = [...text.matchAll(/https?:\/\/[^\s'"<>]+/gi)].flatMap(([url]) => {
+    try { return [new URL(url.replace(/[),;]+$/, "")).hostname.toLowerCase().replace(/^www\./, "")]; }
+    catch { return []; }
+  });
+  if (/\b(?:npm\s+(?:install|i)|pnpm\s+(?:install|add)|yarn\s+(?:add|install))\b/i.test(text)) {
+    const registry = text.match(/(?:--registry(?:=|\s+))https?:\/\/([^\s/]+)/i)?.[1];
+    hosts.push(registry ? registry.toLowerCase().replace(/^www\./, "") : "registry.npmjs.org");
+  }
+  if (/\b(?:pip\s+install|python(?:3)?\s+-m\s+pip\s+install)\b/i.test(text)) {
+    const index = text.match(/(?:--index-url|--extra-index-url)\s+https?:\/\/([^\s/]+)/i)?.[1];
+    hosts.push(index ? index.toLowerCase().replace(/^www\./, "") : "pypi.org");
+  }
+  if (/\bgit\s+(?:clone|fetch|pull|push)\b/i.test(text) && hosts.length === 0) hosts.push("github.com");
+  return [...new Set(hosts)];
+}
+
+export function checkNetworkAllowed(command, { enabled = false, domains = [] } = {}) {
+  const text = String(command || "");
+  if (!NETWORK_PATTERNS.some((pattern) => pattern.test(text))) return { allowed: true, network: false, hosts: [] };
+  const allowedDomains = (Array.isArray(domains) ? domains : []).map((domain) => String(domain).trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "")).filter(Boolean);
+  const hosts = networkHosts(text);
+  if (!enabled) return { allowed: false, network: true, hosts, reason: "network access is disabled" };
+  const allowed = hosts.length > 0 && hosts.every((host) => host === "" || allowedDomains.some((domain) => host === domain || host.endsWith(`.${domain}`)));
+  return allowed ? { allowed: true, network: true, hosts } : { allowed: false, network: true, hosts, reason: "network domain is not allowlisted" };
+}
+
 // 把 writePaths 里的 {project} 占位符替换为实际项目名（未提供时用 default 兜底）。
 export function resolveWritePaths(writePaths, projectName) {
   const project = projectName || "default";
