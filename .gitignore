@@ -2,6 +2,7 @@ node_modules/
 dist/
 release/
 .electron-builder-cache/
+.electron-builder-cache-local/
 .env
 logs/
 npm-debug.log*

@@ -173,6 +173,22 @@ kbd { margin-left: auto; padding: 2px 5px; border: 1px solid #e5e7eb; border-rad
 .message-error .message-avatar { border-color: #efd2d2; background: #fff8f8; color: #aa4242; }
 .running-indicator { display: flex; align-items: center; gap: 8px; margin: 7px 0 0 37px; color: #707985; font-size: 11px; }
 .pulse-dot { background: #4b7feb; animation: pulse 1.4s ease-in-out infinite; }
+.agent-execution-group { margin: 0 0 16px; border: 1px solid #e6e9ee; border-radius: 8px; background: #fff; }
+.agent-execution-group-header { display: flex; align-items: center; width: 100%; min-width: 0; gap: 8px; padding: 9px 11px; border: 0; border-radius: 8px; background: #fafbfc; color: #454c56; text-align: left; cursor: pointer; }
+.agent-execution-group-header:hover { background: #f5f7fa; }
+.agent-execution-chevron { width: 13px; color: #7c8591; font-size: 16px; line-height: 1; }
+.agent-execution-group-header .message-avatar { width: 24px; height: 24px; border-radius: 6px; }
+.agent-execution-title { min-width: 0; overflow: hidden; flex: 1; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.agent-execution-status { flex: none; color: #7d8590; font-size: 10px; }
+.agent-execution-status.status-running, .agent-execution-status.status-active { color: #4675c5; }
+.agent-execution-status.status-completed { color: #31825a; }
+.agent-execution-status.status-failed { color: #b54444; }
+.agent-execution-status.status-paused { color: #a37325; }
+.agent-execution-count { flex: none; color: #9aa1aa; font-size: 10px; }
+.agent-execution-events { padding: 4px 11px 1px 34px; border-top: 1px solid #eceef1; }
+.agent-execution-event { margin-bottom: 14px; }
+.agent-execution-event .message-body { padding-top: 0; }
+.agent-execution-event .message-body > p { margin-top: 5px; }
 
 .composer-wrap { width: min(840px, calc(100% - clamp(24px, 7vw, 56px))); margin: 0 auto; padding: 14px 0 20px; background: #fff; }
 .composer { padding: 13px 14px 11px; border: 1px solid #d8dce2; border-radius: 14px; background: #fff; box-shadow: 0 3px 12px rgba(35, 43, 55, .04); transition: border-color 160ms ease, box-shadow 160ms ease; }
@@ -301,6 +317,10 @@ kbd { margin-left: auto; padding: 2px 5px; border: 1px solid #e5e7eb; border-rad
   .message { gap: 8px; margin-bottom: 20px; }
   .message-author { flex-wrap: wrap; gap: 3px 7px; }
   .running-indicator { margin-left: 33px; }
+  .agent-execution-group-header { flex-wrap: wrap; gap: 6px; padding: 8px; }
+  .agent-execution-title { max-width: calc(100% - 130px); }
+  .agent-execution-status { margin-left: 27px; }
+  .agent-execution-events { padding-left: 12px; padding-right: 8px; }
   .composer-wrap { width: calc(100% - 16px); padding-top: 8px; }
   .composer { padding: 10px; border-radius: 11px; }
   .composer textarea { min-height: 58px; font-size: 13px; }

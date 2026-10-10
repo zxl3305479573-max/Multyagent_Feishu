@@ -34,6 +34,8 @@ type EventRecord = {
   file_path?: string;
   artifact_count?: number;
   status?: string;
+  agents?: string[];
+  assignments?: Array<{ agentKey?: string; task?: string; reason?: string }>;
 };
 type Agent = { key: string; displayName?: string; enabled?: boolean };
 type DesktopMessage = {
@@ -137,6 +139,30 @@ function taskStatus(task?: Task) {
   return statusLabels[status] || status;
 }
 
+function mergeTasks(previous: Task[], incoming: Task[]) {
+  const byId = new Map(previous.filter((task) => task.task_id).map((task) => [task.task_id, task]));
+  for (const task of incoming) {
+    if (!task.task_id) continue;
+    const old = byId.get(task.task_id);
+    byId.set(task.task_id, {
+      ...old,
+      ...task,
+      status_snapshot: {
+        ...(old?.status_snapshot || {}),
+        ...(task.status_snapshot || {}),
+      },
+    });
+  }
+  return [...byId.values()];
+}
+
+type AgentExecutionGroup = {
+  key: string;
+  displayName: string;
+  events: EventRecord[];
+  status: string;
+};
+
 function agentStatus(events: EventRecord[]) {
   const latest = [...events].sort((a, b) => eventTime(b) - eventTime(a))[0];
   if (!latest) return "waiting";
@@ -171,6 +197,7 @@ function App() {
   const [pendingCommand, setPendingCommand] = useState<ControlCommand | null>(null);
   const [pendingProjectCommand, setPendingProjectCommand] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [collapsedByTask, setCollapsedByTask] = useState<Record<string, Record<string, boolean>>>({});
   const pendingSubmission = useRef<PendingSubmission | null>(null);
   const selectedTask = useMemo(() => tasks.find((task) => task.task_id === selected), [tasks, selected]);
   const taskEvents = useMemo(() => {
@@ -178,9 +205,22 @@ function App() {
     if (!selectedRoot) return [];
     return events
       .filter((event) => rootTaskId(event.task_id) === selectedRoot)
-      .filter((event) => !selectedAgent || event.agent === selectedAgent || event.target === selectedAgent)
       .sort((a, b) => eventTime(a) - eventTime(b));
-  }, [events, selected, selectedAgent]);
+  }, [events, selected]);
+  const agentExecutionGroups = useMemo<AgentExecutionGroup[]>(() => {
+    const groups = new Map<string, EventRecord[]>();
+    for (const event of taskEvents) {
+      if (event.type === "task_created") continue;
+      const key = event.agent || event.target || "system";
+      groups.set(key, [...(groups.get(key) || []), event]);
+    }
+    return [...groups.entries()].map(([key, groupEvents]) => ({
+      key,
+      displayName: key === "system" ? "系统" : agents.find((agent) => agent.key === key)?.displayName || key,
+      events: groupEvents.sort((a, b) => eventTime(a) - eventTime(b)),
+      status: agentStatus(groupEvents),
+    }));
+  }, [agents, taskEvents]);
   const inspectorEvents = useMemo(() => selected
     ? taskEvents
     : events
@@ -204,10 +244,6 @@ function App() {
   useEffect(() => {
     let socket: DesktopSocket | null = null;
     let unsubscribe = () => {};
-    setTasks([]);
-    setEvents([]);
-    setSelected("");
-    setSelectedAgent("");
     (async () => {
       if (!window.desktop) {
         setConnection("浏览器预览");
@@ -218,10 +254,11 @@ function App() {
       activeSocket = currentSocket;
       unsubscribe = currentSocket.subscribe((message) => {
         if (message.type === "ready") {
-          setTasks(message.tasks || []);
-          setProjects(message.projects || []);
+          setTasks((current) => mergeTasks(current, message.tasks || []));
+          setProjects((current) => [...new Set([...current, ...(message.projects || [])])].sort());
           setAgents(message.agents || []);
-          setTaskProject(message.project || message.projects?.[0] || "");
+          setTaskProject((current) => current || message.project || message.projects?.[0] || "");
+          setSelected((current) => current || message.tasks?.[0]?.task_id || "");
           setConnection("已连接");
           if (pendingSubmission.current?.projectName === project) {
             const pending = pendingSubmission.current;
@@ -248,7 +285,7 @@ function App() {
               title: message.result.title,
               status: "received",
             };
-            setTasks((current) => [task, ...current.filter((item) => item.task_id !== task.task_id)]);
+            setTasks((current) => mergeTasks(current, [task]));
             setSelected(task.task_id || "");
             setSelectedAgent("");
           }
@@ -288,8 +325,9 @@ function App() {
             if (event.type === "control_applied") {
               lifecycleStatus.control_applied = event.command === "pause" ? "paused" : event.command === "terminate" ? "cancelled" : event.command === "retry" || event.command === "resume" ? "running" : "";
             }
+            const nextStatus = lifecycleStatus[event.type || ""];
             setTasks((current) => current.map((task) => task.task_id === rootId
-              ? { ...task, status_snapshot: { ...(task.status_snapshot || {}), latest_event: event.type, status: lifecycleStatus[event.type || ""] || task.status_snapshot?.status } }
+              ? { ...task, status_snapshot: { ...(task.status_snapshot || {}), latest_event: event.type, ...(nextStatus ? { status: nextStatus } : {}) } }
               : task));
           }
         }
@@ -497,25 +535,34 @@ function App() {
           ) : (
             <div className="conversation-content">
               {taskEvents.length === 0 && <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>}
-              {taskEvents.map((event, index) => {
-                if (event.type === "task_created") {
-                  return <article className="message user-message" key={event.event_id || `request-${index}`}><div className="message-avatar user-avatar">你</div><div className="message-body"><div className="message-author">你 <time>{event.timestamp ? new Date(event.timestamp).toLocaleString() : ""}</time></div><p>{selectedTask.description || event.text || selectedTask.title}</p></div></article>;
-                }
-                const agentName = agents.find((agent) => agent.key === (event.agent || event.target))?.displayName || event.agent || event.target || "项目经理";
-                const summary = event.summary || eventLabels[event.type || ""] || "任务状态已更新";
-                const isError = event.status === "failed" || event.type?.includes("failed") || event.type === "error";
-                return <article className={`message agent-message ${isError ? "message-error" : ""}`} key={event.event_id || `${event.type}-${index}`}>
-                  <div className="message-avatar agent-avatar">{agentName.slice(0, 1)}</div>
-                  <div className="message-body">
-                    <div className="message-author">{agentName}<time>{event.timestamp ? new Date(event.timestamp).toLocaleString() : ""}</time></div>
-                    <p>{summary}</p>
-                    {(event.target || event.tool) && <div className="message-tags">{event.target && <span>分配给 {agents.find((agent) => agent.key === event.target)?.displayName || event.target}</span>}{event.tool && <span>工具 · {event.tool}</span>}</div>}
-                    {event.command && <pre className="event-code">{event.command}</pre>}
-                    {event.file_path && <p className="event-path">文件：{event.file_path}</p>}
-                    {event.error && <p className="event-error">{event.error}</p>}
-                    {typeof event.artifact_count === "number" && event.artifact_count > 0 && <p className="event-artifacts">交付了 {event.artifact_count} 个文件</p>}
-                  </div>
-                </article>;
+              {taskEvents.filter((event) => event.type === "task_created").map((event, index) => <article className="message user-message" key={event.event_id || `request-${index}`}><div className="message-avatar user-avatar">你</div><div className="message-body"><div className="message-author">你 <time>{event.timestamp ? new Date(event.timestamp).toLocaleString() : ""}</time></div><p>{selectedTask.description || event.text || selectedTask.title}</p></div></article>)}
+              {agentExecutionGroups.map((group) => {
+                const taskKey = rootTaskId(selected);
+                const collapsed = Boolean(collapsedByTask[taskKey]?.[group.key]);
+                return <section className="agent-execution-group" key={group.key}>
+                  <button className="agent-execution-group-header" aria-expanded={!collapsed} onClick={() => setCollapsedByTask((current) => ({ ...current, [taskKey]: { ...(current[taskKey] || {}), [group.key]: !collapsed } }))}>
+                    <span className="agent-execution-chevron" aria-hidden="true">{collapsed ? "›" : "⌄"}</span>
+                    <span className="message-avatar agent-avatar">{group.displayName.slice(0, 1)}</span>
+                    <span className="agent-execution-title">{group.displayName}</span>
+                    <span className={`agent-execution-status status-${group.status}`}>{statusLabels[group.status] || group.status}</span>
+                    <span className="agent-execution-count">{group.events.length} 条</span>
+                  </button>
+                  {!collapsed && <div className="agent-execution-events">{group.events.map((event, index) => {
+                    const summary = event.summary || eventLabels[event.type || ""] || "任务状态已更新";
+                    const isError = event.status === "failed" || event.type?.includes("failed") || event.type === "error";
+                    return <article className={`message agent-message agent-execution-event ${isError ? "message-error" : ""}`} key={event.event_id || `${event.type}-${index}`}>
+                      <div className="message-body">
+                        <div className="message-author">{eventLabels[event.type || ""] || event.type || "事件"}<time>{event.timestamp ? new Date(event.timestamp).toLocaleString() : ""}</time></div>
+                        <p>{summary}</p>
+                        {(event.target || event.tool) && <div className="message-tags">{event.target && <span>分配给 {agents.find((agent) => agent.key === event.target)?.displayName || event.target}</span>}{event.tool && <span>工具 · {event.tool}</span>}</div>}
+                        {event.command && <pre className="event-code">{event.command}</pre>}
+                        {event.file_path && <p className="event-path">文件：{event.file_path}</p>}
+                        {event.error && <p className="event-error">{event.error}</p>}
+                        {typeof event.artifact_count === "number" && event.artifact_count > 0 && <p className="event-artifacts">交付了 {event.artifact_count} 个文件</p>}
+                      </div>
+                    </article>;
+                  })}</div>}
+                </section>;
               })}
               {selectedTask.status_snapshot?.status === "running" && <div className="running-indicator"><span className="pulse-dot" />Agent 正在执行</div>}
             </div>
