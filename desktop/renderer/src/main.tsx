@@ -23,6 +23,7 @@ type EventRecord = {
   task_id?: string;
   agent?: string;
   target?: string;
+  from?: string;
   project_name?: string;
   timestamp?: string;
   title?: string;
@@ -54,7 +55,7 @@ type DesktopSocket = {
   subscribe: (listener: (message: DesktopMessage) => void) => () => void;
   close: () => void;
 };
-type InspectorView = "activity" | "settings" | "project";
+type WorkspaceView = "conversation" | "agent" | "project" | "settings";
 type PendingSubmission = { projectName: string; title: string; description: string };
 type ControlCommand = "pause" | "resume" | "terminate" | "retry";
 let activeSocket: DesktopSocket | null = null;
@@ -66,6 +67,7 @@ declare global {
       credentials?: { list: () => Promise<string[]>; set: (key: string, value: string) => Promise<unknown> };
       restartGateway?: () => Promise<{ restarted: boolean }>;
       selectDirectory?: () => Promise<string>;
+      openFile?: (filePath: string, projectName?: string) => Promise<{ opened: boolean; error?: string }>;
       quit?: () => Promise<unknown>;
     };
   }
@@ -156,12 +158,44 @@ function mergeTasks(previous: Task[], incoming: Task[]) {
   return [...byId.values()];
 }
 
+type ToolExecution = {
+  tool: string;
+  events: EventRecord[];
+};
+type AgentExecutionItem =
+  | { kind: "event"; event: EventRecord }
+  | { kind: "tool"; execution: ToolExecution };
 type AgentExecutionGroup = {
   key: string;
   displayName: string;
   events: EventRecord[];
+  items: AgentExecutionItem[];
   status: string;
 };
+
+const toolEventTypes = new Set(["tool_call", "tool_result", "test_started", "test_result", "file_change", "error"]);
+
+function groupToolExecutions(events: EventRecord[]) {
+  const items: AgentExecutionItem[] = [];
+  let current: ToolExecution | null = null;
+  const flush = () => {
+    if (current) items.push({ kind: "tool", execution: current });
+    current = null;
+  };
+  for (const event of events) {
+    if (event.type === "tool_call") {
+      flush();
+      current = { tool: event.tool || "工具", events: [event] };
+    } else if (toolEventTypes.has(event.type || "") && current && (!event.tool || event.tool === current.tool)) {
+      current.events.push(event);
+    } else {
+      flush();
+      items.push({ kind: "event", event });
+    }
+  }
+  flush();
+  return items;
+}
 
 function agentStatus(events: EventRecord[]) {
   const latest = [...events].sort((a, b) => eventTime(b) - eventTime(a))[0];
@@ -170,6 +204,12 @@ function agentStatus(events: EventRecord[]) {
   if (["task_hold", "approval_required"].includes(latest.type || "")) return latest.type === "task_hold" ? "paused" : "waiting";
   if (["task_completed", "task_settle", "agent_finished", "delivery_received"].includes(latest.type || "")) return "completed";
   return "running";
+}
+
+function toolExecutionStatus(events: EventRecord[]) {
+  if (events.some((event) => event.status === "failed" || event.type?.includes("failed") || event.type === "error")) return "failed";
+  if (events.some((event) => event.status === "running" || event.type === "tool_call" || event.type === "test_started")) return "running";
+  return "completed";
 }
 
 function App() {
@@ -185,8 +225,8 @@ function App() {
   const [selectedAgent, setSelectedAgent] = useState("");
   const [connection, setConnection] = useState("连接中");
   const [notice, setNotice] = useState("");
-  const [inspector, setInspector] = useState<InspectorView>("activity");
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("conversation");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [credentialKey, setCredentialKey] = useState<string>(credentialOptions[0][0]);
   const [credentialValue, setCredentialValue] = useState("");
   const [configuredCredentials, setConfiguredCredentials] = useState<string[]>([]);
@@ -200,6 +240,7 @@ function App() {
   const [collapsedByTask, setCollapsedByTask] = useState<Record<string, Record<string, boolean>>>({});
   const pendingSubmission = useRef<PendingSubmission | null>(null);
   const selectedTask = useMemo(() => tasks.find((task) => task.task_id === selected), [tasks, selected]);
+  const visibleTasks = useMemo(() => project ? tasks.filter((task) => task.project_name === project) : tasks, [tasks, project]);
   const taskEvents = useMemo(() => {
     const selectedRoot = rootTaskId(selected);
     if (!selectedRoot) return [];
@@ -209,23 +250,31 @@ function App() {
   }, [events, selected]);
   const agentExecutionGroups = useMemo<AgentExecutionGroup[]>(() => {
     const groups = new Map<string, EventRecord[]>();
+    let lastOwner = "project_manager";
     for (const event of taskEvents) {
       if (event.type === "task_created") continue;
-      const key = event.agent || event.target || "system";
-      groups.set(key, [...(groups.get(key) || []), event]);
+      const key = event.type?.startsWith("dispatch_")
+        ? event.from || event.agent || event.target || lastOwner
+        : event.agent || event.target || event.from || lastOwner;
+      lastOwner = key || "project_manager";
+      groups.set(lastOwner, [...(groups.get(lastOwner) || []), event]);
     }
-    return [...groups.entries()].map(([key, groupEvents]) => ({
-      key,
-      displayName: key === "system" ? "系统" : agents.find((agent) => agent.key === key)?.displayName || key,
-      events: groupEvents.sort((a, b) => eventTime(a) - eventTime(b)),
-      status: agentStatus(groupEvents),
-    }));
+    return [...groups.entries()].map(([key, groupEvents]) => {
+      const sortedEvents = groupEvents.sort((a, b) => eventTime(a) - eventTime(b));
+      return {
+        key,
+        displayName: agents.find((agent) => agent.key === key)?.displayName || key,
+        events: sortedEvents,
+        items: groupToolExecutions(sortedEvents),
+        status: agentStatus(sortedEvents),
+      };
+    });
   }, [agents, taskEvents]);
-  const inspectorEvents = useMemo(() => selected
-    ? taskEvents
-    : events
+  const inspectorEvents = useMemo(() => workspaceView === "agent" || !selected
+    ? events
       .filter((event) => (!project || event.project_name === project) && (!selectedAgent || event.agent === selectedAgent || event.target === selectedAgent))
-      .sort((a, b) => eventTime(a) - eventTime(b)), [events, project, selected, selectedAgent, taskEvents]);
+      .sort((a, b) => eventTime(a) - eventTime(b))
+    : taskEvents, [events, project, selected, selectedAgent, taskEvents, workspaceView]);
   const agentCards = useMemo(() => agents
     .filter((agent) => agent.enabled !== false)
     .map((agent) => {
@@ -351,7 +400,7 @@ function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        openNewTask();
+        openNewProjectConversation();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -392,8 +441,7 @@ function App() {
   const openNewTask = () => {
     setSelected("");
     setSelectedAgent("");
-    setInspectorOpen(false);
-    setInspector("activity");
+    setWorkspaceView("conversation");
     setTaskProject(project || taskProject || projects[0] || "");
     setTitle("");
     setDescription("");
@@ -404,6 +452,22 @@ function App() {
     setProjectNameInput("");
     setProjectPathInput("");
     setProjectModalOpen(true);
+    setNotice("");
+  };
+
+  const openNewProjectConversation = () => {
+    const selectedProject = project || taskProject || projects[0] || "";
+    if (!selectedProject) {
+      setNotice("请先选择或新建一个项目");
+      setWorkspaceView("project");
+      return;
+    }
+    setSelected("");
+    setSelectedAgent("");
+    setWorkspaceView("conversation");
+    setTaskProject(selectedProject);
+    setTitle("");
+    setDescription("");
     setNotice("");
   };
 
@@ -472,27 +536,45 @@ function App() {
   };
 
   const statusClass = connection === "已连接" ? "connected" : connection === "连接失败" ? "failed" : "pending";
-  const showSettings = () => {
-    setInspector("settings");
-    setInspectorOpen(true);
+  const openEventFile = async (event: EventRecord) => {
+    if (!event.file_path || !window.desktop?.openFile) return;
+    const result = await window.desktop.openFile(event.file_path, event.project_name || selectedTask?.project_name || project);
+    if (!result.opened) setNotice(`文件无法打开：${result.error || event.file_path}`);
+  };
+  const renderExecutionEvent = (event: EventRecord, index: number) => {
+    const summary = event.summary || eventLabels[event.type || ""] || "任务状态已更新";
+    const isError = event.status === "failed" || event.type?.includes("failed") || event.type === "error";
+    return <article className={`message agent-message agent-execution-event ${isError ? "message-error" : ""}`} key={event.event_id || `${event.type}-${index}`}>
+      <div className="message-body">
+        <div className="message-author">{eventLabels[event.type || ""] || event.type || "事件"}<time>{event.timestamp ? new Date(event.timestamp).toLocaleString() : ""}</time></div>
+        <p>{summary}</p>
+        {(event.target || event.tool) && <div className="message-tags">{event.target && <span>分配给 {agents.find((agent) => agent.key === event.target)?.displayName || event.target}</span>}{event.tool && <span>工具 · {event.tool}</span>}</div>}
+        {event.command && <pre className="event-code">{event.command}</pre>}
+        {event.file_path && <p className="event-path">文件：<a href="#open-file" onClick={(clickEvent) => { clickEvent.preventDefault(); void openEventFile(event); }} title="打开对应文件">{event.file_path}</a></p>}
+        {event.error && <p className="event-error">{event.error}</p>}
+        {typeof event.artifact_count === "number" && event.artifact_count > 0 && <p className="event-artifacts">交付了 {event.artifact_count} 个文件</p>}
+      </div>
+    </article>;
   };
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       <aside className="sidebar" aria-label="项目和历史">
-        <div className="brand-row"><span className="brand-mark">A</span><span>Agent 工作台</span><button className="icon-button sidebar-collapse" aria-label="收起侧栏" title="收起侧栏">‹</button></div>
-        <button className="new-task-button" onClick={openNewTask}><span>＋</span> 新建任务 <kbd>Ctrl K</kbd></button>
-        <label className="project-picker"><span>当前项目</span><select aria-label="选择项目" value={project} onChange={(event) => setProject(event.target.value)}><option value="">全部项目</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+        <div className="brand-row"><span className="brand-mark">A</span><span className="brand-name">Agent 工作台</span><button className="icon-button sidebar-collapse" aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>{sidebarCollapsed ? "›" : "‹"}</button></div>
+        <div className="sidebar-create-actions">
+          <button className="project-action-button" onClick={openNewProject} title="新建项目"><span>＋</span><span className="sidebar-label">新建项目</span></button>
+          <button className="project-action-button" onClick={openNewProjectConversation} title="新建项目对话"><span>＋</span><span className="sidebar-label">新建项目对话</span></button>
+        </div>
+        <label className="project-picker"><span className="sidebar-label">当前项目</span><select aria-label="选择项目" value={project} onChange={(event) => { setProject(event.target.value); setSelected(""); setSelectedAgent(""); setTaskProject(event.target.value); setWorkspaceView("conversation"); }}><option value="">全部项目</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
         <div className="sidebar-section-heading"><span>最近任务</span><button className="icon-button" aria-label="刷新任务" title="刷新任务" onClick={() => setProject((current) => current)}>↻</button></div>
         <nav className="task-nav" aria-label="最近任务">
-          {tasks.length === 0 ? <div className="sidebar-empty">暂无历史任务</div> : tasks.map((task) => (
-            <button key={task.task_id} className={`nav-task ${task.task_id === selected ? "is-selected" : ""}`} onClick={() => { setSelected(task.task_id || ""); setSelectedAgent(""); setInspectorOpen(false); }}>
-              <span className="nav-task-title">{task.title || task.task_id || "未命名任务"}</span>
+          {visibleTasks.length === 0 ? <div className="sidebar-empty">{project ? "当前项目暂无任务" : "暂无历史任务"}</div> : visibleTasks.map((task) => (
+            <button key={task.task_id} className={`nav-task ${task.task_id === selected ? "is-selected" : ""}`} onClick={() => { setSelected(task.task_id || ""); setSelectedAgent(""); setWorkspaceView("conversation"); }} title={task.title || task.task_id || "未命名任务"}>
+              <span className="nav-task-icon">{(task.title || task.task_id || "A").slice(0, 1).toUpperCase()}</span><span className="nav-task-title">{task.title || task.task_id || "未命名任务"}</span>
               <span className="nav-task-meta"><span>{task.project_name || "未归属项目"}</span><span className={`status-dot status-${task.status_snapshot?.status || task.status || "received"}`} />{taskStatus(task)}</span>
             </button>
           ))}
         </nav>
-        <div className="sidebar-project-actions"><button className="project-action-button" onClick={openNewProject}>＋ 新建项目</button>{project && <button className="project-action-button" onClick={() => { openNewTask(); setProject(project); }}>＋ 当前项目新建对话</button>}</div>
         {selectedTask && <div className="sidebar-task-actions">
           <div className="sidebar-task-actions-heading"><span>当前任务</span><span className={`task-state state-${selectedTask.status_snapshot?.status || selectedTask.status || "received"}`}><i />{taskStatus(selectedTask)}</span></div>
           <div className="sidebar-task-actions-buttons">
@@ -501,22 +583,22 @@ function App() {
             {(selectedTask.status_snapshot?.status || selectedTask.status) === "failed" && <button onClick={() => sendControl("retry")} disabled={pendingCommand !== null}>{pendingCommand === "retry" ? "重试中…" : "重试"}</button>}
             <button className="sidebar-terminate" onClick={() => sendControl("terminate")} disabled={pendingCommand !== null || ["cancelled", "completed", "failed"].includes(selectedTask.status_snapshot?.status || selectedTask.status || "")}>{pendingCommand === "terminate" ? "终止中…" : "终止"}</button>
           </div>
-          <button className="sidebar-observe-button" onClick={() => { setInspector("activity"); setInspectorOpen((open) => !open); }}>打开执行观察</button>
+          <button className="sidebar-observe-button" onClick={() => { setWorkspaceView("conversation"); }}>打开执行观察</button>
         </div>}
         <div className="sidebar-bottom">
           <div className={`connection-line ${statusClass}`}><span className="connection-dot" />{connection}</div>
-          {project && <button className="project-context-strip" onClick={() => { setInspector("project"); setInspectorOpen(true); }} aria-label="打开项目上下文"><span className="project-context-title"><strong>{project}</strong><span>当前项目</span></span><span className="project-context-meta"><span>{projectStats.taskCount} 个任务</span><span>{projectStats.eventCount} 条事件</span></span><span className="project-context-isolated">上下文已隔离 · 管理项目</span></button>}
-          {agentCards.length > 0 && <div className="agent-card-list"><div className="sidebar-section-heading"><span>Agent 状态</span><span className="agent-count">{agentCards.length}</span></div>{agentCards.map(({ agent, status, latest, taskCount }) => <button key={agent.key} className={`agent-card ${selectedAgent === agent.key ? "is-selected" : ""}`} onClick={() => { setSelected(""); setSelectedAgent(agent.key); setInspector("activity"); setInspectorOpen(true); }}><span className={`agent-card-dot agent-card-${status}`} /><span className="agent-card-body"><span className="agent-card-title"><strong>{agent.displayName || agent.key}</strong><span>{statusLabels[status] || status}</span></span><span className="agent-card-recent">{latest?.summary || eventLabels[latest?.type || ""] || "暂无结构化事件"}</span><span className="agent-card-meta">{taskCount} 个任务{latest?.timestamp ? ` · ${new Date(latest.timestamp).toLocaleTimeString()}` : ""}</span></span><span className="agent-card-open">观察</span></button>)}</div>}
-          {agents.length > 0 && <div className="agent-nav-block"><div className="sidebar-section-heading"><span>Agent</span></div>{agents.filter((agent) => agent.enabled !== false).map((agent) => <button key={agent.key} className={`agent-nav ${selectedAgent === agent.key ? "is-selected" : ""}`} onClick={() => { setSelected(""); setSelectedAgent(agent.key); setInspector("activity"); setInspectorOpen(true); }}>{agent.displayName || agent.key}<span>观察</span></button>)}</div>}
-          <button className="settings-nav" onClick={showSettings}><span>⚙</span> 运行设置</button>
+          {project && <button className="project-context-strip" onClick={() => { setWorkspaceView("project"); setSelected(""); setSelectedAgent(""); }} aria-label="打开项目上下文" title="项目上下文"><span className="project-context-icon">⌂</span><span className="project-context-details"><span className="project-context-title"><strong>{project}</strong><span>当前项目</span></span><span className="project-context-meta"><span>{projectStats.taskCount} 个任务</span><span>{projectStats.eventCount} 条事件</span></span><span className="project-context-isolated">上下文已隔离 · 管理项目</span></span></button>}
+          {agents.length > 0 && <div className="agent-nav-block"><div className="sidebar-section-heading"><span>Agent</span></div>{agents.filter((agent) => agent.enabled !== false).map((agent) => <button key={agent.key} className={`agent-nav ${selectedAgent === agent.key ? "is-selected" : ""}`} onClick={() => { setSelectedAgent(agent.key); setWorkspaceView("agent"); }} title={`${agent.displayName || agent.key} · 观察`}>{agent.displayName || agent.key}<span>观察</span></button>)}</div>}
+          <button className="settings-nav" onClick={showSettings} title="运行设置"><span>⚙</span><span className="sidebar-label">运行设置</span></button>
         </div>
       </aside>
 
       <section className="workspace">
         <header className="workspace-header">
           <div className="conversation-heading">
-            <h1>{selectedTask?.title || (selected ? selected : "新建任务")}</h1>
-            <span className="header-project">{selectedTask?.project_name || project || "选择项目"}</span>
+            {workspaceView !== "conversation" && <button className="workspace-back-button" onClick={() => { setWorkspaceView("conversation"); setSelectedAgent(""); }} aria-label="返回对话" title="返回对话">‹ <span>返回对话</span></button>}
+            <div className="conversation-heading-copy"><h1>{workspaceView === "settings" ? "运行设置" : workspaceView === "project" ? "项目上下文" : workspaceView === "agent" ? `${agents.find((agent) => agent.key === selectedAgent)?.displayName || selectedAgent || "Agent"} · 执行观察` : selectedTask?.title || (selected ? selected : "新建任务")}</h1>
+            <span className="header-project">{workspaceView === "settings" ? "管理本机连接与凭据" : workspaceView === "project" ? project || "全部项目" : selectedTask?.project_name || project || "选择项目"}</span></div>
           </div>
         </header>
 
@@ -524,7 +606,12 @@ function App() {
         {connection === "连接失败" && <div className="connection-alert" role="alert"><div><strong>本地任务服务暂不可用</strong><span>检查网关是否运行，或打开运行设置重新启动。</span></div><button className="quiet-button" onClick={showSettings}>打开运行设置</button></div>}
         {!hasManagerCredentials && connection === "已连接" && <div className="setup-hint"><span>尚未配置项目经理凭据，任务暂时无法开始。</span><button onClick={showSettings}>配置凭据</button></div>}
 
-        <div className="conversation-scroll" key={selected || "empty"}>
+        {workspaceView === "conversation" && agentCards.length > 0 && <section className="central-agent-status" aria-label="Agent 状态"><div className="central-agent-status-heading"><span>Agent 状态</span><span>{agentCards.length} 个 Agent</span></div><div className="central-agent-status-list">{agentCards.map(({ agent, status, latest, taskCount }) => <button key={agent.key} className={`agent-card ${selectedAgent === agent.key ? "is-selected" : ""}`} onClick={() => { setSelectedAgent(agent.key); setWorkspaceView("agent"); }} title={`${agent.displayName || agent.key} · 观察`}><span className={`agent-card-dot agent-card-${status}`} /><span className="agent-card-body"><span className="agent-card-title"><strong>{agent.displayName || agent.key}</strong><span>{statusLabels[status] || status}</span></span><span className="agent-card-recent">{latest?.summary || eventLabels[latest?.type || ""] || "暂无结构化事件"}</span><span className="agent-card-meta">{taskCount} 个任务{latest?.timestamp ? ` · ${new Date(latest.timestamp).toLocaleTimeString()}` : ""}</span></span><span className="agent-card-open">观察</span></button>)}</div></section>}
+
+        {workspaceView === "settings" && <div className="central-view settings-content"><div className="settings-intro"><span className="settings-icon">⚙</span><div><strong>安全存储</strong><p>凭据使用 Windows 系统加密保存在本机，不写入项目日志。</p></div></div><form className="settings-form" onSubmit={saveCredential}><label>凭据类型<select value={credentialKey} onChange={(event) => setCredentialKey(event.target.value)}>{credentialOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>凭据值<input type="password" value={credentialValue} onChange={(event) => setCredentialValue(event.target.value)} placeholder={configuredCredentials.includes(credentialKey) ? "已配置，输入新值以覆盖" : "粘贴凭据"} /></label><button className="primary-button" type="submit">安全保存</button></form><div className="configured-list"><h3>已配置凭据</h3>{configuredCredentials.length ? configuredCredentials.map((key) => <div className="configured-item" key={key}><span>{credentialOptions.find(([name]) => name === key)?.[1] || key}</span><span className="configured-check">已保存</span></div>) : <p>尚未保存凭据</p>}</div><div className="gateway-box"><div><strong>本地任务服务</strong><p>保存凭据后重启服务，使变更生效。</p></div><button className="quiet-button" onClick={async () => { try { await window.desktop?.restartGateway?.(); setNotice("本地任务服务已重启"); } catch (error) { setNotice(`服务重启失败：${String(error)}`); } }}>重启服务</button></div></div>}
+        {workspaceView === "project" && <div className="central-view settings-content"><div className="project-drawer-summary"><span>当前工作项目</span><strong>{project || "全部项目"}</strong><small>仅查看并操作此项目的任务与事件；Agent 上下文彼此隔离。</small></div><label className="project-drawer-picker">切换项目<select value={project} onChange={(event) => { setProject(event.target.value); setSelected(""); setSelectedAgent(""); }}><option value="">全部项目</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><div className="project-drawer-stats"><div><strong>{projectStats.taskCount}</strong><span>任务</span></div><div><strong>{projectStats.eventCount}</strong><span>事件</span></div></div><div className="configured-list"><h3>项目历史</h3><button className="project-action-button" onClick={() => projectCommand("export_project")} disabled={Boolean(pendingProjectCommand)}>{pendingProjectCommand === "export_project" ? "正在导出…" : "导出项目历史"}</button><button className="project-action-button" onClick={() => projectCommand("cleanup_history")} disabled={Boolean(pendingProjectCommand)}>{pendingProjectCommand === "cleanup_history" ? "正在归档…" : "归档较早历史"}</button><button className="project-action-button" onClick={() => projectCommand("restore_history")} disabled={Boolean(pendingProjectCommand)}>{pendingProjectCommand === "restore_history" ? "正在恢复…" : "恢复归档历史"}</button></div></div>}
+        {workspaceView === "agent" && <div className="conversation-scroll central-trace-scroll"><div className="central-view inspector-content"><div className="task-controls">{selectedAgent ? <div><strong>Agent 时间线</strong><span>{agents.find((agent) => agent.key === selectedAgent)?.displayName || selectedAgent}</span></div> : <div><strong>Agent 时间线</strong><span>选择一个 Agent 查看事件</span></div>}</div><div className="trace-heading"><h3>结构化事件</h3><span>{inspectorEvents.length} 条记录</span></div>{inspectorEvents.map((event, index) => <div className="trace-row" key={event.event_id || `trace-${index}`}><span className={`trace-dot ${event.status === "failed" ? "trace-failed" : ""}`} /><div><strong>{eventLabels[event.type || ""] || event.type || "事件"}</strong><p>{event.agent || event.target || "系统"}{event.tool ? ` · ${event.tool}` : ""}</p>{event.summary && <small>{event.summary}</small>}{event.file_path && <small className="trace-file">文件：<a href="#open-file" onClick={(clickEvent) => { clickEvent.preventDefault(); void openEventFile(event); }} title="打开对应文件">{event.file_path}</a></small>}{event.error && <small className="event-error">{event.error}</small>}<time>{event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : ""}</time></div></div>)}</div></div>}
+        {workspaceView === "conversation" && <div className="conversation-scroll" key={selected || "empty"}>
           {!selectedTask ? (
             <div className="welcome-state">
               <span className="welcome-mark">A</span>
@@ -547,48 +634,28 @@ function App() {
                     <span className={`agent-execution-status status-${group.status}`}>{statusLabels[group.status] || group.status}</span>
                     <span className="agent-execution-count">{group.events.length} 条</span>
                   </button>
-                  {!collapsed && <div className="agent-execution-events">{group.events.map((event, index) => {
-                    const summary = event.summary || eventLabels[event.type || ""] || "任务状态已更新";
-                    const isError = event.status === "failed" || event.type?.includes("failed") || event.type === "error";
-                    return <article className={`message agent-message agent-execution-event ${isError ? "message-error" : ""}`} key={event.event_id || `${event.type}-${index}`}>
-                      <div className="message-body">
-                        <div className="message-author">{eventLabels[event.type || ""] || event.type || "事件"}<time>{event.timestamp ? new Date(event.timestamp).toLocaleString() : ""}</time></div>
-                        <p>{summary}</p>
-                        {(event.target || event.tool) && <div className="message-tags">{event.target && <span>分配给 {agents.find((agent) => agent.key === event.target)?.displayName || event.target}</span>}{event.tool && <span>工具 · {event.tool}</span>}</div>}
-                        {event.command && <pre className="event-code">{event.command}</pre>}
-                        {event.file_path && <p className="event-path">文件：{event.file_path}</p>}
-                        {event.error && <p className="event-error">{event.error}</p>}
-                        {typeof event.artifact_count === "number" && event.artifact_count > 0 && <p className="event-artifacts">交付了 {event.artifact_count} 个文件</p>}
-                      </div>
-                    </article>;
-                  })}</div>}
+                  {!collapsed && <div className="agent-execution-events">{group.items.map((item, index) => item.kind === "event"
+                    ? renderExecutionEvent(item.event, index)
+                    : <details className={`tool-execution tool-${toolExecutionStatus(item.execution.events)}`} key={`tool-${item.execution.events[0]?.event_id || index}`}>
+                      <summary><span className="tool-execution-chevron">›</span><span className="tool-execution-title">{item.execution.tool}</span><span className="tool-execution-status">{statusLabels[toolExecutionStatus(item.execution.events)] || toolExecutionStatus(item.execution.events)}</span><span className="tool-execution-count">{item.execution.events.length} 个步骤</span></summary>
+                      <div className="tool-execution-content">{item.execution.events.map((event, eventIndex) => renderExecutionEvent(event, eventIndex))}</div>
+                    </details>)}</div>}
                 </section>;
               })}
               {selectedTask.status_snapshot?.status === "running" && <div className="running-indicator"><span className="pulse-dot" />Agent 正在执行</div>}
             </div>
           )}
-        </div>
+        </div>}
 
-        <div className="composer-wrap">
+        {workspaceView === "conversation" && <div className="composer-wrap">
           <form className="composer" onSubmit={submitTask}>
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder={selectedTask ? "继续描述下一个任务…" : "描述你想完成的任务…"} rows={3} aria-label="任务描述" />
             <div className="composer-send-row"><button className="send-button" type="submit" disabled={!description.trim() || !taskProject.trim() || connection !== "已连接"} aria-label="提交任务" title="提交新任务">↑</button></div>
           </form>
-        </div>
+        </div>}
       </section>
 
       {projectModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !creatingProject) setProjectModalOpen(false); }}><section className="project-modal" role="dialog" aria-modal="true" aria-labelledby="new-project-title"><header><div><h2 id="new-project-title">新建项目</h2><p>项目上下文和任务历史会按项目隔离。</p></div><button className="icon-button" aria-label="关闭" onClick={() => setProjectModalOpen(false)} disabled={creatingProject}>×</button></header><form onSubmit={createProject}><label>项目名<input autoFocus value={projectNameInput} onChange={(event) => setProjectNameInput(event.target.value)} placeholder="例如：customer-portal" disabled={creatingProject} /></label><label>项目存储路径<span className="path-input-row"><input value={projectPathInput} onChange={(event) => setProjectPathInput(event.target.value)} placeholder="不填则使用工作区目录" disabled={creatingProject} /><button type="button" className="quiet-button" onClick={chooseProjectDirectory} disabled={creatingProject}>选择目录</button></span></label><div className="modal-actions"><button type="button" className="quiet-button" onClick={() => setProjectModalOpen(false)} disabled={creatingProject}>取消</button><button type="submit" className="primary-button" disabled={creatingProject}>{creatingProject ? "创建中…" : "创建项目"}</button></div></form></section></div>}
-      {inspectorOpen && <>
-        <button className="inspector-backdrop" aria-label="关闭侧栏" onClick={() => setInspectorOpen(false)} />
-        <aside className="inspector" aria-label={inspector === "settings" ? "运行设置" : "执行观察"}>
-          <header className="inspector-header"><div><h2>{inspector === "settings" ? "运行设置" : inspector === "project" ? "项目上下文" : selectedAgent ? `${agents.find((agent) => agent.key === selectedAgent)?.displayName || selectedAgent} · 观察` : "执行过程"}</h2><p>{inspector === "settings" ? "管理本机连接凭据" : inspector === "project" ? project || "选择一个项目" : selectedTask?.project_name || project || "选择任务查看执行状态"}</p></div><button className="icon-button" aria-label="关闭观察栏" onClick={() => setInspectorOpen(false)}>×</button></header>
-          {inspector === "settings" ? <div className="settings-content"><div className="settings-intro"><span className="settings-icon">⚙</span><div><strong>安全存储</strong><p>凭据使用 Windows 系统加密保存在本机，不写入项目日志。</p></div></div><form className="settings-form" onSubmit={saveCredential}><label>凭据类型<select value={credentialKey} onChange={(event) => setCredentialKey(event.target.value)}>{credentialOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>凭据值<input type="password" value={credentialValue} onChange={(event) => setCredentialValue(event.target.value)} placeholder={configuredCredentials.includes(credentialKey) ? "已配置，输入新值以覆盖" : "粘贴凭据"} /></label><button className="primary-button" type="submit">安全保存</button></form><div className="configured-list"><h3>已配置凭据</h3>{configuredCredentials.length ? configuredCredentials.map((key) => <div className="configured-item" key={key}><span>{credentialOptions.find(([name]) => name === key)?.[1] || key}</span><span className="configured-check">已保存</span></div>) : <p>尚未保存凭据</p>}</div><div className="gateway-box"><div><strong>本地任务服务</strong><p>保存凭据后重启服务，使变更生效。</p></div><button className="quiet-button" onClick={async () => { try { await window.desktop?.restartGateway?.(); setNotice("本地任务服务已重启"); } catch (error) { setNotice(`服务重启失败：${String(error)}`); } }}>重启服务</button></div></div> : inspector === "project" ? <div className="settings-content"><div className="project-drawer-summary"><span>当前工作项目</span><strong>{project || "全部项目"}</strong><small>仅查看并操作此项目的任务与事件；Agent 上下文彼此隔离。</small></div><label className="project-drawer-picker">切换项目<select value={project} onChange={(event) => { setProject(event.target.value); setSelected(""); setSelectedAgent(""); setInspectorOpen(false); }}><option value="">全部项目</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><div className="project-drawer-stats"><div><strong>{projectStats.taskCount}</strong><span>任务</span></div><div><strong>{projectStats.eventCount}</strong><span>事件</span></div></div><div className="configured-list"><h3>项目历史</h3><button className="project-action-button" onClick={() => projectCommand("export_project")} disabled={Boolean(pendingProjectCommand)}>{pendingProjectCommand === "export_project" ? "正在导出…" : "导出项目历史"}</button><button className="project-action-button" onClick={() => projectCommand("cleanup_history")} disabled={Boolean(pendingProjectCommand)}>{pendingProjectCommand === "cleanup_history" ? "正在归档…" : "归档较早历史"}</button><button className="project-action-button" onClick={() => projectCommand("restore_history")} disabled={Boolean(pendingProjectCommand)}>{pendingProjectCommand === "restore_history" ? "正在恢复…" : "恢复归档历史"}</button></div></div> : <div className="inspector-content">
-            {selectedTask ? <div className="task-controls"><div><strong>任务控制</strong><span>{taskStatus(selectedTask)}</span></div><div className="control-buttons"><button onClick={() => send("pause")} disabled={selectedTask.status_snapshot?.status === "paused"}>暂停</button><button onClick={() => send("resume")} disabled={selectedTask.status_snapshot?.status !== "paused"}>继续</button><button className="terminate-button" onClick={() => send("terminate")} disabled={["cancelled", "completed", "failed"].includes(selectedTask.status_snapshot?.status || selectedTask.status || "")}>终止</button></div></div> : <div className="inspector-empty">选择一个任务，查看 Agent 执行阶段和结构化事件。</div>}
-            <div className="trace-heading"><h3>{selectedAgent ? "Agent 时间线" : "任务事件"}</h3><span>{inspectorEvents.length} 条记录</span></div>
-            {inspectorEvents.map((event, index) => <div className="trace-row" key={event.event_id || `trace-${index}`}><span className={`trace-dot ${event.status === "failed" ? "trace-failed" : ""}`} /><div><strong>{eventLabels[event.type || ""] || event.type || "事件"}</strong><p>{event.agent || event.target || "系统"}{event.tool ? ` · ${event.tool}` : ""}</p>{event.summary && <small>{event.summary}</small>}{event.error && <small className="event-error">{event.error}</small>}<time>{event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : ""}</time></div></div>)}
-          </div>}
-        </aside>
-      </>}
     </main>
   );
 }

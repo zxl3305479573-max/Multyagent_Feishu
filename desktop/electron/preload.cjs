@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("desktop", {
   credentials: { list: () => ipcRenderer.invoke("desktop:credentials:list"), set: (key, value) => ipcRenderer.invoke("desktop:credentials:set", key, value), remove: (key) => ipcRenderer.invoke("desktop:credentials:remove", key) },
   restartGateway: () => ipcRenderer.invoke("desktop:gateway:restart"),
   selectDirectory: () => ipcRenderer.invoke("desktop:select-directory"),
+  openFile: (filePath, projectName) => ipcRenderer.invoke("desktop:open-file", filePath, projectName),
   show: () => ipcRenderer.invoke("desktop:window:show"),
   quit: () => ipcRenderer.invoke("desktop:app:quit"),
 });

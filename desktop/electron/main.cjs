@@ -1,6 +1,6 @@
-const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, safeStorage } = require("electron");
-const { join } = require("node:path");
-const { mkdir, readFile } = require("node:fs/promises");
+const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, safeStorage, shell } = require("electron");
+const { join, resolve, relative, isAbsolute } = require("node:path");
+const { mkdir, readFile, access } = require("node:fs/promises");
 const { createCredentialStore } = require("./credential-store.cjs");
 const { createGatewayProcess } = require("./gateway-process.cjs");
 
@@ -106,6 +106,27 @@ async function start() {
   ipcMain.handle("desktop:select-directory", async () => {
     const result = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"] });
     return result.canceled ? "" : (result.filePaths[0] || "");
+  });
+  ipcMain.handle("desktop:open-file", async (_event, filePath, projectName) => {
+    const requested = String(filePath || "").trim();
+    const project = String(projectName || "").trim();
+    if (!requested || !/^[a-z][a-z0-9-]{1,63}$/.test(project)) return { opened: false, error: "无效的项目或文件路径" };
+    let projectRoot = join(runtimeRoot, "workspace", project);
+    try {
+      const registry = JSON.parse(await readFile(join(runtimeRoot, "runtime", "projects.json"), "utf8"));
+      const configuredRoot = registry?.projects?.[project]?.storagePath;
+      if (configuredRoot) projectRoot = resolve(String(configuredRoot));
+    } catch {}
+    const candidate = isAbsolute(requested) ? resolve(requested) : resolve(projectRoot, requested);
+    const relativePath = relative(projectRoot, candidate);
+    if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) return { opened: false, error: "文件不在当前项目目录内" };
+    try {
+      await access(candidate);
+      const error = await shell.openPath(candidate);
+      return error ? { opened: false, error } : { opened: true };
+    } catch (error) {
+      return { opened: false, error: String(error?.message || error) };
+    }
   });
   ipcMain.handle("desktop:gateway:restart", async () => { await gateway.restart(await credentials.toEnv()); await waitForGateway(); win?.webContents.reload(); return { restarted: true }; });
   ipcMain.handle("desktop:window:show", () => showWindow());
