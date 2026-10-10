@@ -541,6 +541,11 @@ function App() {
     const result = await window.desktop.openFile(event.file_path, event.project_name || selectedTask?.project_name || project);
     if (!result.opened) setNotice(`文件无法打开：${result.error || event.file_path}`);
   };
+  const showSettings = () => {
+    setWorkspaceView("settings");
+    setSelected("");
+    setSelectedAgent("");
+  };
   const renderExecutionEvent = (event: EventRecord, index: number) => {
     const summary = event.summary || eventLabels[event.type || ""] || "任务状态已更新";
     const isError = event.status === "failed" || event.type?.includes("failed") || event.type === "error";
