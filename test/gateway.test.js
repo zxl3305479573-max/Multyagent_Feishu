@@ -235,7 +235,7 @@ test("状态查询意图只匹配明确的状态或进度询问", () => {
 test("状态查询复用超出普通会话 TTL 的最近根任务，且不创建或启动新任务", async () => {
   _resetForTest("runtime/tasks.gateway.status.test.json");
   try {
-    const task = await createTask({ agentKey: "project_manager", chatId: "c-status", rootKey: "root-status", messageId: "m-old" });
+    await createTask({ agentKey: "project_manager", chatId: "c-status", rootKey: "root-status", messageId: "m-old" });
     const events = [];
     const runs = [];
     const completed = [];

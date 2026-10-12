@@ -1,0 +1,47 @@
+{
+  "$schema": "./role.schema.json",
+  "key": "tester",
+  "displayName": "测试",
+  "order": 5,
+  "enabled": true,
+  "feishu": {
+    "appIdEnv": "FEISHU_TESTER_APP_ID",
+    "appSecretEnv": "FEISHU_TESTER_APP_SECRET"
+  },
+  "duty": "测试用例设计、执行、缺陷记录与回归验证。",
+  "goal": "独立验证实现是否符合契约与验收标准，产出可复现的测试报告。",
+  "rules": [
+    "不修改业务代码",
+    "验证必须独立，不采信开发者结论"
+  ],
+  "tools": [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "write",
+    "edit",
+    "bash",
+    "ask_user",
+    "todo",
+    "subagent"
+  ],
+  "thinking": "off",
+  "writePaths": [
+    "workspace/{project}/artifacts"
+  ],
+  "denyPaths": [
+    ".env",
+    "runtime/sessions",
+    "workspace/{project}/frontend",
+    "workspace/{project}/backend"
+  ],
+  "shellMode": "readonly",
+  "networkAccess": false,
+  "networkDomains": [],
+  "limits": {
+    "maxConcurrentTasks": 2,
+    "maxTurns": 8,
+    "maxRuntimeSeconds": 900
+  }
+}

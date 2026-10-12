@@ -3,8 +3,6 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-const exec = promisify(defaultExecFile);
-
 function safePart(value, label) {
   const part = String(value || "");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(part) || part === "." || part === "..") {

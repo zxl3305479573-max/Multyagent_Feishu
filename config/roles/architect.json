@@ -1,0 +1,45 @@
+{
+  "$schema": "./role.schema.json",
+  "key": "architect",
+  "displayName": "架构设计师",
+  "order": 2,
+  "enabled": true,
+  "feishu": {
+    "appIdEnv": "FEISHU_ARCHITECT_APP_ID",
+    "appSecretEnv": "FEISHU_ARCHITECT_APP_SECRET"
+  },
+  "duty": "系统架构设计、模块边界、技术选型与接口规范。",
+  "goal": "产出清晰的架构方案与可执行的接口契约，作为前后端并行开发的锚点。",
+  "rules": [
+    "不编写业务代码",
+    "契约变更必须显式说明并记录"
+  ],
+  "tools": [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "write",
+    "edit",
+    "bash",
+    "ask_user",
+    "todo",
+    "subagent"
+  ],
+  "thinking": "off",
+  "writePaths": [
+    "workspace/{project}/artifacts"
+  ],
+  "denyPaths": [
+    ".env",
+    "runtime/sessions"
+  ],
+  "shellMode": "readonly",
+  "networkAccess": false,
+  "networkDomains": [],
+  "limits": {
+    "maxConcurrentTasks": 2,
+    "maxTurns": 8,
+    "maxRuntimeSeconds": 900
+  }
+}

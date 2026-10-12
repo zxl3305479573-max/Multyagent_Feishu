@@ -1,6 +1,6 @@
 import test from "node:test";
+import { roleConfig } from "../src/role-config.cjs";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { BOARD_FIELD_SCHEMA, OWNER_LABELS, STAGE_LABELS, STATUS_LABELS } from "../src/domain/bitable-board.js";
 
 test("board column names are Chinese", () => {
@@ -10,9 +10,9 @@ test("board column names are Chinese", () => {
 });
 
 test("owner labels mirror the agent registry display names", async () => {
-  const config = JSON.parse(await readFile(new URL("../config/agents.json", import.meta.url), "utf8"));
+  const config = { agents: roleConfig().agents };
   for (const agent of config.agents) {
-    assert.equal(OWNER_LABELS[agent.key], agent.displayName, `${agent.key} label drifted from agents.json`);
+    assert.equal(OWNER_LABELS[agent.key], agent.displayName, `${agent.key} label drifted from config/roles`);
   }
   assert.equal(Object.keys(OWNER_LABELS).length, config.agents.length);
 });

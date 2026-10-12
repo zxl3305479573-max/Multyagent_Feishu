@@ -6,11 +6,22 @@ import { join } from "node:path";
 import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, createProjectTool, diagramSkillPaths, extractText, mapPiToolEvent, normalizeAssignments, sanitizeAgentReply } from "../src/pi-agent.js";
 import { appendProjectSummary } from "../src/project-summary.js";
 
-test("diagram-design skill 对架构设计师和项目经理启用", () => {
-  assert.deepEqual(diagramSkillPaths("architect"), architectSkillPaths("architect"));
-  assert.ok(diagramSkillPaths("architect").length > 0);
-  assert.ok(diagramSkillPaths("project_manager").length > 0);
-  assert.deepEqual(architectSkillPaths("frontend_developer"), []);
+test("diagram-design skill 对架构设计师和项目经理启用", async () => {
+  const skill = await mkdtemp(join(tmpdir(), "diagram-skill-"));
+  const previous = process.env.PI_DIAGRAM_SKILL_PATH;
+  try {
+    process.env.PI_DIAGRAM_SKILL_PATH = skill;
+    assert.deepEqual(diagramSkillPaths("architect"), [skill]);
+    assert.deepEqual(architectSkillPaths("architect"), [skill]);
+    assert.deepEqual(diagramSkillPaths("project_manager"), [skill]);
+    assert.deepEqual(architectSkillPaths("frontend_developer"), []);
+    process.env.PI_DIAGRAM_SKILL_PATH = join(skill, "missing");
+    assert.ok(!diagramSkillPaths("architect").includes(process.env.PI_DIAGRAM_SKILL_PATH));
+  } finally {
+    if (previous === undefined) delete process.env.PI_DIAGRAM_SKILL_PATH;
+    else process.env.PI_DIAGRAM_SKILL_PATH = previous;
+    await rm(skill, { recursive: true, force: true });
+  }
 });
 
 test("架构设计师提示词声明 diagram-design skill 与现有交付协议", () => {
@@ -29,10 +40,12 @@ test("项目经理提示词允许规划图但保留架构图归属约束", () =>
   assert.match(prompt, /diagram.*belongs to the architect/);
 });
 
-test("项目经理提示词要求最小派发并避免超出需求的交付", () => {
+test("项目经理提示词要求自主判断派发、架构先行并避免超出需求的交付", () => {
   const prompt = buildSystemPrompt({ key: "project_manager", displayName: "项目经理" });
-  assert.match(prompt, /Default to zero downstream assignments/);
-  assert.match(prompt, /never dispatch more than two roles/);
+  assert.match(prompt, /You decide autonomously which roles are needed/);
+  assert.match(prompt, /dispatch `architect` FIRST/);
+  assert.match(prompt, /Skip the architect/);
+  assert.match(prompt, /do not add roles the request does not need/);
   assert.match(prompt, /do not add extra architecture documents/);
 });
 
@@ -115,7 +128,9 @@ test("buildSystemPrompt 注入目标、约束与团队上下文", () => {
   assert.ok(prompt.includes("约束："));
   assert.ok(prompt.includes("团队角色："));
   assert.ok(prompt.includes("前端开发（你）")); // 团队列表标注自己
-  assert.ok(prompt.includes("workspace/frontend")); // 约束里的写入范围
+  assert.ok(prompt.includes("workspace/{project}/frontend")); // 约束里的写入范围与策略层一致
+  const scoped = buildSystemPrompt({ key: "frontend_developer", displayName: "前端开发" }, "student");
+  assert.ok(scoped.includes("只能写入：workspace/student/frontend、workspace/student/artifacts"));
 });
 
 test("buildPrompt 含任务编号与指令，空指令 fallback", () => {
@@ -193,6 +208,7 @@ test("Pi 工具事件映射为命令、文件变化和测试状态，不包含�
   const start = mapPiToolEvent({
     type: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: { command: "npm test" },
   }, context);
+  assert.ok(start.every((event) => event.tool_call_id === "c1"));
   assert.ok(start.some((event) => event.type === "tool_call" && event.command === "npm test"));
   assert.ok(start.some((event) => event.type === "test_started"));
   const result = mapPiToolEvent({

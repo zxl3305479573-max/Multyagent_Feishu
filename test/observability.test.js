@@ -3,7 +3,22 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createEventLogger, projectTask, queryEvents } from "../src/observability.js";
+import { createEventLogger, projectTask, queryEvents, sanitizeLoggedEvent } from "../src/observability.js";
+
+test("delivery metadata preserves file size and redacts descriptions, risks and next steps", () => {
+  const event = sanitizeLoggedEvent({
+    type: "delivery_received",
+    summary: "交付内容".repeat(800),
+    next: "use password=hunter2",
+    risks: ["token=secret-value"],
+    artifact_items: [{ path: "report.md", description: "password=hunter2", type: "md", size: 42, content: "private content" }],
+  });
+  assert.equal(event.artifact_items[0].size, 42);
+  assert.equal(event.artifact_items[0].type, "md");
+  assert.equal("content" in event.artifact_items[0], false);
+  assert.doesNotMatch(JSON.stringify(event), /hunter2|secret-value/);
+  assert.ok(event.summary.length > 2000);
+});
 
 test("event logger writes JSONL and task projection has table fields", async () => {
   const dir = await mkdtemp(join(tmpdir(), "multyagent-events-"));

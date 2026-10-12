@@ -87,7 +87,7 @@ export function createDesktopTaskSubmitter({
         next: "无需后续操作",
         final: false,
       };
-      if (!String(delivery.next || delivery.next_action || "").trim()) delivery.next = delivery.final ? "无需后续操作" : "继续执行当前计划";
+      if (!String(delivery.next || delivery.next_action || "").trim() && delivery.final === true) delivery.next = "无需后续操作";
       await buildValidatedHandoff(delivery, { agentKey: "project_manager", taskId: task.task_id });
       await orchestrator.onTaskCompleted("project_manager", task.task_id, {
         delivery,

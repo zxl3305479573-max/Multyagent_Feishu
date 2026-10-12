@@ -3,8 +3,8 @@
 // The gateway owns task state; the table is a read-only dashboard for humans.
 // Every failure here is logged and swallowed so a Bitable outage can never
 // block an agent run, an approval card, or a downstream dispatch.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readJsonFile, writeFileAtomic } from "./atomic-file.cjs";
+import { forEachEvent } from "./event-log.js";
 import {
   BOARD_FIELD_SCHEMA,
   KEY_FIELD,
@@ -218,26 +218,14 @@ export function createBitableSync({
     if (hydrated) return;
     hydrated = true;
     if (!historyFile) return;
-    let lines;
-    try {
-      lines = (await readFile(historyFile, "utf8")).split(/\r?\n/);
-    } catch {
-      return;
-    }
     let replayed = 0;
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      let event;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        continue;
-      }
+    // 流式逐行重放，内存与日志体积无关。
+    await forEachEvent(historyFile, (event) => {
       const taskId = rootTaskIdFor(event);
-      if (!taskId) continue;
+      if (!taskId) return;
       states.set(taskId, reduceEvent(states.get(taskId) || initialBoardState(taskId), event));
       replayed += 1;
-    }
+    });
     if (replayed) log.info?.(`[bitable] restored ${states.size} task state(s) from ${historyFile}`);
   }
 
@@ -254,9 +242,10 @@ export function createBitableSync({
   async function loadRecords() {
     if (records) return records;
     try {
-      const parsed = JSON.parse(await readFile(storageFile, "utf8"));
+      const parsed = await readJsonFile(storageFile, { fallback: {}, onCorrupt: "backup", log });
       records = parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
+    } catch (error) {
+      log.warn?.(`[bitable] record map unreadable (${error.message}); rows will be re-resolved by task_id`);
       records = {};
     }
     return records;
@@ -264,8 +253,7 @@ export function createBitableSync({
 
   async function saveRecords() {
     try {
-      await mkdir(dirname(storageFile), { recursive: true });
-      await writeFile(storageFile, JSON.stringify(records ?? {}, null, 2));
+      await writeFileAtomic(storageFile, JSON.stringify(records ?? {}, null, 2));
     } catch (error) {
       log.error?.(`[bitable] record map persist failed: ${error.message}`);
     }

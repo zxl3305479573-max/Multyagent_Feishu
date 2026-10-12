@@ -33,8 +33,8 @@ const SECRET_PATTERNS = [
   /\b(?:sk-[A-Za-z0-9_-]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g,
 ];
 
-export function redactTraceText(value) {
-  let text = String(value ?? "").slice(0, 2000);
+export function redactTraceText(value, max = 2000) {
+  let text = String(value ?? "").slice(0, max);
   for (const pattern of SECRET_PATTERNS) text = text.replace(pattern, "$1[REDACTED]");
   return text;
 }

@@ -2,6 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { summarizeTaskEvents } from "../src/task-status.js";
 
+test("child final events preserve root activity until root settlement", () => {
+  const events = [
+    { type: "dispatch_started", task_id: "T-root:tester", target: "tester" },
+    { type: "dispatch_started", task_id: "T-root:auditor", target: "auditor" },
+    { type: "dispatch_completed", task_id: "T-root:tester", target: "tester" },
+    { type: "task_settle", task_id: "T-root:tester" },
+  ];
+  assert.equal(summarizeTaskEvents(events, "T-root").status, "in_progress");
+  assert.deepEqual(summarizeTaskEvents(events, "T-root").active_agents, ["auditor"]);
+  assert.equal(summarizeTaskEvents([...events, { type: "task_settle", task_id: "T-root" }], "T-root").status, "completed");
+});
+
 test("summarizeTaskEvents returns the current lifecycle of a root task and its subtasks", () => {
   const status = summarizeTaskEvents([
     { type: "task_started", task_id: "T-1", chat_id: "chat-1", project_name: "student" },

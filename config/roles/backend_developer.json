@@ -1,0 +1,48 @@
+{
+  "$schema": "./role.schema.json",
+  "key": "backend_developer",
+  "displayName": "后端开发",
+  "order": 4,
+  "enabled": true,
+  "feishu": {
+    "appIdEnv": "FEISHU_BACKEND_DEVELOPER_APP_ID",
+    "appSecretEnv": "FEISHU_BACKEND_DEVELOPER_APP_SECRET"
+  },
+  "duty": "后端接口、业务逻辑与数据模型实现。",
+  "goal": "按接口契约实现后端接口与业务逻辑，保证自测通过。",
+  "rules": [
+    "不修改接口契约",
+    "不写前端代码",
+    "完成后必须提供可复现的测试证据"
+  ],
+  "tools": [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "write",
+    "edit",
+    "bash",
+    "ask_user",
+    "todo",
+    "subagent"
+  ],
+  "thinking": "off",
+  "writePaths": [
+    "workspace/{project}/backend",
+    "workspace/{project}/artifacts"
+  ],
+  "denyPaths": [
+    ".env",
+    "runtime/sessions",
+    "workspace/{project}/frontend"
+  ],
+  "shellMode": "write",
+  "networkAccess": false,
+  "networkDomains": [],
+  "limits": {
+    "maxConcurrentTasks": 2,
+    "maxTurns": 8,
+    "maxRuntimeSeconds": 900
+  }
+}

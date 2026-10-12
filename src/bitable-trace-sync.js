@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readJsonFile, writeFileAtomic } from "./atomic-file.cjs";
+import { forEachEvent } from "./event-log.js";
 import { TRACE_FIELD_SCHEMA, TRACE_KEY_FIELD, sanitizeTraceEvent, toTraceFields } from "./domain/trace.js";
 
 const DEFAULT_MAPPING_FILE = "runtime/bitable-trace-records.json";
@@ -85,6 +85,7 @@ export function createBitableTraceSync({
   const attempts = new Map();
   const stats = { created: 0, updated: 0, failed: 0, skipped: 0, lastError: null };
   let mapping = null;
+  let mappingDirty = false;
   let timer = null;
   let chain = Promise.resolve();
   let hydrated = false;
@@ -97,20 +98,29 @@ export function createBitableTraceSync({
     hydrated = true;
     if (!historyFile) return;
     const records = await loadMapping();
+    const seen = new Set();
+    let total = 0;
     try {
-      const lines = (await readFile(historyFile, "utf8")).split(/\r?\n/);
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = sanitizeTraceEvent(JSON.parse(line));
-          if (event.event_id && event.task_id) {
-            events.set(event.event_id, event);
-            if (!records[event.event_id]?.record_id) dirty.add(event.event_id);
-          }
-        } catch {
+      // 只把尚未同步的事件放进内存；已同步的事件只记下 id，用于裁剪映射表。
+      total = await forEachEvent(historyFile, (raw) => {
+        const event = sanitizeTraceEvent(raw);
+        if (!event.event_id || !event.task_id) return;
+        seen.add(event.event_id);
+        if (!records[event.event_id]?.record_id) {
+          events.set(event.event_id, event);
+          dirty.add(event.event_id);
         }
-      }
+      });
     } catch {
+      return;
+    }
+    // 事件日志轮转后，归档事件的映射不会再被用到，裁剪掉避免映射文件无限增长。
+    if (total > 0) {
+      let pruned = 0;
+      for (const eventId of Object.keys(records)) {
+        if (!seen.has(eventId)) { delete records[eventId]; pruned += 1; }
+      }
+      if (pruned) { mappingDirty = true; await saveMapping(); }
     }
   }
 
@@ -122,17 +132,25 @@ export function createBitableTraceSync({
   async function loadMapping() {
     if (mapping) return mapping;
     try {
-      const value = JSON.parse(await readFile(storageFile, "utf8"));
+      const value = await readJsonFile(storageFile, { fallback: {}, onCorrupt: "backup", log });
       mapping = value && typeof value === "object" ? value : {};
-    } catch {
+    } catch (error) {
+      log.warn?.(`[bitable-trace] mapping unreadable (${error.message}); records will be re-resolved by event_id`);
       mapping = {};
     }
     return mapping;
   }
 
+  // 映射表可能有几千条，每写一条事件都整文件重写代价太高；改为每轮 flush 结束时写一次。
   async function saveMapping() {
-    await mkdir(dirname(storageFile), { recursive: true });
-    await writeFile(storageFile, JSON.stringify(mapping || {}, null, 2));
+    if (!mappingDirty) return;
+    mappingDirty = false;
+    try {
+      await writeFileAtomic(storageFile, JSON.stringify(mapping || {}));
+    } catch (error) {
+      mappingDirty = true;
+      log.error?.(`[bitable-trace] mapping persist failed: ${error.message}`);
+    }
   }
 
   async function findRecordId(eventId) {
@@ -159,6 +177,7 @@ export function createBitableTraceSync({
       if (update.ok) { stats.updated += 1; return; }
       if (!NOT_FOUND.has(update.code)) throw new Error(`trace update rejected: code=${update.code} msg=${update.message}`);
       delete records[eventId];
+      mappingDirty = true;
     }
     recordId = await findRecordId(eventId);
     if (recordId) {
@@ -168,7 +187,7 @@ export function createBitableTraceSync({
       }));
       if (!update.ok) throw new Error(`trace update rejected: code=${update.code} msg=${update.message}`);
       records[eventId] = { record_id: recordId };
-      await saveMapping();
+      mappingDirty = true;
       stats.updated += 1;
       return;
     }
@@ -179,11 +198,19 @@ export function createBitableTraceSync({
     const createdId = create.data?.record?.record_id;
     if (!create.ok || !createdId) throw new Error(`trace create rejected: code=${create.code} msg=${create.message}`);
     records[eventId] = { record_id: createdId };
-    await saveMapping();
+    mappingDirty = true;
     stats.created += 1;
   }
 
   async function flushEvents() {
+    try {
+      await flushPending();
+    } finally {
+      await saveMapping();
+    }
+  }
+
+  async function flushPending() {
     await drain();
     if (networkBackoffUntil > Date.now()) {
       schedule(networkBackoffUntil - Date.now());
@@ -195,6 +222,8 @@ export function createBitableTraceSync({
       const eventId = pending[index];
       try {
         await writeEvent(eventId);
+        // 已写入的事件不再需要留在内存里。
+        events.delete(eventId);
         attempts.delete(eventId);
         networkBackoffUntil = 0;
         networkWarningActive = false;
@@ -213,7 +242,7 @@ export function createBitableTraceSync({
         }
         const count = (attempts.get(eventId) || 0) + 1;
         if (count < maxAttempts) { attempts.set(eventId, count); dirty.add(eventId); }
-        else attempts.delete(eventId);
+        else { attempts.delete(eventId); events.delete(eventId); }
         log.warn?.(`[bitable-trace] event sync failed (${count}/${maxAttempts}): ${error.message}`);
       }
     }

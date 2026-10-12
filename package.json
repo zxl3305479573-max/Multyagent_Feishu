@@ -14,6 +14,9 @@
     "desktop:portable": "npm run desktop:build && electron-builder --win dir",
     "desktop:package": "npm run desktop:build && electron-builder --win",
     "test": "node --test \"test/*.test.js\"",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.node.json && tsc -p desktop/tsconfig.json",
+    "check": "npm run lint && npm run typecheck && npm test",
     "smoke": "node scripts/smoke.mjs",
     "agent:cli": "node scripts/agent-cli.mjs",
     "worktree": "node scripts/worktree.mjs",
@@ -32,11 +35,15 @@
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^26.5.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.0.4",
     "electron": "^38.2.0",
     "electron-builder": "^26.15.3",
+    "eslint": "^9.39.1",
+    "globals": "^16.5.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.7"
   }

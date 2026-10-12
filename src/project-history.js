@@ -1,9 +1,23 @@
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 async function readEvents(file) {
   try { return (await readFile(file, "utf8")).split(/\r?\n/).filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } }); }
   catch { return []; }
+}
+
+async function readAppendedSince(file, offset) {
+  let handle;
+  try { handle = await open(file, "r"); } catch { return Buffer.alloc(0); }
+  try {
+    const { size } = await handle.stat();
+    if (size <= offset) return Buffer.alloc(0);
+    const buffer = Buffer.alloc(size - offset);
+    await handle.read(buffer, 0, buffer.length, offset);
+    return buffer;
+  } finally {
+    await handle.close();
+  }
 }
 
 function eventProject(event, taskMap) {
@@ -39,6 +53,8 @@ export async function exportProjectSnapshot({ project, taskStore, eventsFile = "
 export async function archiveProjectHistory({ project, eventsFile = "runtime/events.jsonl", archiveFile, keep = 1000 } = {}) {
   const name = String(project || "").trim();
   if (!name) throw new Error("project is required");
+  // 记下读取时的文件长度：重写期间网关仍在追加事件，换文件前要把这段增量补上。
+  const sizeAtRead = await stat(eventsFile).then((info) => info.size, () => 0);
   const events = await readEvents(eventsFile);
   const matching = events.filter((event) => (event.project_name || event.projectName) === name);
   const keepCount = Math.max(0, Number(keep) || 0);
@@ -54,6 +70,8 @@ export async function archiveProjectHistory({ project, eventsFile = "runtime/eve
   await mkdir(dirname(target), { recursive: true });
   const temp = `${target}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(temp, remaining.length ? `${remaining.map((event) => JSON.stringify(event)).join("\n")}\n` : "", "utf8");
+  const appended = await readAppendedSince(target, sizeAtRead);
+  if (appended.length) await appendFile(temp, appended);
   await rename(temp, target);
   return { project: name, archived: archived.length, kept: matching.length - archived.length, archiveFile: archiveTarget };
 }

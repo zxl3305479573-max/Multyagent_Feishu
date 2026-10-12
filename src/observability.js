@@ -1,4 +1,5 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir } from "node:fs/promises";
+import { readEventsTail } from "./event-log.js";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { redactTraceText } from "./domain/trace.js";
@@ -9,9 +10,17 @@ export function sanitizeLoggedEvent(event = {}) {
   const safe = {};
   for (const [key, value] of Object.entries(event)) {
     if (NEVER_LOG.has(key)) continue;
-    if (typeof value === "string" && ["command", "error", "summary", "assigned_task", "text"].includes(key)) {
-      safe[key] = redactTraceText(value).slice(0, key === "text" ? 200 : 2000);
-    } else if (Array.isArray(value) && ["artifact_paths", "assignments", "choices"].includes(key)) {
+    if (typeof value === "string" && ["command", "error", "summary", "assigned_task", "text", "next"].includes(key)) {
+      const max = key === "text" ? 200 : key === "summary" && event.type === "delivery_received" ? 12000 : 2000;
+      safe[key] = redactTraceText(value, max).slice(0, max);
+    } else if (key === "artifact_items" && Array.isArray(value)) {
+      safe[key] = value.map((item) => ({
+        path: redactTraceText(String(item?.path || "")).slice(0, 1000),
+        description: redactTraceText(String(item?.description || "")).slice(0, 1000),
+        ...(typeof item?.type === "string" ? { type: redactTraceText(item.type).slice(0, 30) } : {}),
+        ...(Number.isFinite(item?.size) && item.size >= 0 ? { size: item.size } : {}),
+      }));
+    } else if (Array.isArray(value) && ["artifact_paths", "assignments", "choices", "blockers", "risks"].includes(key)) {
       safe[key] = value.map((item) => typeof item === "string" ? redactTraceText(item).slice(0, 1000) : item);
     } else {
       safe[key] = value;
@@ -45,21 +54,15 @@ export function createEventLogger(file = "runtime/events.jsonl", options = {}) {
 }
 
 export async function queryEvents(file = "runtime/events.jsonl", { taskId, runId, agent, type, limit = 500 } = {}) {
-  let text;
-  try { text = await readFile(file, "utf8"); } catch { return []; }
   const root = taskId ? String(taskId).split(":")[0] : null;
-  const events = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let event;
-    try { event = JSON.parse(line); } catch { continue; }
-    if (runId && event.run_id !== runId) continue;
-    if (agent && event.agent !== agent) continue;
-    if (type && event.type !== type) continue;
-    if (root && String(event.task_id || event.parent_task_id || "").split(":")[0] !== root) continue;
-    events.push(event);
-  }
-  return events.slice(-Math.max(0, Number(limit) || 0));
+  const filter = (event) => !(
+    (runId && event.run_id !== runId)
+    || (agent && event.agent !== agent)
+    || (type && event.type !== type)
+    || (root && String(event.task_id || event.parent_task_id || "").split(":")[0] !== root)
+  );
+  const { events } = await readEventsTail(file, { limit: Math.max(0, Number(limit) || 0), filter });
+  return events;
 }
 
 export function projectTask(task = {}) {

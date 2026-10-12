@@ -21,7 +21,7 @@ function connect(ws, message) {
   }
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      queue.waiters = queue.waiters.filter((waiter) => waiter !== resolve);
+      queue.waiters = queue.waiters.filter((waiter) => waiter !== receive);
       reject(new Error("timed out waiting for websocket message"));
     }, 2000);
     const receive = (value) => { clearTimeout(timer); resolve(value); };
@@ -72,7 +72,7 @@ test("authenticated desktop client receives events after its cursor and commands
   await rm(dir, { recursive: true, force: true });
 });
 
-test("authenticated desktop client can scope its snapshot and history to one project", async () => {
+test("authenticated desktop client can scope its snapshot and history to one project", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "desktop-control-"));
   const eventsFile = join(dir, "events.jsonl");
   await writeFile(eventsFile, [
@@ -81,8 +81,14 @@ test("authenticated desktop client can scope its snapshot and history to one pro
   ].map(JSON.stringify).join("\n") + "\n");
   const token = "desktop-session-token-for-tests";
   const service = createDesktopControlServer({ token, eventsFile, agents: [{ key: "architect" }], taskStore: { list: async () => [{ task_id: "A", project_name: "alpha" }, { task_id: "B", project_name: "beta" }] } });
+  let ws;
+  t.after(async () => {
+    ws?.terminate();
+    await service.close();
+    await rm(dir, { recursive: true, force: true });
+  });
   const address = await service.listen();
-  const ws = new WebSocket(`ws://127.0.0.1:${address.port}/desktop`);
+  ws = new WebSocket(`ws://127.0.0.1:${address.port}/desktop`);
   await new Promise((resolve) => ws.once("open", resolve));
   const ready = await connect(ws, { type: "auth", token, project: "alpha" });
   assert.deepEqual(ready.tasks.map((task) => task.task_id), ["A"]);
@@ -94,9 +100,6 @@ test("authenticated desktop client can scope its snapshot and history to one pro
   service.publish({ event_id: "live-alpha", type: "task_started", project_name: "alpha" });
   const live = await connect(ws);
   assert.equal(live.event.event_id, "live-alpha");
-  ws.close();
-  await service.close();
-  await rm(dir, { recursive: true, force: true });
 });
 
 test("project-scoped desktop clients cannot submit, export or control another project", async () => {

@@ -1,0 +1,141 @@
+// 渲染进程共享类型：网关推送的任务/事件结构，以及 preload 暴露的 window.desktop 接口。
+export type Task = {
+  task_id?: string;
+  project_name?: string | null;
+  title?: string;
+  description?: string;
+  status?: string;
+  created_at?: string;
+  updated_at?: string;
+  status_snapshot?: { status?: string; latest_event?: string; updated_at?: string };
+};
+export type EventRecord = {
+  event_id?: string;
+  type?: string;
+  task_id?: string;
+  agent?: string;
+  target?: string;
+  from?: string;
+  project_name?: string;
+  timestamp?: string;
+  title?: string;
+  summary?: string;
+  text?: string;
+  error?: string;
+  tool?: string;
+  command?: string;
+  file_path?: string;
+  artifact_count?: number;
+  artifact_paths?: string[];
+  tool_call_id?: string;
+  run_id?: string;
+  artifact_items?: Array<{ path?: string; description?: string; type?: string; size?: number }>;
+  status?: string;
+  final?: boolean;
+  assigned_task?: string;
+  next?: string;
+  blockers?: string[];
+  risks?: string[];
+  agents?: string[];
+  assignments?: Array<{ agentKey?: string; task?: string; reason?: string }>;
+};
+export type Agent = { key: string; displayName?: string; enabled?: boolean };
+export type DesktopMessage = {
+  type: string;
+  command?: string;
+  tasks?: Task[];
+  projects?: string[];
+  agents?: Agent[];
+  project?: string | null;
+  event?: EventRecord;
+  result?: { taskId?: string; projectName?: string; storagePath?: string; title?: string; retried?: boolean; resumed?: number; attempt?: number; status?: string; outputFile?: string; archived?: number; restored?: number; [key: string]: unknown };
+  error?: string;
+};
+export type DesktopSocket = {
+  send: (value: unknown) => void;
+  subscribe: (listener: (message: DesktopMessage) => void) => () => void;
+  close: () => void;
+};
+export type WorkspaceView = "conversation" | "agent" | "project" | "settings";
+export type PendingSubmission = { projectName: string; title: string; description: string };
+export type ControlCommand = "pause" | "resume" | "terminate" | "retry";
+
+export type ToolExecution = {
+  tool: string;
+  events: EventRecord[];
+};
+export type AgentExecutionItem =
+  | { kind: "event"; event: EventRecord }
+  | { kind: "tool"; execution: ToolExecution };
+export type AgentExecutionGroup = {
+  key: string;
+  displayName: string;
+  events: EventRecord[];
+  items: AgentExecutionItem[];
+  status: string;
+  assignedTask: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationMs: number | null;
+  toolCount: number;
+  fileCount: number;
+  testCount: number;
+  testFailed: boolean;
+  finalResult?: EventRecord;
+};
+export type AgentCard = { agent: Agent; status: string; latest?: EventRecord; taskCount: number; durationMs: number | null };
+
+export type CredentialStatus = { encryptionAvailable: boolean; keys: Array<{ key: string; readable: boolean }> };
+
+export type SettingsFieldType = "text" | "path" | "number" | "select" | "boolean" | "roles" | "secret";
+export type SettingsField = {
+  key: string;
+  label: string;
+  type: SettingsFieldType;
+  description?: string;
+  placeholder?: string;
+  default?: string;
+  options?: Array<[string, string]>;
+  allowCustom?: boolean;
+  trueValue?: string;
+  falseValue?: string;
+  min?: number;
+  advanced?: boolean;
+  managed?: boolean;
+  managedDefault?: boolean;
+  role?: string;
+  provider?: string;
+  providers?: string[];
+};
+export type SettingsGroup = { id: string; title: string; description?: string; fields: SettingsField[] };
+export type SettingsEntry = {
+  value?: string;
+  effective?: string;
+  source: string;
+  configured?: boolean;
+  readable?: boolean;
+  fromSystemEnv?: boolean;
+};
+export type SettingsSnapshot = { groups: SettingsGroup[]; entries: Record<string, SettingsEntry>; encryptionAvailable: boolean };
+
+declare global {
+  interface Window {
+    desktop?: {
+      connect: (project?: string) => Promise<DesktopSocket>;
+      credentials?: {
+        list: () => Promise<string[]>;
+        status?: () => Promise<CredentialStatus>;
+        set: (key: string, value: string) => Promise<unknown>;
+        remove?: (key: string) => Promise<unknown>;
+      };
+      settings?: {
+        get: () => Promise<SettingsSnapshot>;
+        save: (changes: Record<string, string>) => Promise<SettingsSnapshot>;
+      };
+      restartGateway?: () => Promise<{ restarted: boolean }>;
+      selectDirectory?: () => Promise<string>;
+      openFile?: (filePath: string, projectName?: string) => Promise<{ opened: boolean; error?: string }>;
+      quit?: () => Promise<unknown>;
+    };
+  }
+}

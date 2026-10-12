@@ -1,5 +1,6 @@
-import { lstat, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { lstat, mkdir, symlink } from "node:fs/promises";
+import { readJsonFile, writeFileAtomic } from "./atomic-file.cjs";
+import { isAbsolute, join, resolve } from "node:path";
 
 const PROJECT_NAME = /^[a-z][a-z0-9-]{1,63}$/;
 
@@ -12,14 +13,13 @@ export function createProjectRegistry({ file = "runtime/projects.json", root = p
   let writing = Promise.resolve();
   async function load() {
     if (loaded) return;
-    try { state = JSON.parse(await readFile(file, "utf8")); } catch { state = { projects: {} }; }
+    state = (await readJsonFile(file, { fallback: () => ({ projects: {} }), onCorrupt: "throw" })) || { projects: {} };
     state.projects ||= {};
     loaded = true;
   }
   async function persist() {
     writing = writing.then(async () => {
-      await mkdir(dirname(file), { recursive: true });
-      await writeFile(file, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+      await writeFileAtomic(file, `${JSON.stringify(state, null, 2)}\n`);
     });
     await writing;
   }

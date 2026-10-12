@@ -5,10 +5,16 @@ release/
 .electron-builder-cache-local/
 .env
 logs/
+.pi/tasks/
+electron-smoke-*.log
+.electron-smoke-user*/
 npm-debug.log*
-workspace/
-runtime/
+/workspace/
+/runtime/
 # Local scratch files and reserved Windows artifacts.
 cookie.jar
 nul
 plain2.txt
+# Atomic-write temp files and backups of corrupt state files.
+.*.tmp
+*.corrupt-*

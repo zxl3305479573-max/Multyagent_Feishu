@@ -1,7 +1,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSystemPrompt, diagramSkillPaths } from "../pi-agent.js";
+import { diagramSkillPaths } from "../pi-agent.js";
 import { defaultPiRpcRunner } from "./pi-rpc-runner.js";
 import { RPC_CONTEXT_ENV, readRpcDelivery, rpcArtifactsDir, rpcDeliveryFile, rpcToolPlan } from "./pi-extension.mjs";
 import { collectWorktreeChanges, createWorktree } from "./worktree.js";

@@ -1,0 +1,214 @@
+// Agent 可调用的受控工具：交付产物、创建项目、查询任务状态、受控 CLI。
+import { isAbsolute, join } from "node:path";
+import { defineTool } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { ensureArtifactsDir, saveDelivery } from "../artifacts.js";
+import { readProjectSummary } from "../project-summary.js";
+import { sanitizeAgentReply } from "./prompts.js";
+import { executeAgentCli } from "../agent-cli.js";
+import { loadTaskStatus } from "../task-status.js";
+import { validateTaskPlan } from "../task-plan.js";
+import { roleConfig } from "../role-config.cjs";
+
+const agentsConfig = { agents: roleConfig().agents };
+
+export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, roleLimits = {}, onDeliver }) {
+  return defineTool({
+    name: "deliver_artifact",
+    label: "交付产物",
+    description: "完成任务后交付：提交摘要、产物路径、假设和下一步建议。交付后任务才算完成。",
+    parameters: Type.Object({
+      summary: Type.String({ description: "交付摘要（必填，需包含：结论 + 关键决策 + 产物内容要点，让人不看文件也能判断成果）" }),
+      artifactPaths: Type.Optional(Type.Array(Type.String(), { description: "产物文件路径列表" })),
+      artifactItems: Type.Optional(Type.Array(Type.Object({
+        path: Type.String({ description: "交付文件路径，必须与 artifactPaths 中的路径一致" }),
+        description: Type.String({ description: "说明文件内容、用途和本次交付中的作用" }),
+      }), { description: "逐个说明每个交付文件的内容和用途" })),
+      next: Type.Optional(Type.String({ description: "建议的下一步" })),
+      blockers: Type.Optional(Type.Array(Type.String(), { description: "当前无法继续推进的阻塞项；没有则传空数组" })),
+      assumptions: Type.Optional(Type.Array(Type.String(), { description: "未确认的假设" })),
+      risks: Type.Optional(Type.Array(Type.String(), { description: "需跟踪的风险；没有则传空数组" })),
+      choices: Type.Optional(Type.Array(Type.Object({
+        id: Type.String(),
+        label: Type.String(),
+        description: Type.Optional(Type.String()),
+        primary: Type.Optional(Type.Boolean()),
+      }), { description: "需要用户点击选择的选项列表" })),
+      final: Type.Optional(Type.Boolean({ description: "是否为最终交付（汇总完成、无需下游协作）。默认为 false" })),
+      assignments: Type.Optional(Type.Array(Type.Object({
+        agentKey: Type.String(),
+        task: Type.String(),
+        reason: Type.Optional(Type.String()),
+      }))),
+      plan: Type.Optional(Type.Any({ description: "项目经理使用的结构化阶段计划；包含 project、goal、stages 和权限快照" })),
+      diagram: Type.Optional(Type.Object({
+        title: Type.Optional(Type.String({ description: "流程图标题" })),
+        nodes: Type.Array(Type.Object({
+          id: Type.String({ description: "节点唯一 id，供连线引用" }),
+          label: Type.String({ description: "方框里的文字，尽量短" }),
+          layer: Type.Optional(Type.String({ description: "所属层/分组，同层节点并排显示，例如：接入层、服务层、数据层" })),
+        }), { description: "节点列表" }),
+        edges: Type.Array(Type.Object({
+          from: Type.String({ description: "起点节点 id" }),
+          to: Type.String({ description: "终点节点 id" }),
+          label: Type.Optional(Type.String({ description: "连线上的文字，例如协议或操作名" })),
+        }), { description: "连线列表" }),
+      }, { description: "系统架构流程图：有架构内容时填写，会渲染成图片放进飞书卡片" })),
+    }),
+    async execute(_toolCallId, params) {
+      const artifactsDir = getArtifactsDir();
+      let plan = null;
+      if (params.plan !== undefined) {
+        if (agentKey !== "project_manager") {
+          return { content: [{ type: "text", text: "计划校验失败：只有项目经理可以提交结构化阶段计划" }], details: {} };
+        }
+        const checked = validateTaskPlan(params.plan, { projectName: getProjectName?.() || null, roleLimits });
+        if (!checked.valid) {
+          return { content: [{ type: "text", text: `计划校验失败：${checked.errors.join("；")}` }], details: { planErrors: checked.errors } };
+        }
+        plan = checked.plan;
+      }
+      const delivery = {
+        summary: sanitizeAgentReply(params.summary),
+        artifactPaths: params.artifactPaths || [],
+        artifactItems: Array.isArray(params.artifactItems) ? params.artifactItems.filter((item) => item?.path && item?.description).map((item) => ({ path: String(item.path), description: sanitizeAgentReply(item.description) })) : [],
+        next: params.next || "",
+        blockers: params.blockers || [],
+        assumptions: params.assumptions || [],
+        risks: params.risks || [],
+        choices: params.choices || [],
+        assignments: normalizeAssignments(params.assignments || (plan?.stages?.[0]?.assignments || []), { selfAgentKey: agentKey, allowDispatch: agentKey === "project_manager" }),
+        plan,
+        diagram: params.diagram || null,
+        final: params.final === true,
+        artifactsDir,
+        projectName: getProjectName?.() || null,
+        agentKey,
+        agentName,
+      };
+      await saveDelivery(artifactsDir, agentKey, delivery);
+      await onDeliver?.(delivery);
+      return {
+        content: [{ type: "text", text: `已交付：${sanitizeAgentReply(params.summary)}` }],
+        details: {},
+      };
+    },
+  });
+}
+
+export function normalizeAssignments(value, { selfAgentKey = null, maxAssignments = 3, allowDispatch = true } = {}) {
+  if (!allowDispatch) return [];
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set(agentsConfig.agents.map((agent) => agent.key));
+  const seen = new Set();
+  return value
+    .filter((item) => item && allowed.has(item.agentKey) && item.agentKey !== selfAgentKey && typeof item.task === "string" && item.task.trim())
+    .map((item) => ({
+      ...(item.id ? { id: String(item.id).trim() } : {}),
+      agentKey: item.agentKey,
+      task: item.task.trim(),
+      reason: typeof item.reason === "string" ? item.reason.trim() : "",
+      ...(Array.isArray(item.dependsOn) ? { dependsOn: item.dependsOn.filter((dependency) => typeof dependency === "string") } : {}),
+      ...(Array.isArray(item.toolAllowlist) ? { toolAllowlist: item.toolAllowlist.filter((tool) => typeof tool === "string") } : {}),
+      ...(Array.isArray(item.fileReadAllowlist) ? { fileReadAllowlist: item.fileReadAllowlist.filter((path) => typeof path === "string") } : {}),
+      ...(Array.isArray(item.fileWriteAllowlist) ? { fileWriteAllowlist: item.fileWriteAllowlist.filter((path) => typeof path === "string") } : {}),
+      ...(item.networkPolicy && typeof item.networkPolicy === "object" ? { networkPolicy: item.networkPolicy } : {}),
+    }))
+    .filter((item) => !seen.has(item.agentKey) && seen.add(item.agentKey))
+    .slice(0, maxAssignments);
+}
+
+export function createProjectTool({ onProject, root = process.cwd() }) {
+  return defineTool({
+    name: "create_project",
+    label: "创建项目",
+    description: "确认英文项目名后调用：创建或切换到 workspace/<项目名>/ 项目目录。",
+    parameters: Type.Object({
+      name: Type.String({ description: "英文项目名：小写字母开头，仅含小写字母、数字、连字符" }),
+    }),
+    async execute(_toolCallId, params) {
+      const name = String(params.name || "").trim().toLowerCase();
+      if (!/^[a-z][a-z0-9-]*$/.test(name)) {
+        return { content: [{ type: "text", text: `项目名 "${name}" 无效。需小写字母开头，仅含小写字母、数字、连字符，例如 phone-login。` }], details: {} };
+      }
+      await ensureArtifactsDir(join(root, "workspace", name));
+      onProject?.(name);
+      let summary = null;
+      try { summary = await readProjectSummary({ root, projectName: name }); } catch {}
+      const text = summary?.content
+        ? `项目 ${name} 已就绪（workspace/${name}/）。检测到历史项目摘要，请先读取并延续以下上下文：\n\n${summary.content}`
+        : `项目 ${name} 已就绪（workspace/${name}/）。新项目暂无历史摘要。`;
+      return { content: [{ type: "text", text }], details: { projectSummary: summary?.path || null } };
+    },
+  });
+}
+
+export function createTaskStatusTool({ taskId, chatId }) {
+  return defineTool({
+    name: "get_task_status",
+    label: "查询任务状态",
+    description: "只读查询当前群内指定根任务及其下游任务的结构化状态，不读取其他群或原始会话内容。",
+    parameters: Type.Object({
+      taskId: Type.Optional(Type.String({ description: "要查询的根任务编号；省略时查询当前任务" })),
+    }),
+    async execute(_toolCallId, params) {
+      const requested = String(params.taskId || taskId || "").trim();
+      if (!requested) return { content: [{ type: "text", text: "当前没有可查询的任务编号。" }], details: {} };
+      const status = await loadTaskStatus(requested, chatId);
+      return { content: [{ type: "text", text: JSON.stringify(status) }], details: status };
+    },
+  });
+}
+
+function resolveTaskFile(root) {
+  const configured = process.env.PI_DOMAIN_TASKS_FILE || "runtime/domain-tasks.json";
+  return isAbsolute(configured) ? configured : join(root, configured);
+}
+
+export function createAgentCliTool({ taskId, projectName, getProjectName, chatId, agentKey, root = process.cwd(), execute = executeAgentCli }) {
+  return defineTool({
+    name: "agent_cli",
+    label: "受控 CLI",
+    description: "执行受控确定性操作并返回精简 JSON。action 只能是 test、task-status、validate-delivery 或 render-diagram；不支持任意 shell 命令。",
+    parameters: Type.Object({
+      action: Type.String({ description: "test | task-status | validate-delivery | render-diagram | bitable-check" }),
+      command: Type.Optional(Type.String({ description: "test 使用的可执行文件，默认 node" })),
+      args: Type.Optional(Type.Array(Type.String(), { description: "test 命令参数数组" })),
+      taskId: Type.Optional(Type.String({ description: "任务编号，默认当前任务" })),
+      projectName: Type.Optional(Type.String({ description: "项目名，默认当前项目" })),
+      artifactPaths: Type.Optional(Type.Array(Type.String(), { description: "交付文件路径列表" })),
+      diagramJson: Type.Optional(Type.String({ description: "render-diagram 使用的图表 JSON" })),
+    }),
+    async execute(_toolCallId, params) {
+      const action = String(params.action || "").trim();
+      const allowedActions = new Set(["test", "task-status", "validate-delivery", "render-diagram", "bitable-check"]);
+      if (!allowedActions.has(action)) {
+        const result = { status: "failed", error: `unsupported agent CLI action: ${action}` };
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      }
+      const effectiveTaskId = params.taskId || taskId;
+      const effectiveProject = params.projectName || getProjectName?.() || projectName;
+      const input = {
+        root,
+        taskId: effectiveTaskId,
+        projectName: effectiveProject,
+        chatId,
+        agent: agentKey,
+        artifactPaths: params.artifactPaths || [],
+        ...(action === "render-diagram" ? { spec: params.diagramJson } : {}),
+        ...(action === "test" ? { command: process.execPath, args: ["--test", "test"], cwd: root } : {}),
+        ...(action === "task-status" ? { taskFile: resolveTaskFile(root) } : {}),
+      };
+      if (action === "render-diagram") {
+        try {
+          input.spec = JSON.parse(params.diagramJson || "{}");
+        } catch {
+          const result = { status: "failed", error: "diagramJson must be valid JSON" };
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+        }
+      }
+      const result = await execute(action, input);
+      return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+    },
+  });
+}

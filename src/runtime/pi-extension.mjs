@@ -1,12 +1,13 @@
 // Pi RPC 扩展：把内置模式使用的策略闸门和受控工具搬到 RPC 子进程，
 // 让 PI_AGENT_RUNTIME=embedded 与 rpc 拥有同一套权限边界。
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { writeFileAtomic } from "../atomic-file.cjs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { artifactsDirFor } from "../artifacts.js";
 
 const require = createRequire(import.meta.url);
-const policy = require("../../config/policy.json");
+const { policy } = require("../role-config.cjs").roleConfig();
 
 export const RPC_CONTEXT_ENV = "PI_AGENT_CONTEXT";
 const DEFAULT_TOOLS = ["read", "ls", "grep", "find"];
@@ -83,8 +84,8 @@ export function createRpcExtension(api, { context, tools, root = process.cwd() }
       agentName: agent.displayName,
       onDeliver: async (delivery) => {
         const file = rpcDeliveryFile({ root, taskId: context.taskId, agentKey: context.agentKey });
-        await mkdir(dirname(file), { recursive: true });
-        await writeFile(file, JSON.stringify(delivery, null, 2));
+        // RPC 父进程轮询读取此文件，必须原子替换，避免读到半截 JSON。
+        await writeFileAtomic(file, JSON.stringify(delivery, null, 2));
       },
     }));
     api.registerTool(tools.createAgentCliTool({

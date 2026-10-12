@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildResultCard } from "../src/gateway.js";
 import { createOrchestrator } from "../src/orchestrator.js";
+import { sequenceArchitectFirst } from "../src/orchestrator/assignments.js";
 
 function setup() {
   const dispatched = [];
@@ -30,7 +31,7 @@ test("project manager assignments filter downstream dispatch", async () => {
     },
     context: { chatId: "chat" },
   });
-  assert.deepEqual(dispatched, ["architect"]);
+  assert.deepEqual(dispatched, ["architect", "project_manager"], "派发限定在 assignments 内，结束后回到项目经理汇总");
 });
 
 test("empty project manager assignments do not dispatch", async () => {
@@ -68,4 +69,53 @@ test("result card renders blockers and risks from the delivery protocol", () => 
   assert.match(content, /waiting for product owner/);
   assert.match(content, /风险/);
   assert.match(content, /scope may expand/);
+});
+
+test("PM 同时派发架构设计师与开发角色时，架构先行、交付后再派发开发", async () => {
+  const { orchestrator, dispatched } = setup();
+  await orchestrator.onTaskCompleted("project_manager", "T-arch-first", {
+    delivery: {
+      agentKey: "project_manager",
+      summary: "plan",
+      artifactPaths: [],
+      artifactsDir: "d",
+      assignments: [
+        { agentKey: "frontend_developer", task: "build UI", reason: "ui" },
+        { agentKey: "architect", task: "produce architecture diagram", reason: "new system" },
+        { agentKey: "backend_developer", task: "build API", reason: "api" },
+      ],
+    },
+    context: { chatId: "chat" },
+  });
+  await orchestrator.whenIdle();
+  // 架构设计师交付 final=true 也不能提前结算，后续阶段必须继续派发
+  assert.equal(dispatched[0], "architect");
+  assert.deepEqual(dispatched.slice(1, 3).sort(), ["backend_developer", "frontend_developer"]);
+  assert.equal(dispatched.at(-1), "project_manager", "全部阶段完成后回到项目经理汇总");
+  assert.equal(dispatched.length, 4);
+});
+
+test("PM 判断无需架构设计时不会自动插入架构设计师", async () => {
+  const { orchestrator, dispatched } = setup();
+  await orchestrator.onTaskCompleted("project_manager", "T-no-arch", {
+    delivery: {
+      agentKey: "project_manager",
+      summary: "small fix",
+      artifactPaths: [],
+      artifactsDir: "d",
+      assignments: [{ agentKey: "backend_developer", task: "fix one endpoint", reason: "existing architecture" }],
+    },
+    context: { chatId: "chat" },
+  });
+  await orchestrator.whenIdle();
+  assert.deepEqual(dispatched, ["backend_developer", "project_manager"]);
+});
+
+test("sequenceArchitectFirst 尊重 PM 显式提交的阶段计划", () => {
+  const plan = { project: "demo", goal: "g", stages: [{ id: "s1", assignments: [{ id: "b", agentKey: "backend_developer", task: "x" }] }] };
+  const delivery = { assignments: [{ agentKey: "architect", task: "a" }, { agentKey: "backend_developer", task: "b" }], plan };
+  assert.equal(sequenceArchitectFirst(delivery), delivery);
+  const sequenced = sequenceArchitectFirst({ summary: "s", assignments: [{ agentKey: "architect", task: "a" }, { agentKey: "tester", task: "t" }] });
+  assert.deepEqual(sequenced.assignments.map((item) => item.agentKey), ["architect"]);
+  assert.deepEqual(sequenced.plan.stages[1].assignments[0].dependsOn, ["architect"]);
 });

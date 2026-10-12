@@ -1,18 +1,25 @@
 const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, safeStorage, shell } = require("electron");
-const { join, resolve, relative, isAbsolute } = require("node:path");
-const { mkdir, readFile, access } = require("node:fs/promises");
+const { join } = require("node:path");
+const { mkdir, readFile } = require("node:fs/promises");
+const { resolveProjectFile } = require("../../src/project-file.cjs");
 const { createCredentialStore } = require("./credential-store.cjs");
 const { createGatewayProcess } = require("./gateway-process.cjs");
+const { buildEnvCatalog, catalogFields, isSecretKey } = require("../../src/env-catalog.cjs");
+const { createSettingsStore, describeSettings } = require("../../src/settings-store.cjs");
+const { roleConfig } = require("../../src/role-config.cjs");
 
 const root = join(__dirname, "..", "..");
-let win = null; let tray = null; let quitting = false; let gateway = null; let credentials = null; let gatewayStopping = false;
+let win = null; let tray = null; let quitting = false; let gateway = null; let credentials = null; let settings = null; let gatewayStopping = false;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
-const LEGACY_CREDENTIAL_KEY = /^(?:FEISHU_[A-Z0-9_]+_(?:APP_ID|APP_SECRET)|DEEPSEEK_API_KEY|OPENAI_API_KEY)$/;
-const LEGACY_ENV_FILES = [
-  process.env.MULTYAGENT_LEGACY_ENV_FILE,
-  join(root, ".env"),
-  "D:\\33054\\Multyagent_Feishu\\.env",
-].filter(Boolean);
+// 运行设置页展示的全部环境配置（分组、类型、默认值、是否密钥）。
+const envCatalog = buildEnvCatalog();
+const roleKeys = roleConfig().roles.map((role) => role.key);
+const LEGACY_CREDENTIAL_KEY = { test: (key) => isSecretKey(key, envCatalog) };
+// 首次启动时从旧版 .env 迁移凭据：默认读取应用目录下的 .env，
+// 其他位置通过运行设置或环境变量 MULTYAGENT_LEGACY_ENV_FILE 指定（不要写死开发机路径）。
+function legacyEnvFiles(configured) {
+  return [configured, process.env.MULTYAGENT_LEGACY_ENV_FILE, join(root, ".env")].filter(Boolean);
+}
 
 function parseLegacyEnv(text) {
   const result = {};
@@ -28,10 +35,11 @@ function parseLegacyEnv(text) {
   return result;
 }
 
-async function migrateLegacyCredentials() {
+async function migrateLegacyCredentials(configuredFile) {
+  if (!credentials.encryptionAvailable()) return;
   let source = "";
   let text = "";
-  for (const candidate of LEGACY_ENV_FILES) {
+  for (const candidate of legacyEnvFiles(configuredFile)) {
     try {
       text = await readFile(candidate, "utf8");
       source = candidate;
@@ -49,8 +57,39 @@ async function migrateLegacyCredentials() {
 }
 function showWindow() { if (!win) return; win.show(); win.focus(); }
 
+const rendererUrl = process.env.ELECTRON_RENDERER_URL || "";
+// 只接受来自本应用页面的 IPC 调用，防止被导航到外部页面后滥用凭据接口。
+function isTrustedSender(event) {
+  const url = event?.senderFrame?.url || "";
+  return url.startsWith("file://") || (rendererUrl && url.startsWith(rendererUrl));
+}
+function handle(channel, fn) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!isTrustedSender(event)) throw new Error("untrusted IPC sender");
+    return fn(event, ...args);
+  });
+}
+
+function trayIcon() {
+  const image = nativeImage.createFromPath(join(__dirname, "assets", "tray.png"));
+  return image.isEmpty() ? nativeImage.createEmpty() : image;
+}
+
 async function createWindow() {
-  win = new BrowserWindow({ width: 1320, height: 900, minWidth: 720, minHeight: 560, webPreferences: { preload: join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  win = new BrowserWindow({
+    width: 1320, height: 900, minWidth: 720, minHeight: 560,
+    icon: join(__dirname, "assets", "icon.png"),
+    // preload 只用 contextBridge/ipcRenderer，可在沙箱中运行；文件读取全部交给主进程。
+    webPreferences: { preload: join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("will-navigate", (event, url) => {
+    if (url.startsWith("file://") || (rendererUrl && url.startsWith(rendererUrl))) return;
+    event.preventDefault();
+  });
   win.on("close", (event) => { if (!quitting) { event.preventDefault(); win.hide(); } });
   if (process.env.ELECTRON_RENDERER_URL) await win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else await win.loadFile(join(root, "dist", "desktop", "index.html"));
@@ -60,6 +99,8 @@ async function waitForGateway() {
   const tokenFile = process.env.PI_DESKTOP_TOKEN_FILE || join(root, "runtime", "desktop-session.token");
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
+    // 网关进程已经退出（例如配置有误）就不必再等满 30 秒。
+    if (gateway && !gateway.child) throw new Error("网关进程已退出，请检查运行设置后重启服务");
     try {
       const { port } = JSON.parse(await readFile(tokenFile, "utf8"));
       const response = await fetch(`http://127.0.0.1:${port}/health`);
@@ -70,69 +111,109 @@ async function waitForGateway() {
   throw new Error("网关重启超时，未能重新连接");
 }
 
+// 交给网关子进程的环境：系统环境变量 < 桌面端托管的默认路径 < 运行设置 < 加密凭据。
+// 令牌文件等托管项始终以桌面端为准。
+async function gatewayEnv(paths) {
+  const managedDefaults = managedDefaultsFor(paths);
+  return {
+    ...managedDefaults,
+    ...(await settings.toEnv()),
+    ...(await credentials.toEnv()),
+    PI_DESKTOP_TOKEN_FILE: paths.tokenFile,
+    PI_DESKTOP_CONTROL: "true",
+  };
+}
+
+function managedDefaultsFor({ runtimeDir, logsDir }) {
+  return {
+    PI_LOCK_FILE: join(logsDir, "gateway.lock"),
+    PI_APPROVALS_FILE: join(runtimeDir, "approvals.json"),
+    PI_CHECKPOINTS_FILE: join(runtimeDir, "checkpoints.json"),
+    PI_DOMAIN_TASKS_FILE: join(runtimeDir, "domain-tasks.json"),
+    PI_EVENTS_FILE: join(runtimeDir, "events.jsonl"),
+    PI_LEGACY_TASKS_FILE: join(runtimeDir, "tasks.json"),
+  };
+}
+
+// 系统环境变量里与配置目录相关的项，用于在设置页标注“来自系统环境变量”。
+function systemEnvSnapshot() {
+  const keys = new Set(catalogFields(envCatalog).map((field) => field.key));
+  return Object.fromEntries(Object.entries(process.env).filter(([key, value]) => keys.has(key) && value));
+}
+
+async function settingsSnapshot(paths) {
+  const [values, secrets] = await Promise.all([settings.read(), credentials.status()]);
+  const managed = { ...managedDefaultsFor(paths), PI_DESKTOP_TOKEN_FILE: paths.tokenFile, PI_DESKTOP_CONTROL: "true" };
+  return describeSettings({ catalog: envCatalog, values, managed, systemEnv: systemEnvSnapshot(), secrets });
+}
+
 async function start() {
   const runtimeRoot = app.getPath("userData");
   const runtimeDir = join(runtimeRoot, "runtime");
   const logsDir = join(runtimeRoot, "logs");
   await mkdir(runtimeDir, { recursive: true });
   await mkdir(logsDir, { recursive: true });
-  process.env.PI_DESKTOP_TOKEN_FILE = join(runtimeRoot, "runtime", "desktop-session.token");
-  credentials = createCredentialStore({ file: join(app.getPath("userData"), "credentials.json"), safeStorage });
-  await migrateLegacyCredentials();
-  const env = await credentials.toEnv();
-  gateway = createGatewayProcess({
-    entry: join(root, "src", "index.js"),
-    cwd: runtimeRoot,
-    env: {
-      ...env,
-      PI_DESKTOP_TOKEN_FILE: process.env.PI_DESKTOP_TOKEN_FILE,
-      PI_LOCK_FILE: join(logsDir, "gateway.lock"),
-      PI_APPROVALS_FILE: join(runtimeDir, "approvals.json"),
-      PI_CHECKPOINTS_FILE: join(runtimeDir, "checkpoints.json"),
-      PI_DOMAIN_TASKS_FILE: join(runtimeDir, "domain-tasks.json"),
-      PI_EVENTS_FILE: join(runtimeDir, "events.jsonl"),
-      PI_LEGACY_TASKS_FILE: join(runtimeDir, "tasks.json"),
-    },
+  const paths = { runtimeDir, logsDir, tokenFile: join(runtimeDir, "desktop-session.token") };
+  process.env.PI_DESKTOP_TOKEN_FILE = paths.tokenFile;
+  credentials = createCredentialStore({ file: join(runtimeRoot, "credentials.json"), safeStorage, isAllowedKey: (key) => isSecretKey(key, envCatalog) });
+  settings = createSettingsStore({ file: join(runtimeRoot, "settings.json"), catalog: envCatalog, roleKeys });
+  if (!safeStorage.isEncryptionAvailable()) console.error("[credentials] OS encryption unavailable; saved credentials cannot be read");
+  await migrateLegacyCredentials((await settings.read()).MULTYAGENT_LEGACY_ENV_FILE);
+
+  // 设置相关的 IPC 不依赖网关：即使某项配置导致网关起不来，也能在设置页改回来。
+  handle("desktop:credentials:list", () => credentials.list());
+  handle("desktop:credentials:status", () => credentials.status());
+  handle("desktop:credentials:set", (_event, key, value) => credentials.set(key, value));
+  handle("desktop:credentials:remove", (_event, key) => credentials.remove(key));
+  handle("desktop:settings:get", () => settingsSnapshot(paths));
+  // changes：{ KEY: value }。空字符串表示恢复默认（密钥则为删除）。先全部校验再保存。
+  handle("desktop:settings:save", async (_event, changes = {}) => {
+    const plain = {};
+    const secrets = {};
+    for (const [key, value] of Object.entries(changes || {})) {
+      if (isSecretKey(key, envCatalog)) secrets[key] = value;
+      else plain[key] = value;
+    }
+    if (Object.keys(plain).length) await settings.setMany(plain);
+    for (const [key, value] of Object.entries(secrets)) await credentials.set(key, value);
+    return settingsSnapshot(paths);
   });
+
+  gateway = createGatewayProcess({ entry: join(root, "src", "index.js"), cwd: runtimeRoot, env: await gatewayEnv(paths) });
   gateway.start();
   // The renderer reads the session token immediately on load. Wait until the
   // gateway has published its token and health endpoint so first launch does
   // not look disconnected and force a manual service restart.
-  await waitForGateway();
-  ipcMain.handle("desktop:credentials:list", () => credentials.list());
-  ipcMain.handle("desktop:credentials:set", (_event, key, value) => credentials.set(key, value));
-  ipcMain.handle("desktop:credentials:remove", (_event, key) => credentials.remove(key));
-  ipcMain.handle("desktop:token-file", () => process.env.PI_DESKTOP_TOKEN_FILE);
-  ipcMain.handle("desktop:select-directory", async () => {
+  try {
+    await waitForGateway();
+  } catch (error) {
+    // 网关没起来时仍然打开窗口：界面会显示“连接失败”，用户可以去运行设置里修正配置后重启服务。
+    console.error(`[desktop] ${error.message}`);
+  }
+  // 渲染进程运行在沙箱里，不能自己读令牌文件，由主进程读取后返回。
+  handle("desktop:session", async () => {
+    const { token, port } = JSON.parse(await readFile(paths.tokenFile, "utf8"));
+    return { token, port };
+  });
+  handle("desktop:select-directory", async () => {
     const result = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"] });
     return result.canceled ? "" : (result.filePaths[0] || "");
   });
-  ipcMain.handle("desktop:open-file", async (_event, filePath, projectName) => {
-    const requested = String(filePath || "").trim();
-    const project = String(projectName || "").trim();
-    if (!requested || !/^[a-z][a-z0-9-]{1,63}$/.test(project)) return { opened: false, error: "无效的项目或文件路径" };
-    let projectRoot = join(runtimeRoot, "workspace", project);
+  handle("desktop:open-file", async (_event, filePath, projectName) => {
     try {
-      const registry = JSON.parse(await readFile(join(runtimeRoot, "runtime", "projects.json"), "utf8"));
-      const configuredRoot = registry?.projects?.[project]?.storagePath;
-      if (configuredRoot) projectRoot = resolve(String(configuredRoot));
-    } catch {}
-    const candidate = isAbsolute(requested) ? resolve(requested) : resolve(projectRoot, requested);
-    const relativePath = relative(projectRoot, candidate);
-    if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) return { opened: false, error: "文件不在当前项目目录内" };
-    try {
-      await access(candidate);
+      const { path: candidate } = await resolveProjectFile(runtimeRoot, projectName, filePath);
       const error = await shell.openPath(candidate);
       return error ? { opened: false, error } : { opened: true };
     } catch (error) {
       return { opened: false, error: String(error?.message || error) };
     }
   });
-  ipcMain.handle("desktop:gateway:restart", async () => { await gateway.restart(await credentials.toEnv()); await waitForGateway(); win?.webContents.reload(); return { restarted: true }; });
-  ipcMain.handle("desktop:window:show", () => showWindow());
-  ipcMain.handle("desktop:app:quit", () => { quitting = true; app.quit(); });
+  // 重启时重新组装完整环境（托管路径 + 运行设置 + 凭据），新配置在此生效。
+  handle("desktop:gateway:restart", async () => { await gateway.restart(await gatewayEnv(paths)); await waitForGateway(); win?.webContents.reload(); return { restarted: true }; });
+  handle("desktop:window:show", () => showWindow());
+  handle("desktop:app:quit", () => { quitting = true; app.quit(); });
   await createWindow();
-  tray = new Tray(nativeImage.createEmpty()); tray.setToolTip("MultyAgent Agent 工作台");
+  tray = new Tray(trayIcon()); tray.setToolTip("MultyAgent Agent 工作台");
   tray.setContextMenu(Menu.buildFromTemplate([{ label: "显示工作台", click: showWindow }, { type: "separator" }, { label: "退出", click: () => { quitting = true; app.quit(); } }])); tray.on("click", showWindow);
 }
 if (!hasSingleInstanceLock) {

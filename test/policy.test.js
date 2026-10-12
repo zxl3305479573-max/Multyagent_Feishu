@@ -1,6 +1,6 @@
 import test from "node:test";
+import { roleConfig } from "../src/role-config.cjs";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { checkNetworkAllowed, checkWriteAllowed, isDeleteCommand, isDenied, isWithin, resolvePath, resolveWritePaths } from "../src/policy.js";
 import { createPolicyFactory } from "../src/pi-agent.js";
@@ -89,7 +89,7 @@ test("every role resolves its owned write paths against the active project", asy
 });
 
 test("policy config scopes each role to its owned project paths", async () => {
-  const config = JSON.parse(await readFile(new URL("../config/policy.json", import.meta.url), "utf8"));
+  const { policy: config } = roleConfig();
   assert.deepEqual(config.agents.project_manager.writePaths, ["workspace/{project}/artifacts"]);
   assert.deepEqual(config.agents.architect.writePaths, ["workspace/{project}/artifacts"]);
   assert.deepEqual(config.agents.frontend_developer.writePaths, [
@@ -179,7 +179,7 @@ test("isDeleteCommand 放行创建/写入/构建类命令", () => {
 
 test("编排层指定的产物目录必须落在该角色的写入白名单内", async () => {
   const { artifactsDirFor } = await import("../src/artifacts.js");
-  const config = JSON.parse(await readFile(new URL("../config/policy.json", import.meta.url), "utf8"));
+  const { policy: config } = roleConfig();
   for (const [role, cfg] of Object.entries(config.agents)) {
     for (const projectName of [null, "student"]) {
       const artifactsDir = artifactsDirFor("T-root", projectName);

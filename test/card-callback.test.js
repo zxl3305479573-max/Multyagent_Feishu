@@ -119,7 +119,7 @@ test("派发卡点击：回调立即回执，后台才放行下游", async () =>
   assert.equal(response.toast.type, "success");
   assert.ok(cardContaining(client, "已确认，正在继续执行"));
   await orchestrator.whenIdle();
-  assert.deepEqual(dispatched, ["architect"], "确认后应派发下游");
+  assert.deepEqual(dispatched, ["architect", "project_manager"], "确认后派发下游，下游完成后回到项目经理汇总");
 });
 
 test("连点两次：第二次提示没有等待任务，且不重复派发", async () => {
@@ -135,7 +135,8 @@ test("连点两次：第二次提示没有等待任务，且不重复派发", as
   assert.equal(second.toast.type, "warning");
   assert.ok(cardContaining(client, "当前没有等待选择的任务"));
   await orchestrator.whenIdle();
-  assert.deepEqual(dispatched, ["architect"], "第二次点击不应重复派发");
+  assert.equal(dispatched.filter((key) => key === "architect").length, 1, "第二次点击不应重复派发");
+  assert.deepEqual(dispatched, ["architect", "project_manager"], "下游完成后只回项目经理汇总一次");
 });
 
 test("卡片回调把 task_id 传给编排器，避免误确认同群其他任务", async () => {

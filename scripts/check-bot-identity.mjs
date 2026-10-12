@@ -2,10 +2,11 @@
 // 群聊里「@ 谁谁才响应」的判定依赖这两个值，路由异常时先跑它核对。
 //   node scripts/check-bot-identity.mjs
 import "dotenv/config";
-import { readFile } from "node:fs/promises";
 import { Client } from "@larksuiteoapi/node-sdk";
 
-const config = JSON.parse(await readFile(new URL("../config/agents.json", import.meta.url), "utf8"));
+import { roleConfig } from "../src/role-config.cjs";
+
+const config = { agents: roleConfig().agents };
 
 for (const definition of config.agents) {
   const appId = process.env[definition.appIdEnv];

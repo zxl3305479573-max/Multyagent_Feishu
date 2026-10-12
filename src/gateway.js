@@ -1,7 +1,6 @@
-import { createTask, findRecentTask, findTaskByRoot, linkRootAlias, setPaused, isTerminated, updateTask } from "./tasks.js";
+import { createTask, findRecentTask, findTaskByRoot, setPaused, isTerminated, updateTask } from "./tasks.js";
 import { buildValidatedHandoff } from "./domain/delivery.js";
 import { readProjectSummary } from "./project-summary.js";
-import { assertAudit } from "./domain/audit.js";
 import { loadTaskStatus } from "./task-status.js";
 
 const TTL = Number(process.env.PI_CONVERSATION_TTL_MS) || 30 * 60 * 1000;
@@ -101,7 +100,6 @@ function cardText(value, max = 1000) {
   return clip(text, max);
 }
 function cleanText(value) { return String(value || "").replace(/^#{1,6}\s*/gm, "").replace(/\*\*/g, "").replace(/^\s*[-*]\s+/gm, "· ").replace(/\n{3,}/g, "\n\n").trim(); }
-function shortId(id) { return String(id || "").slice(0, 8); }
 
 export async function sendText(client, chatId, text) { return client.im.message.create({ params: { receive_id_type: "chat_id" }, data: { receive_id: chatId, content: JSON.stringify({ text }), msg_type: "text" } }); }
 // 卡片里嵌图必须先上传拿 image_key；需要应用开通 im:resource:upload 权限。
@@ -155,7 +153,7 @@ export function buildTaskReceivedCard(agent = {}, taskId, taskText = "") {
 function normalizeDelivery(value) {
   const source = value && typeof value === "object" ? value : {};
   const list = (items) => Array.isArray(items) ? items.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim()) : [];
-  return { agentKey: String(source.agentKey || "").trim(), agentName: String(source.agentName || "").trim(), summary: String(source.summary || "").trim(), artifactPaths: list(source.artifactPaths), next: String(source.next || "").trim(), blockers: list(source.blockers), assumptions: list(source.assumptions), risks: list(source.risks), evidence: Array.isArray(source.evidence) ? source.evidence.filter((item) => item?.command && item?.result).slice(0, 6).map((item) => ({ command: String(item.command).trim(), result: String(item.result).trim(), details: String(item.details || "").trim() })) : [], commit: String(source.commit || source.commitHash || "").trim(), durationMs: Number.isFinite(Number(source.durationMs)) ? Number(source.durationMs) : null, assignments: Array.isArray(source.assignments) ? source.assignments.filter((item) => item?.agentKey && item?.task).map((item) => ({ agentKey: String(item.agentKey).trim(), task: String(item.task).trim(), reason: String(item.reason || "").trim() })) : [], choices: Array.isArray(source.choices) ? source.choices.filter((item) => item?.id && item?.label).slice(0, 6) : [], final: source.final === true };
+  return { agentKey: String(source.agentKey || "").trim(), agentName: String(source.agentName || "").trim(), summary: String(source.summary || "").trim(), artifactPaths: list(source.artifactPaths), artifactItems: Array.isArray(source.artifactItems) ? source.artifactItems.filter((item) => item?.path && item?.description).map((item) => ({ path: String(item.path).trim(), description: String(item.description).trim() })) : [], next: String(source.next || "").trim(), blockers: list(source.blockers), assumptions: list(source.assumptions), risks: list(source.risks), evidence: Array.isArray(source.evidence) ? source.evidence.filter((item) => item?.command && item?.result).slice(0, 6).map((item) => ({ command: String(item.command).trim(), result: String(item.result).trim(), details: String(item.details || "").trim() })) : [], commit: String(source.commit || source.commitHash || "").trim(), durationMs: Number.isFinite(Number(source.durationMs)) ? Number(source.durationMs) : null, assignments: Array.isArray(source.assignments) ? source.assignments.filter((item) => item?.agentKey && item?.task).map((item) => ({ agentKey: String(item.agentKey).trim(), task: String(item.task).trim(), reason: String(item.reason || "").trim() })) : [], choices: Array.isArray(source.choices) ? source.choices.filter((item) => item?.id && item?.label).slice(0, 6) : [], final: source.final === true };
 }
 
 export function hasActionableNextStep(delivery = {}) {

@@ -6,16 +6,23 @@ files:
   - dist/desktop/**/*
   - desktop/electron/**/*
   - src/**/*
-  - skills/**/*
   - config/**/*
+  # 可选：随包附带 diagram-design 技能（src/pi-agent.js 会优先使用 skills/diagram-design，
+  # 不存在时回退到 PI_DIAGRAM_SKILL_PATH 或 ~/.codex/skills）。目录不存在时该规则不匹配任何文件。
+  - skills/**/*
   - package.json
   - package-lock.json
-# The gateway is a Node child process, so its source and dependencies must stay
-# on a normal filesystem path rather than inside an asar virtual archive.
+  # 不把测试、类型声明和源码映射打进安装包。
+  - "!**/*.test.js"
+  - "!**/*.map"
+  - "!**/*.d.ts"
+# 网关以 Node 子进程运行（ELECTRON_RUN_AS_NODE），它的源码与依赖需要在普通文件系统路径上，
+# 不能放进 asar 虚拟归档。注意：这意味着安装目录里的 src/ 是明文源码。
 asar: false
 # dist/ is intentionally ignored by Git, but it is a required runtime asset.
 disableDefaultIgnoredFiles: true
 win:
+  icon: desktop/electron/assets/icon.ico
   target:
     - nsis
   artifactName: ${productName}-${version}-${arch}.${ext}

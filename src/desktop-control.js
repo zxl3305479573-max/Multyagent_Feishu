@@ -1,22 +1,14 @@
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
 import { WebSocket, WebSocketServer } from "ws";
+import { readEventsTail } from "./event-log.js";
 
 const isLoopback = (address = "") => address === "::1" || address === "127.0.0.1" || address.startsWith("::ffff:127.");
 
+// 从日志尾部倒读，只取补发需要的部分，不再整文件读入。
 async function replayEvents(file, cursor, project = null) {
-  let lines;
-  try { lines = (await readFile(file, "utf8")).split(/\r?\n/).filter(Boolean); }
-  catch { return { events: [], reset: Boolean(cursor) }; }
-  const events = [];
-  for (const line of lines) {
-    try { events.push(JSON.parse(line)); } catch {}
-  }
-  const scoped = project ? events.filter((event) => event.project_name === project) : events;
-  if (!cursor) return { events: scoped.slice(-1000), reset: false };
-  const index = scoped.findIndex((event) => event.event_id === cursor);
-  if (index < 0) return { events: scoped.slice(-1000), reset: true };
-  return { events: scoped.slice(index + 1, index + 1001), reset: false };
+  const filter = project ? (event) => event.project_name === project : null;
+  const result = await readEventsTail(file, { limit: 1000, filter, cursor: cursor || null });
+  return { events: result.events, reset: Boolean(cursor) && !result.cursorFound };
 }
 
 function scopedTask(task, project) {
@@ -29,7 +21,7 @@ export function createDesktopControlServer({
   taskStore,
   agents = [],
   commandHandlers = {},
-  listProjects = async () => [],
+  listProjects = async (taskProjects = []) => [...new Set(taskProjects)].sort(),
   host = "127.0.0.1",
   port = 0,
 } = {}) {

@@ -45,7 +45,7 @@ export const STATUS_LABELS = {
   terminated: "已终止",
 };
 
-// Mirrors the display names in config/agents.json; test/bitable-labels.test.js
+// Mirrors the display names in config/roles/*.json; test/bitable-labels.test.js
 // fails if the two drift apart.
 export const OWNER_LABELS = {
   project_manager: "项目经理",
@@ -115,7 +115,6 @@ export function initialBoardState(taskId) {
     completed_at: null,
     error: null,
     chat_id: null,
-    progress: null,
     planned_agents: [],
     completed_agents: [],
     active_agents: [],

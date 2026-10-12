@@ -1,6 +1,6 @@
 import "dotenv/config";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
@@ -17,8 +17,12 @@ import { createDesktopHost } from "./desktop-host.js";
 import { createDesktopTaskSubmitter } from "./desktop-task.js";
 import { archiveProjectHistory, exportProjectSnapshot, restoreProjectHistory } from "./project-history.js";
 import { createProjectRegistry } from "./project-registry.js";
+import { createShutdown } from "./shutdown.js";
+import { roleConfig } from "./role-config.cjs";
+import { rotateEventLog } from "./event-log.js";
 
-const config = JSON.parse(await readFile(new URL("../config/agents.json", import.meta.url), "utf8"));
+// 角色定义来自 config/roles/*.json；配置有误时在这里直接报错退出。
+const config = { agents: roleConfig().agents };
 const runAgent = createRunAgent();
 const allowedChatId = process.env.FEISHU_ALLOWED_CHAT_ID || "";
 const active = [];
@@ -49,7 +53,19 @@ try {
 } catch {
   // 无锁文件或内容不可读：按首次启动处理。
 }
+mkdirSync(dirname(lockFile), { recursive: true });
 writeFileSync(lockFile, String(process.pid));
+
+const lifecycle = createShutdown({ log: console, timeoutMs: Number(process.env.PI_SHUTDOWN_TIMEOUT_MS) || 10_000 });
+lifecycle.installSignalHandlers();
+function releaseLock() {
+  try {
+    if (Number(readFileSync(lockFile, "utf8").trim()) === process.pid) unlinkSync(lockFile);
+  } catch {
+  }
+}
+// 最先注册 → 最后执行：所有组件关闭后再释放单实例锁。
+lifecycle.register("lock", releaseLock);
 
 const orchestrator = createOrchestrator({
   runAgent,
@@ -58,16 +74,43 @@ const orchestrator = createOrchestrator({
   checkpointFile: process.env.PI_CHECKPOINTS_FILE || "runtime/checkpoints.json",
 });
 const taskStore = new TaskStore(process.env.PI_DOMAIN_TASKS_FILE || "runtime/domain-tasks.json");
+// 启动时显式加载：任务文件损坏会在这里报错并保留备份，而不是被空状态覆盖。
+try {
+  await taskStore.load();
+} catch (error) {
+  console.error(`[fatal] ${error.message}`);
+  releaseLock();
+  process.exit(1);
+}
 configureTaskStore(taskStore);
-const eventLogger = createEventLogger(process.env.PI_EVENTS_FILE || "runtime/events.jsonl", { taskStore });
+const eventsFile = process.env.PI_EVENTS_FILE || "runtime/events.jsonl";
+// 事件日志超过阈值时在启动阶段归档（此时还没有并发写入）。进行中和最近 24 小时内
+// 结束的任务事件会带到新文件，保证看板与 Trace 重放仍能还原它们。
+try {
+  const rotateBytes = (Number(process.env.PI_EVENTS_ROTATE_MB) || 50) * 1024 * 1024;
+  const terminal = new Set(["completed", "failed", "cancelled"]);
+  const tasksById = new Map((await taskStore.list()).map((task) => [task.task_id, task]));
+  const rotation = await rotateEventLog({
+    file: eventsFile,
+    maxBytes: rotateBytes,
+    keepTask: (rootTaskId) => {
+      const task = tasksById.get(rootTaskId);
+      if (!task) return false;
+      const status = task.status_snapshot?.status || task.status;
+      return !terminal.has(status) || Date.now() - Date.parse(task.updated_at || 0) < 24 * 60 * 60 * 1000;
+    },
+  });
+  if (rotation.rotated) console.log(`[events] archived ${(rotation.size / 1048576).toFixed(1)} MB to ${rotation.archiveFile}; carried ${rotation.carried} active event(s)`);
+} catch (error) {
+  console.warn(`[events] rotation skipped: ${error.message}`);
+}
+const eventLogger = createEventLogger(eventsFile, { taskStore });
 recordEvent = eventLogger;
 await eventLogger({ type: "gateway_started", active_pid: process.pid, lock_file: lockFile });
-process.on("exit", () => {
-  try {
-    if (Number(readFileSync(lockFile, "utf8").trim()) === process.pid) unlinkSync(lockFile);
-  } catch {
-  }
-});
+// 兜底：未经过优雅退出（如未捕获异常）时也尽量释放锁；exit 回调只能做同步操作。
+process.on("exit", releaseLock);
+lifecycle.register("task store", () => taskStore.flush());
+lifecycle.register("stop event", () => eventLogger({ type: "gateway_stopped", active_pid: process.pid }));
 const migration = await taskStore.migrateLegacyFile(process.env.PI_LEGACY_TASKS_FILE || "runtime/tasks.json");
 if (migration.imported) console.log(`[tasks] imported ${migration.imported} legacy task(s) into ${taskStore.file}`);
 await taskStore.recoverRunning();
@@ -188,12 +231,15 @@ if (!boardOwner) {
   }
 }
 
-if (bitableControl) {
-  bitableControl.start();
-  process.on("exit", () => { void bitableControl.stop(); });
+if (bitableTraceProjection) {
+  void bitableTraceProjection.flush();
+  lifecycle.register("bitable trace", () => bitableTraceProjection.flush());
 }
 
-if (bitableTraceProjection) void bitableTraceProjection.flush();
+if (bitableControl) {
+  bitableControl.start();
+  lifecycle.register("bitable control", () => bitableControl.stop());
+}
 
 // Desktop control is deliberately loopback-only. Electron reads the generated
 // token from the runtime file and uses the same gateway task/event sources as
@@ -222,21 +268,21 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
     const project = String(projectName || "").trim();
     if (!project) throw new Error("projectName is required");
     const target = outputFile || `runtime/exports/${project}-${Date.now()}.json`;
-    const result = await exportProjectSnapshot({ project, taskStore, eventsFile: process.env.PI_EVENTS_FILE || "runtime/events.jsonl", outputFile: target });
+    const result = await exportProjectSnapshot({ project, taskStore, eventsFile: eventsFile, outputFile: target });
     await publishRecordEvent({ type: "project_exported", project_name: project, output_file: result.output_file, artifact_count: result.artifact_refs.length, channel: "desktop" });
     return { projectName: project, outputFile: result.output_file, taskCount: result.tasks.length, eventCount: result.events.length, artifactCount: result.artifact_refs.length };
   };
   const cleanupHistory = async ({ projectName, keep = 1000 } = {}) => {
     const project = String(projectName || "").trim();
     if (!project) throw new Error("projectName is required");
-    const result = await archiveProjectHistory({ project, keep, eventsFile: process.env.PI_EVENTS_FILE || "runtime/events.jsonl", archiveFile: `runtime/events-archive/${project}.jsonl` });
+    const result = await archiveProjectHistory({ project, keep, eventsFile: eventsFile, archiveFile: `runtime/events-archive/${project}.jsonl` });
     await publishRecordEvent({ type: "project_history_archived", project_name: project, archived_count: result.archived, kept_count: result.kept, archive_file: result.archiveFile, channel: "desktop" });
     return result;
   };
   const restoreHistory = async ({ projectName } = {}) => {
     const project = String(projectName || "").trim();
     if (!project) throw new Error("projectName is required");
-    const result = await restoreProjectHistory({ project, eventsFile: process.env.PI_EVENTS_FILE || "runtime/events.jsonl", archiveFile: `runtime/events-archive/${project}.jsonl` });
+    const result = await restoreProjectHistory({ project, eventsFile: eventsFile, archiveFile: `runtime/events-archive/${project}.jsonl` });
     await publishRecordEvent({ type: "project_history_restored", project_name: project, restored_count: result.restored, archive_file: result.archiveFile, channel: "desktop" });
     return result;
   };
@@ -247,7 +293,7 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
   };
   desktopHost = createDesktopHost({
     token: desktopToken,
-    eventsFile: process.env.PI_EVENTS_FILE || "runtime/events.jsonl",
+    eventsFile: eventsFile,
     taskStore,
     orchestrator,
     agents: config.agents.map(({ key, displayName, enabled }) => ({ key, displayName, enabled })),
@@ -265,7 +311,11 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
   await writeFile(desktopTokenFile, `${JSON.stringify({ token: desktopToken, port: address.port })}\n`, { encoding: "utf8" });
   recordEvent = publishRecordEvent;
   console.log(`[desktop] control ready ws://127.0.0.1:${address.port}/desktop token=${desktopTokenFile}`);
-  process.on("exit", () => { void desktopHost?.close(); });
+  lifecycle.register("desktop control", async () => {
+    await desktopHost?.close();
+    // 令牌随进程失效，删掉文件避免桌面端读到过期端口。
+    try { unlinkSync(desktopTokenFile); } catch {}
+  });
 }
 
 for (const { definition, agent, client, appId, appSecret, identity } of prepared) {
@@ -295,6 +345,7 @@ for (const { definition, agent, client, appId, appSecret, identity } of prepared
       "card.action.trigger": cardActionHandler,
     }),
   });
+  lifecycle.register(`feishu ${definition.key}`, () => wsClient.close?.({ force: true }));
   active.push(definition.key);
   console.log(`[start] ${definition.key} (${definition.displayName}) connected`);
 }

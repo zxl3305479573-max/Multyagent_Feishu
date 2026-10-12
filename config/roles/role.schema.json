@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MultyAgent 角色配置",
+  "description": "每个角色一个文件，文件名必须等于 key。加载与完整校验见 src/role-config.cjs。",
+  "type": "object",
+  "required": [
+    "key",
+    "displayName",
+    "order",
+    "enabled",
+    "feishu",
+    "duty",
+    "goal",
+    "tools",
+    "thinking",
+    "writePaths",
+    "denyPaths",
+    "shellMode",
+    "networkAccess",
+    "limits"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{1,40}$"
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "order": {
+      "type": "integer",
+      "description": "侧栏与团队列表中的显示顺序"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "feishu": {
+      "type": "object",
+      "required": [
+        "appIdEnv",
+        "appSecretEnv"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "appIdEnv": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]+$"
+        },
+        "appSecretEnv": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]+$"
+        }
+      }
+    },
+    "duty": {
+      "type": "string",
+      "minLength": 1
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "行为约束。写入目录、Shell 与联网权限的说明会根据下面的字段自动生成，不要在这里重复写路径。"
+    },
+    "workflow": {
+      "type": "string"
+    },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "enum": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "write",
+          "edit",
+          "bash",
+          "powershell",
+          "ask_user",
+          "todo",
+          "subagent",
+          "create_goal",
+          "get_goal",
+          "update_goal",
+          "get_task_status"
+        ]
+      }
+    },
+    "thinking": {
+      "enum": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    "writePaths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "仓库内相对路径，可用 {project} 占位符"
+    },
+    "denyPaths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "优先级高于 writePaths，可用 {project} 占位符"
+    },
+    "shellMode": {
+      "enum": [
+        "none",
+        "readonly",
+        "write"
+      ],
+      "description": "none：无 Shell；readonly：只读命令与测试；write：可写但受 writePaths 限制"
+    },
+    "allowInlineScripts": {
+      "type": "boolean",
+      "description": "是否允许 node -e / python -c 等内联脚本（默认禁止）"
+    },
+    "networkAccess": {
+      "type": "boolean"
+    },
+    "networkDomains": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": [
+        "maxConcurrentTasks",
+        "maxTurns",
+        "maxRuntimeSeconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "maxConcurrentTasks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxTurns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxRuntimeSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "RPC 模式下单次执行的超时时间"
+        }
+      }
+    }
+  }
+}

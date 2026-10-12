@@ -12,9 +12,12 @@ Copy-Item .env.example .env
 
 ```powershell
 npm install
-npm test
+npm run check   # ESLint + 类型检查 + 单元测试
 npm start
 ```
+
+网关运行中按 `Ctrl+C` 会优雅退出：依次断开飞书长连接、关闭桌面控制面和看板轮询、刷新任务快照，最后释放
+单实例锁（超时 `PI_SHUTDOWN_TIMEOUT_MS`，默认 10 秒）。
 
 启动后，在已加入机器人的项目群中发送：
 
@@ -28,9 +31,37 @@ npm start
 
 1. 在飞书开发者后台为目标角色创建独立的自建应用，开启长连接并订阅 `im.message.receive_v1`。
 2. 在本地 `.env` 填入对应的 `FEISHU_<ROLE>_APP_ID` 与 `FEISHU_<ROLE>_APP_SECRET`。
-3. 将 `config/agents.json` 中对应角色的 `enabled` 设为 `true`，然后重启网关。
+3. 将 `config/roles/<角色>.json` 中的 `enabled` 设为 `true`，然后重启网关。
 
 每个启用角色使用自己的飞书应用凭证接收事件和回复结果。
+
+## 角色配置
+
+每个角色一个文件：`config/roles/<key>.json`，字段说明见同目录的 `role.schema.json`（VS Code 会据此提示和校验）。
+网关启动时由 `src/role-config.cjs` 做完整校验，配置有误会直接报错并指出文件和字段。
+
+| 字段 | 作用 |
+| --- | --- |
+| `displayName` / `order` / `enabled` | 显示名、排列顺序、是否启用 |
+| `feishu.appIdEnv` / `feishu.appSecretEnv` | 该角色飞书应用凭据对应的环境变量名 |
+| `duty` / `goal` / `rules` / `workflow` | 写进系统提示的职责、目标、行为约束和工作流程 |
+| `tools` | 工具白名单 |
+| `writePaths` / `denyPaths` | 可写目录与禁止目录（支持 `{project}` 占位符，deny 优先） |
+| `shellMode` | `none` 无 Shell；`readonly` 只读命令与测试；`write` 可写但受 `writePaths` 限制 |
+| `networkAccess` / `networkDomains` | 是否允许联网及域名白名单 |
+| `limits` | 并发数、轮次上限、RPC 模式下的单次超时 |
+
+提示词里“只能写入哪些目录 / Shell 能做什么 / 能否联网”这几条由上述字段自动生成，不要在 `rules` 里重复写路径。
+
+### Agent 权限边界
+
+策略闸门（`src/agent/policy-gate.js`）在每次工具调用前检查：任务级工具白名单 → 敏感文件 → 删除命令 →
+联网 → Shell 写入 → write/edit 落点。Shell 命令中的重定向、`cp`/`mv`/`mkdir`/`sed -i`/`Set-Content` 等改写命令，
+目标路径必须落在角色可写目录内；`node -e`、`python -c`、`powershell -Command`、`Invoke-Expression` 等内联脚本
+一律拒绝；写入命令中不允许 `cd` 切换目录。
+
+这是静态校验，不是沙箱：`npm test` 之类的命令本身仍会执行项目代码。需要强隔离时开启 `PI_AGENT_WORKTREE=1`，
+或在受限账户/容器中运行网关。
 
 ## 运行日志
 
@@ -41,6 +72,10 @@ npm start
 但该文件不再维护第二份 `runtime/tasks.json` 状态；暂停、终止、会话关联、项目名、
 最近任务和消息根别名都写入同一份任务记录。升级已有实例前请备份旧的
 `runtime/tasks.json` 与 `runtime/domain-tasks.json`，首次启动后以新的 domain 文件为准。
+
+所有状态文件（任务、待确认项、检查点、看板记录映射、凭据）都先写临时文件再原子替换，进程在写盘中途被杀也
+不会留下半截 JSON。如果某个状态文件仍然损坏（例如磁盘故障），它会被改名为 `<文件名>.corrupt-<时间>` 保留现场：
+任务文件损坏时网关拒绝启动并提示备份位置，不会用空状态覆盖历史任务；看板映射等可重建的文件则备份后按空处理。
 
 保留所有历史日志，不通过删除旧文件来判断当前状态。网关会追加写入
 `runtime/events.jsonl`，每条新事件都包含以下可检索字段：
@@ -58,6 +93,10 @@ npm start
 修改日志代码后需重启网关，之后产生的事件才会包含这组结构化字段；旧日志仍保留
 为历史证据，不会被改写。
 
+`events.jsonl` 超过 `PI_EVENTS_ROTATE_MB`（默认 50）时，网关会在**启动阶段**把它整体移到
+`runtime/events-archive/events-<时间>.jsonl`，新文件只保留进行中或 24 小时内结束的任务事件，保证看板与 Trace
+重放仍能还原它们。桌面端补发与状态查询从文件尾部倒读，不再整文件读入。
+
 ## 多维表格看板
 
 任务状态由网关投影到飞书多维表格；任务表同时是项目经理机器人的 Human
@@ -67,9 +106,9 @@ Control Plane。只有项目经理应用访问多维表格，其他角色机器�
 在 `.env` 中配置目标表格：
 
 ```env
-# 微信里打开的多维表格地址形如 /wiki/<wiki_token>?table=<table_id>
-FEISHU_BITABLE_WIKI_TOKEN=CFAmwQJBciWMzFk78gEcSUCsnkb
-FEISHU_BITABLE_TABLE_ID=tbl8nXLoowwSw9d8
+# 飞书里打开的多维表格地址形如 /wiki/<wiki_token>?table=<table_id>
+FEISHU_BITABLE_WIKI_TOKEN=<wiki_token>
+FEISHU_BITABLE_TABLE_ID=<table_id>
 FEISHU_BITABLE_TRACE_TABLE_ID=
 FEISHU_BITABLE_CONTROL_POLL_MS=5000
 ```
@@ -188,6 +227,36 @@ npm run worktree -- cleanup --agent frontend_developer --task T-001
 ```
 
 RPC 事件只写入任务、角色、事件类型、工具名和状态等摘要字段，不把模型文本或工具输出复制到事件日志。
+
+## 桌面工作台
+
+```powershell
+npm run desktop:build   # 构建渲染层
+npm run desktop         # 启动 Electron（自动托管网关子进程）
+npm run desktop:package # 生成 Windows 安装包
+```
+
+- 渲染进程运行在 Electron 沙箱中，只能通过 preload 暴露的 IPC 调用主进程；会话令牌由主进程读取。
+- 凭据用 Windows 数据保护（DPAPI）加密保存在用户目录。系统加密不可用或凭据来自另一台电脑时，设置页会明确提示，
+  而不是显示为“未配置”。
+- **运行设置**页列出网关与 Agent 读取的全部环境配置（飞书凭据、模型与 API Key、Agent 运行、多维表格、运行与存储），
+  可搜索、修改、恢复默认，并标注每项的生效来源（设置 / 系统环境变量 / 桌面端管理 / 默认）。密钥加密保存在
+  `credentials.json`，其余配置保存在应用数据目录的 `settings.json`；保存后点“保存并重启服务”即生效。
+  配置项清单定义在 `src/env-catalog.cjs`，测试会扫描源码里的 `process.env.*`，新增环境变量未登记时测试失败。
+- 网关因配置错误起不来时，窗口仍会打开，可以直接在运行设置里改回来再重启服务。
+- 首次启动会从应用目录下的 `.env` 迁移凭据；其他位置可在运行设置或 `MULTYAGENT_LEGACY_ENV_FILE` 中指定。
+- 退出时先通过 IPC 请求网关优雅退出，8 秒内未退出再强制结束。
+
+## 开发检查
+
+```powershell
+npm run lint       # ESLint（只开启能发现真实缺陷的规则）
+npm run typecheck  # 渲染层 TypeScript + 后端带 // @ts-check 的模块
+npm test           # node:test 单元测试
+npm run check      # 以上全部
+```
+
+推送到 GitHub 时 `.github/workflows/ci.yml` 会在 Windows + Node 22 上执行同样的检查并构建渲染层。
 
 ## 设计文档
 
