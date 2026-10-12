@@ -148,7 +148,8 @@ test("桌面通道派发只记录事件，不向飞书发送卡片", async () =>
     context: { chatId: "desktop-local", channel: "desktop", projectName: "demo" },
   });
   await orch.whenIdle();
-  assert.equal(ran, 1);
+  // 架构设计师完成后必须回到项目经理汇总：桌面端同样只产生事件，不发飞书卡片。
+  assert.equal(ran, 2);
   assert.equal(messages, 0);
 });
 
@@ -230,10 +231,10 @@ test("暂停时保存交付检查点，恢复后恰好派发一次", async () =>
   assert.deepEqual(dispatched, []);
   assert.equal(await orch.resumeTask(task.taskId), 1);
   await orch.whenIdle();
-  assert.deepEqual(dispatched, ["architect"]);
+  assert.deepEqual(dispatched, ["architect", "project_manager"]);
   assert.equal(await orch.resumeTask(task.taskId), 0);
   await orch.whenIdle();
-  assert.deepEqual(dispatched, ["architect"]);
+  assert.deepEqual(dispatched, ["architect", "project_manager"]);
   rmSync(checkpointFile, { force: true });
   rmSync("runtime/tasks.checkpoint.orch.test.json", { force: true });
 });
@@ -518,17 +519,17 @@ test("派发下游时继承上游交付的项目名，产物目录与该角色�
   await orch.resolveLatest("c1", "approve");
   await orch.whenIdle();
 
-  assert.equal(runs.length, 1);
+  assert.equal(runs.length, 2, "下游完成后回到项目经理汇总");
   assert.equal(runs[0].key, "architect");
   assert.equal(runs[0].context.projectName, "student", "下游必须继承上游交付的项目名，否则写入白名单会解析成 default");
   assert.equal(runs[0].context.artifactsDir, artifactsDirFor("T-proj", "student"));
 });
 
 test("下游派发提示词使用中文并禁止输出英文内部工作日志", async () => {
-  let prompt = "";
+  const prompts = [];
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };
-  const runAgent = async (_agent, value) => {
-    prompt = value;
+  const runAgent = async (agent, value) => {
+    prompts.push({ key: agent.key, prompt: value });
     return { text: "完成", delivery: { summary: "完成", artifactPaths: [], artifactsDir: "d", final: true } };
   };
   const orch = createOrchestrator({ runAgent, log: { info() {}, error() {}, warn() {} } });
@@ -545,6 +546,8 @@ test("下游派发提示词使用中文并禁止输出英文内部工作日志",
     },
     context: { chatId: "c-prompt", requireHumanApproval: false },
   });
+  await orch.whenIdle();
+  const prompt = prompts.find((item) => item.key === "architect").prompt;
   assert.match(prompt, /分配任务：产出架构方案/);
   assert.match(prompt, /不要输出思考过程、工具调用过程、英文工作日志/);
   assert.doesNotMatch(prompt, /Assigned task:|Upstream agent:|Previous agent deliveries:/);
@@ -582,7 +585,7 @@ test("上游本轮切换项目时，新项目名覆盖旧上下文并传给下�
   await orch.resolveLatest("c-switch", "approve");
   await orch.whenIdle();
 
-  assert.equal(runs.length, 1);
+  assert.equal(runs.length, 2, "下游完成后回到项目经理汇总");
   assert.equal(runs[0].context.projectName, "student");
   assert.equal(runs[0].context.artifactsDir, artifactsDirFor("T-project-switch", "student"));
 });
@@ -699,7 +702,7 @@ test("待确认项落盘后，重启进程仍能点击确认", async () => {
     const resolved = await second.resolveLatest("c1", "approve");
     assert.equal(resolved?.approved, true, "重启后旧卡片必须仍能确认");
     await second.whenIdle();
-    assert.deepEqual(dispatched, ["architect"], "恢复后应正常放行下游");
+    assert.deepEqual(dispatched, ["architect", "project_manager"], "恢复后正常放行下游，并由项目经理汇总收尾");
   } finally {
     rmSync(file, { force: true });
   }
@@ -736,6 +739,78 @@ test("不传 approvalsFile 时不落盘", async () => {
     context: { chatId: "c1", requireHumanApproval: true },
   });
   assert.equal(existsSync(file), false, "未指定路径时不应写文件");
+});
+
+test("所有下游派发结束后根任务收到结算事件，不会永久停在执行中", async () => {
+  const events = [];
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const orch = createOrchestrator({
+    runAgent: async (agent) => ({
+      text: "done",
+      delivery: { agentKey: agent.key, summary: `${agent.key} done`, artifactPaths: [], final: agent.key !== "architect" },
+    }),
+    onEvent: async (event) => events.push(event),
+    log: { info() {}, warn() {}, error() {} },
+  });
+  orch.registerRole({ key: "project_manager", displayName: "PM", appId: "x" }, client);
+  orch.registerRole({ key: "architect", displayName: "AR", appId: "x" }, client);
+  await orch.onTaskCompleted("project_manager", "T-settle-root", {
+    delivery: { agentKey: "project_manager", summary: "plan", assignments: [{ agentKey: "architect", task: "design" }], artifactPaths: [], next: "执行计划" },
+    context: { chatId: "desktop-local", channel: "desktop", projectName: "demo" },
+  });
+  await orch.whenIdle();
+  assert.ok(
+    events.some((event) => event.type === "task_settle" && event.task_id === "T-settle-root"),
+    `根任务应收到结算事件，实际: ${events.map((event) => event.type).join(",")}`,
+  );
+});
+
+test("parallel root settlement waits for the blocked sibling and occurs once", async () => {
+  const events = [];
+  let releaseAuditor;
+  let testerFinished;
+  const gate = new Promise((resolve) => { releaseAuditor = resolve; });
+  const finished = new Promise((resolve) => { testerFinished = resolve; });
+  const orch = createOrchestrator({
+    runAgent: async (agent) => {
+      if (agent.key === "auditor") await gate;
+      return { text: "done", delivery: { summary: "done", final: true } };
+    },
+    onEvent: async (event) => {
+      events.push(event);
+      if (event.type === "delivery_received" && event.agent === "tester") testerFinished();
+    },
+    log: { info() {}, warn() {}, error() {} },
+  });
+  for (const key of ["project_manager", "tester", "auditor"]) orch.registerRole({ key, displayName: key }, {});
+  const work = orch.onTaskCompleted("project_manager", "T-parallel-settle", {
+    delivery: { summary: "plan", assignments: [{ agentKey: "tester", task: "test" }, { agentKey: "auditor", task: "audit" }] },
+    context: { channel: "desktop" },
+  });
+  try {
+    await finished;
+    assert.equal(events.some((event) => event.type === "task_settle" && event.task_id === "T-parallel-settle"), false);
+  } finally { releaseAuditor(); await work; }
+  const settlements = events.filter((event) => event.type === "task_settle" && event.task_id === "T-parallel-settle");
+  assert.equal(settlements.length, 1);
+  assert.ok(events.indexOf(settlements[0]) > events.findIndex((event) => event.type === "delivery_received" && event.agent === "auditor"));
+});
+
+test("项目经理无显式 assignments 时不沿静态路由派发", async () => {
+  const dispatched = [];
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const orch = createOrchestrator({
+    runAgent: async (agent) => { dispatched.push(agent.key); return { text: "done", delivery: { summary: "done", artifactPaths: [], final: true } }; },
+    log: { info() {}, warn() {}, error() {} },
+  });
+  orch.registerRole({ key: "project_manager", displayName: "项目经理", appId: "x" }, client);
+  orch.registerRole({ key: "architect", displayName: "架构设计师", appId: "x" }, client);
+  await orch.onTaskCompleted("project_manager", "T-pm-only", {
+    delivery: { agentKey: "project_manager", summary: "项目经理已完成", artifactPaths: [], next: "无需后续操作" },
+    context: { chatId: "c-pm-only", channel: "desktop" },
+  });
+  await orch.whenIdle();
+  assert.deepEqual(dispatched, []);
 });
 
 test("PM 自己能做的 next 自动续跑，不派发下游，也不出确认卡", async () => {
@@ -794,5 +869,210 @@ test("每个阶段交付后自动追加项目摘要", async () => {
   } finally {
     process.chdir(previous);
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("非 PM 角色声明 final 时，根任务仍回到项目经理做最终汇总", async () => {
+  const file = "runtime/tasks.final-handback.test.json";
+  _resetForTest(file);
+  const events = [];
+  const runs = [];
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const orch = createOrchestrator({
+    runAgent: async (agent, prompt) => {
+      runs.push({ key: agent.key, prompt });
+      return { text: "done", delivery: { agentKey: agent.key, summary: `${agent.key} 完成`, artifactPaths: [], final: agent.key === "project_manager" } };
+    },
+    onEvent: async (event) => events.push(event),
+    log: { info() {}, warn() {}, error() {} },
+  });
+  for (const key of ["project_manager", "tester"]) orch.registerRole({ key, displayName: key, appId: "x" }, client);
+
+  try {
+    const task = await createTask({ agentKey: "project_manager", chatId: "chat-final", rootKey: "m-final", messageId: "m-final" });
+    await orch.onTaskCompleted("tester", `${task.taskId}:tester`, {
+      delivery: { agentKey: "tester", summary: "测试通过，无需后续", artifactPaths: [], final: true },
+      parentTaskId: task.taskId,
+      context: { chatId: "chat-final" },
+    });
+    await orch.whenIdle();
+
+    assert.ok(events.some((event) => event.type === "final_deferred" && event.agent === "tester"), "非 PM 的 final 应被延后，不能直接结束整条链");
+    assert.equal(runs.at(-1)?.key, "project_manager", "所有角色完成后必须回到项目经理");
+    assert.match(runs.at(-1).prompt, /最终汇总/);
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test("结构化计划全部阶段完成后回到项目经理汇总", async () => {
+  const file = "runtime/tasks.plan-summary.test.json";
+  _resetForTest(file);
+  const dispatched = [];
+  const prompts = [];
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const orch = createOrchestrator({
+    runAgent: async (agent, prompt) => {
+      dispatched.push(agent.key);
+      prompts.push({ key: agent.key, prompt });
+      return { text: "done", delivery: { agentKey: agent.key, summary: `${agent.key} 完成`, artifactPaths: [], final: true } };
+    },
+    log: { info() {}, warn() {}, error() {} },
+  });
+  for (const key of ["project_manager", "architect", "backend_developer"]) orch.registerRole({ key, displayName: key, appId: "x" }, client);
+
+  try {
+    const task = await createTask({ agentKey: "project_manager", chatId: "chat-plan", rootKey: "m-plan", messageId: "m-plan" });
+    await orch.onTaskCompleted("project_manager", task.taskId, {
+      delivery: {
+        agentKey: "project_manager",
+        summary: "计划",
+        assignments: [{ agentKey: "architect", task: "设计" }, { agentKey: "backend_developer", task: "实现" }],
+        artifactPaths: [],
+        next: "执行计划",
+      },
+      context: { chatId: "chat-plan" },
+    });
+    await orch.whenIdle();
+
+    assert.deepEqual(dispatched, ["architect", "backend_developer", "project_manager"], "阶段全部完成后回到项目经理");
+    assert.match(prompts.at(-1).prompt, /最终汇总/);
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test("用户直接 @执行角色的单角色任务仍由该角色收尾，不额外拉起项目经理", async () => {
+  const file = "runtime/tasks.single-role.test.json";
+  _resetForTest(file);
+  const events = [];
+  const dispatched = [];
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const orch = createOrchestrator({
+    runAgent: async (agent) => {
+      dispatched.push(agent.key);
+      return { text: "done", delivery: { agentKey: agent.key, summary: "完成", artifactPaths: [], final: true } };
+    },
+    onEvent: async (event) => events.push(event),
+    log: { info() {}, warn() {}, error() {} },
+  });
+  for (const key of ["project_manager", "tester"]) orch.registerRole({ key, displayName: key, appId: "x" }, client);
+
+  try {
+    const task = await createTask({ agentKey: "tester", chatId: "chat-single", rootKey: "m-single", messageId: "m-single" });
+    await orch.onTaskCompleted("tester", task.taskId, {
+      delivery: { agentKey: "tester", summary: "测试完成", artifactPaths: [], final: true },
+      context: { chatId: "chat-single" },
+    });
+    await orch.whenIdle();
+
+    assert.deepEqual(dispatched, [], "单角色任务不应额外派发项目经理或下游角色");
+    assert.ok(events.some((event) => event.type === "task_settle" && event.task_id === task.taskId && event.reason === "final"));
+    assert.equal(events.some((event) => event.type === "final_deferred"), false);
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+function failureRecoverySetup({ failTimes }) {
+  const events = [];
+  const prompts = [];
+  let failures = 0;
+  let pmRuns = 0;
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const orch = createOrchestrator({
+    runAgent: async (agent, prompt) => {
+      if (agent.key === "project_manager") {
+        pmRuns += 1;
+        prompts.push(prompt);
+        const finalRun = prompt.includes("执行失败") ? failures >= failTimes : pmRuns > 1;
+        if (pmRuns === 1 || !finalRun) {
+          return { text: "dispatch", delivery: { agentKey: "project_manager", summary: "派发", next: "", artifactPaths: [], assignments: [{ agentKey: "tester", task: "测试" }] } };
+        }
+        return { text: "done", delivery: { agentKey: "project_manager", summary: "汇总", artifactPaths: [], final: true } };
+      }
+      if (failures < failTimes) { failures += 1; throw new Error("boom"); }
+      return { text: "ok", delivery: { agentKey: agent.key, summary: "测试完成", artifactPaths: [], final: true } };
+    },
+    onEvent: async (event) => events.push(event),
+    log: { info() {}, warn() {}, error() {} },
+  });
+  for (const key of ["project_manager", "tester"]) orch.registerRole({ key, displayName: key, appId: "x" }, client);
+  return { orch, events, prompts };
+}
+
+test("执行角色失败后交回项目经理重新决策，任务最终正常结算", async () => {
+  const file = "runtime/tasks.failure-recovery.test.json";
+  _resetForTest(file);
+  const { orch, events, prompts } = failureRecoverySetup({ failTimes: 1 });
+  try {
+    const task = await createTask({ agentKey: "project_manager", chatId: "desktop-local", rootKey: "m-fr", messageId: "m-fr" });
+    await orch.onTaskCompleted("project_manager", task.taskId, {
+      delivery: { agentKey: "project_manager", summary: "派发", next: "", artifactPaths: [], assignments: [{ agentKey: "tester", task: "测试" }] },
+      context: { chatId: "desktop-local", channel: "desktop" },
+    });
+    await orch.whenIdle();
+    const failed = events.find((event) => event.type === "dispatch_failed");
+    assert.equal(failed.recoverable, true);
+    assert.ok(events.some((event) => event.type === "failure_handed_to_pm" && event.failed_agent === "tester" && event.attempt === 1));
+    assert.ok(prompts.some((prompt) => prompt.includes("tester 执行失败")), "PM 的提示词应包含失败原因");
+    assert.ok(events.some((event) => event.type === "task_settle" && event.task_id === task.taskId));
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test("失败恢复次数用尽后不再交回项目经理，dispatch_failed 变为终态失败", async () => {
+  const file = "runtime/tasks.failure-recovery-limit.test.json";
+  _resetForTest(file);
+  const { orch, events } = failureRecoverySetup({ failTimes: 99 });
+  try {
+    const task = await createTask({ agentKey: "project_manager", chatId: "desktop-local", rootKey: "m-fr2", messageId: "m-fr2" });
+    await orch.onTaskCompleted("project_manager", task.taskId, {
+      delivery: { agentKey: "project_manager", summary: "派发", next: "", artifactPaths: [], assignments: [{ agentKey: "tester", task: "测试" }] },
+      context: { chatId: "desktop-local", channel: "desktop" },
+    });
+    await orch.whenIdle();
+    const handed = events.filter((event) => event.type === "failure_handed_to_pm");
+    assert.equal(handed.length, 2, "默认最多交回 2 次");
+    const failures = events.filter((event) => event.type === "dispatch_failed");
+    assert.equal(failures.at(-1).recoverable, false);
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test("手动重试：失败的任务交回项目经理重新决策并重新结算；非失败任务不重试", async () => {
+  const { TaskStore } = await import("../src/domain/task-store.js");
+  const { configureTaskStore } = await import("../src/tasks.js");
+  const dir = await mkdtemp(join(tmpdir(), "retry-"));
+  const store = new TaskStore(join(dir, "t.json"));
+  configureTaskStore(store);
+  try {
+    await store.create({ task_id: "RT", agent: "project_manager", source_chat_id: "desktop-local", project_name: "demo" });
+    const prompts = [];
+    const orch = createOrchestrator({
+      runAgent: async (agent, prompt) => {
+        prompts.push(prompt);
+        return { text: "ok", delivery: { agentKey: agent.key, summary: "已重新处理", artifactPaths: [], final: true } };
+      },
+      onEvent: async (event) => { await store.applyEvent(event); },
+      log: { info() {}, warn() {}, error() {} },
+    });
+    orch.registerRole({ key: "project_manager", displayName: "PM", appId: "x" }, {});
+
+    await store.applyEvent({ type: "task_started", task_id: "RT" });
+    assert.equal((await orch.retryTask("RT")).retried, false, "执行中的任务不能重试");
+
+    await store.applyEvent({ type: "task_failed", task_id: "RT", error: "boom" });
+    assert.equal((await store.getStatus("RT")).status, "failed");
+    assert.deepEqual(await orch.retryTask("RT", { error: "ignored" }), { retried: true, attempt: 1 });
+    await orch.whenIdle();
+
+    assert.ok(prompts[0].includes("用户要求重试") && prompts[0].includes("boom"), "提示词带上快照里的失败原因");
+    assert.equal((await store.getStatus("RT")).status, "completed");
+    assert.equal(await orch.retryTask("NOPE"), null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

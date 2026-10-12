@@ -30,14 +30,13 @@ test("desktop host retries a failed task and resumes its orchestration checkpoin
     eventsFile: ".tmp/no-events.jsonl",
     taskStore: {
       list: async () => [{ task_id: "T-2" }],
-      retry: async (id, error) => { calls.push(["retry", id, error]); return { task_id: id, status: "retrying", attempt: 2 }; },
     },
-    orchestrator: { resumeTask: async (id) => { calls.push(["resume", id]); return 1; } },
+    orchestrator: { retryTask: async (id, opts) => { calls.push(["retry", id, opts.error]); return { retried: true, attempt: 2 }; } },
     recordEvent: async (event) => recorded.push(event),
   });
 
-  assert.deepEqual(await host.commandHandlers.retry({ taskId: "T-2", error: "tool timeout" }), { retried: true, resumed: 1, attempt: 2 });
-  assert.deepEqual(calls, [["retry", "T-2", "tool timeout"], ["resume", "T-2"]]);
+  assert.deepEqual(await host.commandHandlers.retry({ taskId: "T-2", error: "tool timeout" }), { retried: true, attempt: 2 });
+  assert.deepEqual(calls, [["retry", "T-2", "tool timeout"]]);
   assert.deepEqual(recorded, [{ type: "control_applied", task_id: "T-2", command: "retry", result: "retrying" }]);
 });
 

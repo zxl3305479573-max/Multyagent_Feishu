@@ -25,3 +25,10 @@ test("buildValidatedHandoff 同时兼容显式 agent 参数", async () => {
 
   assert.equal(handoff.agent, "tester");
 });
+
+test("next 为空时交接包仍有效（派发型交付不会因缺省 next 被判无效）", async () => {
+  const dispatching = await buildValidatedHandoff({ summary: "派发", next: "", artifactPaths: [], final: false }, { agentKey: "project_manager", taskId: "T1" });
+  assert.ok(dispatching.next_action);
+  const finalOne = await buildValidatedHandoff({ summary: "完成", artifactPaths: [], final: true }, { agentKey: "project_manager", taskId: "T1" });
+  assert.equal(finalOne.next_action, "无需后续操作");
+});

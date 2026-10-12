@@ -1,33 +1,16 @@
-// Orchestration and role dispatch.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { readFile } from "node:fs/promises";
+// 编排层：接收各角色交付，按计划/路由派发下游角色，处理人工确认、暂停检查点与根任务结算。
+// 待确认项与检查点的持久化见 orchestrator/pending-store.js，默认路由见 orchestrator/routes.js。
 import { buildTaskReceivedCard, loadProjectSummaryFor, sendCard, sendResultCard, sendText } from "./gateway.js";
 import { appendProjectSummary } from "./project-summary.js";
-import { isPaused, isTerminated, setPaused, setTerminated } from "./tasks.js";
-import { artifactsDirFor } from "./artifacts.js";
+import { getRootTask, isPaused, isTerminated, rootAgentKey, setPaused, setTerminated } from "./tasks.js";
+import { artifactsDirFor, describeDeliveryArtifacts } from "./artifacts.js";
 import { abortActiveSessions } from "./session-control.js";
 import { readyPlanAssignments } from "./plan-scheduler.js";
+import { createPendingStores } from "./orchestrator/pending-store.js";
+import { sequenceArchitectFirst, withAssignments, withoutAssignments } from "./orchestrator/assignments.js";
+import { isTerminalNext, matchRoutes, MAX_DISPATCH_ROUNDS, routesConfig } from "./orchestrator/routes.js";
 
-const routesConfig = JSON.parse(
-  await readFile(new URL("../config/routes.json", import.meta.url), "utf8"),
-);
-
-const MAX_DISPATCH_ROUNDS = Number(process.env.PI_MAX_DISPATCH_ROUNDS) || 8;
-
-export function matchRoutes(routes, agentKey) {
-  const matched = [];
-  for (const rule of routes) {
-    const froms = Array.isArray(rule.from) ? rule.from : [rule.from];
-    if (!froms.includes(agentKey)) continue;
-    matched.push({
-      froms,
-      tos: Array.isArray(rule.to) ? rule.to : [rule.to],
-      when: rule.when || "always",
-    });
-  }
-  return matched;
-}
+export { matchRoutes };
 
 export function createOrchestrator({
   runAgent,
@@ -40,65 +23,59 @@ export function createOrchestrator({
   approvalTtlMs = Number(process.env.PI_APPROVAL_TTL_MS) || 24 * 60 * 60 * 1000,
 }) {
   const roles = new Map(); // agentKey -> { agent, client }
-  const dispatchGroups = new Map(); // 姹囪仛灞忛殰鐘舵€侊細groupKey -> Set(宸插畬鎴愮殑瑙掕壊)
+  const dispatchGroups = new Map(); // 汇聚屏障状态：groupKey -> Set(已完成的角色)
   const rootRounds = new Map();
   const deliveryHistory = new Map();
-  const approvals = new Map(restoreApprovals());
-  const checkpoints = new Map(restoreCheckpoints());
+  const { approvals, checkpoints, persistApprovals, persistCheckpoints } = createPendingStores({ approvalsFile, checkpointFile, approvalTtlMs, log });
   const background = new Set();
   const planRuns = new Map();
+  // 已交回项目经理汇总（在途或刚交付）的根任务：并发的收尾交付只触发一次最终汇总。
+  const pmConsolidations = new Set();
   const isDesktopContext = (context) => context?.channel === "desktop";
+  // 根任务的未完结派发计数：归零且无计划/待确认时结算根任务，
+  // 否则下游回交完成后根任务会永久停在“执行中”。
+  const activeDispatches = new Map();
+  const settledRoots = new Set();
+  // 每个根任务已交给项目经理重新决策的失败次数，超过上限才把任务判为失败。
+  const failureRecoveries = new Map();
+  const maxFailureRecoveries = Number(process.env.PI_MAX_FAILURE_RECOVERIES) || 2;
+  const pendingSettlements = new Map();
 
-  function restoreApprovals() {
-    if (!approvalsFile) return [];
-    try {
-      const raw = JSON.parse(readFileSync(approvalsFile, "utf8"));
-      const now = Date.now();
-      const kept = Object.entries(raw?.pending || {})
-        .filter(([, item]) => {
-          if (!item?.delivery || now - (item.savedAt || 0) >= approvalTtlMs) return false;
-          const assignments = Array.isArray(item.delivery.assignments) ? item.delivery.assignments : [];
-          return item.approvalRequired === true
-            || item.delivery.choices?.length > 0
-            || (item.agentKey === "project_manager" && assignments.length > 0);
-        })
-        .map(([key, item]) => [key, item]);
-      if (kept.length) log.info?.(`[orchestrator] restored ${kept.length} pending approval(s) from ${approvalsFile}`);
-      return kept;
-    } catch {
-      return [];
-    }
+  async function emitStageSettlement(event) {
+    const rootTaskId = rootOf(event.task_id);
+    if (event.task_id !== rootTaskId) return onEvent(event);
+    pendingSettlements.set(rootTaskId, event);
+    return settleRootIfIdle(rootTaskId);
   }
 
-  function persistApprovals() {
-    if (!approvalsFile) return;
-    try {
-      const pending = Object.fromEntries([...approvals.entries()].map(([key, item]) => [key, { ...item, savedAt: item.savedAt || Date.now() }]));
-      mkdirSync(dirname(approvalsFile), { recursive: true });
-      writeFileSync(approvalsFile, JSON.stringify({ pending }, null, 2));
-    } catch (error) {
-      log.error?.(`approvals persist failed: ${error.message}`);
-    }
+  function beginDispatch(rootTaskId) {
+    // 同一根任务重新开始派发时允许再次结算，避免旧标记把后续进展当终态。
+    settledRoots.delete(rootTaskId);
+    const set = activeDispatches.get(rootTaskId) || new Set();
+    const token = Symbol(rootTaskId);
+    set.add(token);
+    activeDispatches.set(rootTaskId, set);
+    return () => {
+      const current = activeDispatches.get(rootTaskId);
+      if (!current) return;
+      current.delete(token);
+      if (!current.size) activeDispatches.delete(rootTaskId);
+    };
   }
 
-  function restoreCheckpoints() {
-    if (!checkpointFile) return [];
-    try {
-      const raw = JSON.parse(readFileSync(checkpointFile, "utf8"));
-      return Object.entries(raw?.pending || {});
-    } catch {
-      return [];
-    }
-  }
-
-  function persistCheckpoints() {
-    if (!checkpointFile) return;
-    try {
-      mkdirSync(dirname(checkpointFile), { recursive: true });
-      writeFileSync(checkpointFile, JSON.stringify({ pending: Object.fromEntries(checkpoints) }, null, 2));
-    } catch (error) {
-      log.error?.(`[orchestrator] checkpoint persist failed: ${error.message}`);
-    }
+  async function settleRootIfIdle(rootTaskId) {
+    if (!rootTaskId || settledRoots.has(rootTaskId)) return;
+    if (activeDispatches.has(rootTaskId)) return;
+    if (planRuns.has(rootTaskId)) return;
+    if (await isPaused(rootTaskId) || await isTerminated(rootTaskId)) return;
+    if ([...checkpoints.keys()].some((taskId) => rootOf(taskId) === rootTaskId)) return;
+    if ([...approvals.values()].some((item) => rootOf(item.taskId) === rootTaskId)) return;
+    if (activeDispatches.has(rootTaskId) || settledRoots.has(rootTaskId)) return;
+    if ([...dispatchGroups.keys()].some((key) => rootOf(key.split("->")[0]) === rootTaskId)) return;
+    settledRoots.add(rootTaskId);
+    const settlement = pendingSettlements.get(rootTaskId) || { type: "task_settle", task_id: rootTaskId, reason: "all_dispatches_done" };
+    pendingSettlements.delete(rootTaskId);
+    await onEvent(settlement);
   }
 
   function rootOf(taskId) {
@@ -112,6 +89,7 @@ export function createOrchestrator({
     const aborted = await abortActiveSessions(rootTaskId);
     for (const [key, item] of approvals) if (rootOf(item.taskId) === rootTaskId) approvals.delete(key);
     for (const [key] of checkpoints) if (rootOf(key) === rootTaskId) checkpoints.delete(key);
+    pmConsolidations.delete(rootTaskId);
     persistApprovals();
     persistCheckpoints();
     await onEvent({ type: "task_terminated", task_id: rootTaskId, aborted_sessions: aborted });
@@ -156,15 +134,19 @@ export function createOrchestrator({
     const taskId = meta?.taskId || null;
     const agentKey = meta?.agentKey || null;
     const chatId = meta?.chatId || null;
+    const endContinuation = beginDispatch(rootOf(taskId));
     return track((async () => {
-      await onEvent({ type: "continuation_started", task_id: taskId, agent: agentKey, chat_id: chatId });
       try {
+        await onEvent({ type: "continuation_started", task_id: taskId, agent: agentKey, chat_id: chatId });
         const result = await operation();
         await onEvent({ type: "continuation_completed", task_id: taskId, agent: agentKey, chat_id: chatId });
         return result;
       } catch (error) {
         await onEvent({ type: "continuation_failed", task_id: taskId, agent: agentKey, chat_id: chatId, error: error.message });
         throw error;
+      } finally {
+        endContinuation();
+        await settleRootIfIdle(rootOf(taskId));
       }
     })(), { suppressFailureEvent: true });
   }
@@ -190,45 +172,38 @@ export function createOrchestrator({
   }
 
   async function onTaskCompleted(agentKey, taskId, payload = {}) {
-    const { delivery, context, parentTaskId, approvalRequired, resultText } = payload;
-    if (!delivery) return;
+    if (!payload.delivery) return;
     const rootTaskId = rootOf(taskId);
-    if (await isTerminated(rootTaskId)) {
-      await onEvent({ type: "task_ignored_terminated", task_id: taskId, parent_task_id: parentTaskId || null });
-      return;
+    const endProcessing = beginDispatch(rootTaskId);
+    try { return await processTaskCompleted(agentKey, taskId, payload); }
+    finally {
+      endProcessing();
+      await settleRootIfIdle(rootTaskId);
     }
-    let dispatchContext = context || {};
-    const history = deliveryHistory.get(rootTaskId) || [];
-    if (!history.some((item) => item.taskId === taskId && item.agentKey === agentKey)) {
-      history.push({ taskId, agentKey, summary: String(delivery.summary || resultText || "").trim(), artifactPaths: delivery.artifactPaths || [] });
-      deliveryHistory.set(rootTaskId, history);
-    }
-    // The delivery is the latest project decision from the completed agent.
-    // Replace any stale project carried by the previous execution context.
-    if (delivery.projectName || dispatchContext.projectName) {
-      dispatchContext = {
-        ...dispatchContext,
-        projectName: delivery.projectName || dispatchContext.projectName,
-      };
-    }
+  }
+
+  // 交付落地：写事件日志（看板/Trace/桌面端都从这里取数据）并追加项目摘要。
+  async function recordDelivery({ agentKey, taskId, parentTaskId, delivery, context, resultText }) {
     await onEvent({
       type: "delivery_received",
       agent: agentKey,
       task_id: taskId,
       parent_task_id: parentTaskId || null,
-      chat_id: dispatchContext.chatId || null,
-      project_name: dispatchContext.projectName || delivery.projectName || null,
-      correlation_id: dispatchContext.correlationId || null,
+      chat_id: context.chatId || null,
+      project_name: context.projectName || delivery.projectName || null,
+      correlation_id: context.correlationId || null,
       final: delivery.final === true,
       artifact_paths: delivery.artifactPaths || [],
+      artifact_items: await describeDeliveryArtifacts(delivery, { projectName: context.projectName || delivery.projectName }),
       artifact_count: delivery.artifactPaths?.length || 0,
       blockers: delivery.blockers || [],
       risks: delivery.risks || [],
+      next: String(delivery.next || delivery.next_action || "").slice(0, 1000),
       choices: (delivery.choices || []).map((item) => item.id),
       assignments: (delivery.assignments || []).map((item) => item.agentKey),
-      summary: String(delivery.summary || "").slice(0, 1000),
+      summary: String(delivery.summary || "").slice(0, 12000),
     });
-    const summaryProject = dispatchContext.projectName || delivery.projectName || null;
+    const summaryProject = context.projectName || delivery.projectName || null;
     if (summaryProject) {
       try {
         await appendProjectSummary({
@@ -244,6 +219,10 @@ export function createOrchestrator({
         log.warn?.(`[orchestrator] project summary append failed: ${error.message}`);
       }
     }
+  }
+
+  // 结构化计划的执行进度：项目经理提交新计划时重置，其他角色交付时把对应 assignment 记为完成。
+  function trackPlanProgress(agentKey, rootTaskId, delivery) {
     if (agentKey === "project_manager" && delivery.plan?.stages?.length) {
       planRuns.set(rootTaskId, {
         plan: delivery.plan,
@@ -257,6 +236,143 @@ export function createOrchestrator({
         if (finished) { run.started.delete(finished); run.completed.add(finished); }
       }
     }
+  }
+
+  // 按结构化计划推进：派发下一批就绪的 assignment；全部完成后交回项目经理汇总。
+  // 返回 true 表示本次交付已由计划接管（无论是否实际派发）。
+  async function advancePlan({ agentKey, taskId, rootTaskId, delivery, context }) {
+    const planRun = planRuns.get(rootTaskId);
+    if (!planRun) return false;
+    const ready = readyPlanAssignments(planRun.plan, [...planRun.completed], [...planRun.started]);
+    if (ready.length) {
+      ready.forEach((assignment) => planRun.started.add(assignment.id));
+      const nextContext = withAssignments(context, ready);
+      await Promise.all(ready.map((assignment) => dispatchTo(assignment.agentKey, taskId, { context: nextContext, parentDelivery: delivery, fromAgent: "project_manager" })));
+      return true;
+    }
+    const remaining = planRun.plan.stages.flatMap((stage) => stage.assignments || []).some((assignment) => !planRun.completed.has(assignment.id));
+    if (remaining) return true;
+    planRuns.delete(rootTaskId);
+    await onEvent({ type: "task_plan_completed", task_id: rootTaskId, plan_project: planRun.plan.project || null });
+    if (roles.has("project_manager") && !pmConsolidations.has(rootTaskId)) {
+      pmConsolidations.add(rootTaskId);
+      await dispatchTo("project_manager", taskId, {
+        // planCompleted：阶段全部交付完成，明确要求 PM 做最终汇总，而不是只判断下一步。
+        context: { ...withoutAssignments(context), pmCoordination: true, planCompleted: true, approvalBypass: false },
+        parentDelivery: delivery,
+        fromAgent: agentKey,
+      });
+    }
+    return true;
+  }
+
+  // 静态路由（config/routes.json）派发；没有任何下游可派发时结算本阶段。
+  async function dispatchByRoutes({ agentKey, taskId, parentTaskId, delivery, context }) {
+    let dispatchedDownstream = false;
+    let waitingForDownstream = false;
+    for (const rule of agentKey === "project_manager" && context.channel === "desktop" ? [] : matchRoutes(routesConfig.routes, agentKey)) {
+      const selected = context.selectedAgents;
+      const targets = rule.tos;
+      if (!targets.length) continue;
+      if (rule.when === "always") {
+        dispatchedDownstream = true;
+        await Promise.all(
+          targets.map((target) =>
+            dispatchTo(target, taskId, { context: { ...context, approvalBypass: false, pmCoordination: false }, parentDelivery: delivery, fromAgent: agentKey }),
+          ),
+        );
+      } else if (rule.when === "all_done") {
+        // 汇聚屏障：等 from 列表里所有角色都完成，才派发一次下游
+        const base = parentTaskId || taskId;
+        const selectedFroms = selected ? rule.froms.filter((from) => selected.includes(from)) : [];
+        const requiredFroms = selectedFroms.length ? selectedFroms : rule.froms;
+        const key = `${base}->${targets.join(",")}`;
+        const done = dispatchGroups.get(key) || new Set();
+        done.add(agentKey);
+        dispatchGroups.set(key, done);
+        if (requiredFroms.every((f) => done.has(f))) {
+          dispatchGroups.delete(key);
+          dispatchedDownstream = true;
+          await Promise.all(
+            targets.map((target) =>
+              dispatchTo(target, base, { context: { ...context, approvalBypass: false, pmCoordination: false }, parentDelivery: delivery, fromAgent: agentKey }),
+            ),
+          );
+        } else waitingForDownstream = true;
+      }
+    }
+    if (!dispatchedDownstream && !waitingForDownstream) {
+      await emitStageSettlement({ type: "task_settle", task_id: taskId, reason: "no_next_step" });
+      log.info(JSON.stringify({ type: "settle", task_id: taskId, reason: "no_next_step" }));
+    }
+  }
+
+  // 计划仍有未完成的 assignment 时，执行角色的 final 不能提前结算根任务：
+  // 例如架构设计师交付 final=true 后，后续开发阶段仍需按计划派发。
+  function planHasRemaining(rootTaskId) {
+    const run = planRuns.get(rootTaskId);
+    if (!run) return false;
+    return run.plan.stages.some((stage) => (stage.assignments || []).some((item) => !run.completed.has(item.id)));
+  }
+
+  // 根任务是否由项目经理发起（桌面端提交、飞书 @项目经理）。只有这种任务链
+  // 才要求「所有角色完成后回到项目经理汇总」；用户直接 @执行角色的单角色
+  // 任务仍由该角色自行收尾，不额外拉起项目经理。
+  async function projectManagerOwnsRoot(rootTaskId) {
+    if (!rootTaskId || !roles.has("project_manager")) return false;
+    const owner = await rootAgentKey(rootTaskId);
+    if (owner) return owner === "project_manager";
+    // 任务记录不可用时退化为「根任务的首个交付角色」，避免把 PM 发起的任务链判成单角色任务。
+    const first = (deliveryHistory.get(rootTaskId) || []).find((item) => item.taskId === rootTaskId);
+    return first?.agentKey === "project_manager";
+  }
+
+  // 终止条件：单任务派发轮次上限，防止「交回 PM → 再派发」这类协作死循环。
+  // 返回 false 表示本轮预算已用尽并已结算根任务。
+  async function withinRoundBudget(taskId) {
+    const root = rootOf(taskId);
+    const round = rootRounds.get(root) || 0;
+    if (round >= maxRounds) {
+      log.warn(JSON.stringify({ type: "settle", task_id: taskId, reason: "max_rounds", rounds: round }));
+      await emitStageSettlement({ type: "task_settle", task_id: taskId, reason: "max_rounds", rounds: round });
+      return false;
+    }
+    rootRounds.set(root, round + 1);
+    return true;
+  }
+
+  async function processTaskCompleted(agentKey, taskId, payload = {}) {
+    const { context, parentTaskId, approvalRequired, resultText } = payload;
+    let { delivery } = payload;
+    if (!delivery) return;
+    // 项目经理同时派发架构设计师与其他角色时，架构先行（见 sequenceArchitectFirst）。
+    if (agentKey === "project_manager" && !delivery.final) delivery = sequenceArchitectFirst(delivery);
+    const rootTaskId = rootOf(taskId);
+    if (await isTerminated(rootTaskId)) {
+      await onEvent({ type: "task_ignored_terminated", task_id: taskId, parent_task_id: parentTaskId || null });
+      return;
+    }
+    let dispatchContext = context || {};
+    if (agentKey === "project_manager" && isDesktopContext(dispatchContext)) {
+      dispatchContext = withoutAssignments(dispatchContext);
+    }
+    const history = deliveryHistory.get(rootTaskId) || [];
+    if (!history.some((item) => item.taskId === taskId && item.agentKey === agentKey)) {
+      history.push({ taskId, agentKey, summary: String(delivery.summary || resultText || "").trim(), artifactPaths: delivery.artifactPaths || [] });
+      deliveryHistory.set(rootTaskId, history);
+    }
+    // The delivery is the latest project decision from the completed agent.
+    // Replace any stale project carried by the previous execution context.
+    if (delivery.projectName || dispatchContext.projectName) {
+      dispatchContext = {
+        ...dispatchContext,
+        projectName: delivery.projectName || dispatchContext.projectName,
+      };
+    }
+    await recordDelivery({ agentKey, taskId, parentTaskId, delivery, context: dispatchContext, resultText });
+    // 项目经理已交付（汇总或新一轮派发），后续收尾交付可以再次交回它决策。
+    if (agentKey === "project_manager") pmConsolidations.delete(rootTaskId);
+    trackPlanProgress(agentKey, rootTaskId, delivery);
     let settleEmptyAssignments = false;
     if (agentKey === "project_manager" && !delivery.final && Object.prototype.hasOwnProperty.call(delivery, "assignments")) {
       const assignments = Array.isArray(delivery.assignments) ? delivery.assignments : [];
@@ -271,17 +387,7 @@ export function createOrchestrator({
         chat_id: dispatchContext.chatId || null,
       });
       if (assignments.length) {
-        dispatchContext = {
-          ...dispatchContext,
-          selectedAgents: assignments.map((item) => item.agentKey),
-          assignmentTasks: Object.fromEntries(assignments.map((item) => [item.agentKey, item.task])),
-          assignmentPermissions: Object.fromEntries(assignments.map((item) => [item.agentKey, {
-            toolAllowlist: item.toolAllowlist || [],
-            fileReadAllowlist: item.fileReadAllowlist || [],
-            fileWriteAllowlist: item.fileWriteAllowlist || [],
-            networkPolicy: item.networkPolicy || { enabled: false, domains: [] },
-          }])),
-        };
+        dispatchContext = withAssignments(dispatchContext, assignments);
       } else settleEmptyAssignments = !String(delivery.next || "").trim() && !delivery.choices?.length && !needsHumanDecision({ agentKey, delivery, context: dispatchContext, approvalRequired });
     }
     if (await isTerminated(rootTaskId)) return;
@@ -292,9 +398,27 @@ export function createOrchestrator({
       log.info(JSON.stringify({ type: "hold", task_id: taskId, reason: "paused" }));
       return;
     }
-    if (delivery.final) {
-      await onEvent({ type: "task_settle", task_id: taskId, reason: "final" });
-      log.info(JSON.stringify({ type: "settle", task_id: taskId, reason: "final" }));
+    if (delivery.final && !(agentKey !== "project_manager" && planHasRemaining(rootTaskId))) {
+      // 只有项目经理的 final 才代表整条任务链结束。其他角色声明 final 只说明
+      // 它这一阶段无需下游协作，仍要回到项目经理做最终汇总。
+      if (agentKey === "project_manager" || !(await projectManagerOwnsRoot(rootTaskId)) || delivery.choices?.length) {
+        await emitStageSettlement({ type: "task_settle", task_id: taskId, reason: "final" });
+        log.info(JSON.stringify({ type: "settle", task_id: taskId, reason: "final" }));
+        return;
+      }
+      // 计划调度优先：仍有就绪阶段就继续派发，计划收尾时由 advancePlan 交回 PM。
+      if (await advancePlan({ agentKey, taskId, rootTaskId, delivery, context: dispatchContext })) return;
+      // 并发的收尾交付只汇总一次：已有 PM 汇总在途时不再重复交回。
+      if (pmConsolidations.has(rootTaskId)) return;
+      if (!(await withinRoundBudget(taskId))) return;
+      pmConsolidations.add(rootTaskId);
+      await onEvent({ type: "final_deferred", agent: agentKey, task_id: taskId, parent_task_id: parentTaskId || null, reason: "await_project_manager_summary" });
+      log.info(JSON.stringify({ type: "final_deferred", task_id: taskId, agent: agentKey }));
+      await dispatchTo("project_manager", taskId, {
+        context: { ...withoutAssignments(dispatchContext), planCompleted: true, approvalBypass: false },
+        parentDelivery: delivery,
+        fromAgent: agentKey,
+      });
       return;
     }
     if (needsHumanDecision({ agentKey, delivery, context: dispatchContext, approvalRequired })) {
@@ -305,60 +429,32 @@ export function createOrchestrator({
       return;
     }
     if (settleEmptyAssignments) {
-      await onEvent({ type: "task_settle", task_id: taskId, reason: "no_assignments" });
+      await emitStageSettlement({ type: "task_settle", task_id: taskId, reason: "no_assignments" });
       log.info(JSON.stringify({ type: "settle", task_id: taskId, reason: "no_assignments" }));
       return;
     }
-    if (agentKey === "project_manager" && dispatchContext.selectedAgents) {
+    if (agentKey === "project_manager" && dispatchContext.selectedAgents?.length) {
       const initialTargets = dispatchContext.selectedAgents.filter((target) => target !== "project_manager" && roles.has(target));
-      await Promise.all(initialTargets.map((target) => dispatchTo(target, taskId, {
-        context: { ...dispatchContext, approvalBypass: false, pmCoordination: false },
-        parentDelivery: delivery,
-        fromAgent: agentKey,
-      })));
-      return;
-    }
-    const planRun = planRuns.get(rootTaskId);
-    if (planRun && agentKey !== "project_manager") {
-      const ready = readyPlanAssignments(planRun.plan, [...planRun.completed], [...planRun.started]);
-      if (ready.length) {
-        ready.forEach((assignment) => planRun.started.add(assignment.id));
-        const nextContext = {
-          ...dispatchContext,
-          selectedAgents: ready.map((assignment) => assignment.agentKey),
-          assignmentTasks: Object.fromEntries(ready.map((assignment) => [assignment.agentKey, assignment.task])),
-          assignmentPermissions: Object.fromEntries(ready.map((assignment) => [assignment.agentKey, {
-            toolAllowlist: assignment.toolAllowlist || [],
-            fileReadAllowlist: assignment.fileReadAllowlist || [],
-            fileWriteAllowlist: assignment.fileWriteAllowlist || [],
-            networkPolicy: assignment.networkPolicy || { enabled: false, domains: [] },
-          }])),
-        };
-        await Promise.all(ready.map((assignment) => dispatchTo(assignment.agentKey, taskId, { context: nextContext, parentDelivery: delivery, fromAgent: "project_manager" })));
-        return;
-      }
-      const remaining = planRun.plan.stages.flatMap((stage) => stage.assignments || []).some((assignment) => !planRun.completed.has(assignment.id));
-      if (remaining) return;
-      planRuns.delete(rootTaskId);
-      await onEvent({ type: "task_plan_completed", task_id: rootTaskId, plan_project: planRun.plan.project || null });
-      if (roles.has("project_manager")) {
-        await dispatchTo("project_manager", taskId, {
-          context: { ...dispatchContext, pmCoordination: true, approvalBypass: false },
+      if (initialTargets.length) {
+        await Promise.all(initialTargets.map((target) => dispatchTo(target, taskId, {
+          context: { ...dispatchContext, approvalBypass: false, pmCoordination: false },
           parentDelivery: delivery,
           fromAgent: agentKey,
-        });
+        })));
+        return;
       }
+    }
+    // 项目经理只有在本轮明确给出 assignments 时才有派发资格。
+    // 静态 routes 只服务于已有下游链路，不能把 PM-only 任务自动变成架构任务。
+    if (agentKey === "project_manager" && dispatchContext.channel === "desktop" && isTerminalNext(delivery.next)) {
+      await emitStageSettlement({ type: "task_settle", task_id: taskId, reason: "no_next_step" });
+      log.info(JSON.stringify({ type: "settle", task_id: taskId, reason: "no_next_step" }));
       return;
     }
+    if (agentKey !== "project_manager" && await advancePlan({ agentKey, taskId, rootTaskId, delivery, context: dispatchContext })) return;
     // 终止条件二：单任务派发轮次上限，防协作死循环
-    const root = rootTaskId;
-    const round = rootRounds.get(root) || 0;
-    if (round >= maxRounds) {
-      log.warn(JSON.stringify({ type: "settle", task_id: taskId, reason: "max_rounds", rounds: round }));
-      await onEvent({ type: "task_settle", task_id: taskId, reason: "max_rounds", rounds: round });
-      return;
-    }
-    rootRounds.set(root, round + 1);
+    if (!(await withinRoundBudget(taskId))) return;
+
 
     const routineNext = Boolean(String(delivery.next || "").trim()) && !delivery.choices?.length;
     if (agentKey !== "project_manager" && routineNext && roles.has("project_manager")) {
@@ -379,51 +475,19 @@ export function createOrchestrator({
       return;
     }
 
-    let dispatchedDownstream = false;
-    let waitingForDownstream = false;
-    for (const rule of matchRoutes(routesConfig.routes, agentKey)) {
-      const selected = dispatchContext.selectedAgents;
-      const targets = rule.tos;
-      if (!targets.length) continue;
-      if (rule.when === "always") {
-        dispatchedDownstream = true;
-        await Promise.all(
-          targets.map((target) =>
-            dispatchTo(target, taskId, { context: { ...dispatchContext, approvalBypass: false, pmCoordination: false }, parentDelivery: delivery, fromAgent: agentKey }),
-          ),
-        );
-      } else if (rule.when === "all_done") {
-    // 汇聚屏障：等 from 列表里所有角色都完成，才派发一次下游
-    const base = parentTaskId || taskId;
-        const selectedFroms = selected ? rule.froms.filter((from) => selected.includes(from)) : [];
-        const requiredFroms = selectedFroms.length ? selectedFroms : rule.froms;
-        const key = `${base}->${targets.join(",")}`;
-        const done = dispatchGroups.get(key) || new Set();
-        done.add(agentKey);
-        dispatchGroups.set(key, done);
-        if (requiredFroms.every((f) => done.has(f))) {
-          dispatchGroups.delete(key);
-          dispatchedDownstream = true;
-          await Promise.all(
-            targets.map((target) =>
-              dispatchTo(target, base, { context: { ...dispatchContext, approvalBypass: false, pmCoordination: false }, parentDelivery: delivery, fromAgent: agentKey }),
-            ),
-          );
-        } else waitingForDownstream = true;
-      }
-    }
-    if (!dispatchedDownstream && !waitingForDownstream) {
-      await onEvent({ type: "task_settle", task_id: taskId, reason: "no_next_step" });
-      log.info(JSON.stringify({ type: "settle", task_id: taskId, reason: "no_next_step" }));
-    }
+    await dispatchByRoutes({ agentKey, taskId, parentTaskId, delivery, context: dispatchContext });
   }
 
   async function dispatchTo(targetKey, parentTaskId, { context, parentDelivery, fromAgent }) {
+    // PM 被下游回交时只负责汇总当前结果，不能继承上一阶段的派发清单。
+    if (targetKey === "project_manager") {
+      context = { ...context, selectedAgents: [], assignmentTasks: {}, assignmentPermissions: {} };
+    }
     const rootTaskId = rootOf(parentTaskId);
     if (await isTerminated(rootTaskId)) return;
     const role = roles.get(targetKey);
     if (!role) {
-      log.warn(`[orchestrator] 鏈敞鍐岃鑹? ${targetKey}`);
+      log.warn(`[orchestrator] 未注册的角色: ${targetKey}`);
       return;
     }
     const { agent, client } = role;
@@ -441,9 +505,15 @@ export function createOrchestrator({
       .map((item) => `- ${item.agentKey}: ${item.summary || "已完成交付"}${item.artifactPaths?.length ? `（产物 ${item.artifactPaths.join(", ")}）` : ""}`)
       .join("\n");
 
-    const pmInstruction = context.pmCoordination
-      ? "作为项目经理，请判断上游建议的下一步：能自己完成的直接交付；确需其他角色时用 assignments 明确派发必要角色并说明理由，不要扩大范围或重复派发。"
-      : "作为项目经理，请基于以上所有机器人交付逐项汇总已完成内容、产物、验证结果和遗留风险，不要只回复‘任务已完成’。";
+    const pmInstruction = context.manualRetry
+      ? `用户要求重试该任务（上次失败原因：${context.manualRetry.error || "未记录"}）。请结合前序机器人交付判断：已成功的阶段不要重复；用 assignments 重新派发必要角色（可换角色、缩小范围或补充说明）、自己直接完成，或在确实无法继续时设置 final=true 并如实说明。`
+      : context.failureRecovery
+      ? `作为项目经理，下游角色 ${context.failureRecovery.agentKey} 执行失败（${context.failureRecovery.error}）。请决定：用 assignments 重新派发（可换角色、缩小范围或补充说明）、自己直接完成，或在无法继续时设置 final=true 并如实说明失败原因与已完成部分。不要忽略失败，也不要重复派发已成功的阶段。`
+      : context.planCompleted
+      ? "作为项目经理，本条任务链的全部阶段已交付完成：请基于以上所有机器人交付做最终汇总（逐项列出结论、产物、验证证据、遗留风险），确认全部完成后在交付里设置 final=true，不要只回复‘任务已完成’；只有确有必须补做的工作时，才用 assignments 明确派发必要角色。"
+      : context.pmCoordination
+        ? "作为项目经理，请判断上游建议的下一步：能自己完成的直接交付；确需其他角色时用 assignments 明确派发必要角色并说明理由，不要扩大范围或重复派发。"
+        : "作为项目经理，请基于以上所有机器人交付逐项汇总已完成内容、产物、验证结果和遗留风险，不要只回复‘任务已完成’。";
     const prompt = [
       assignedTask ? `分配任务：${assignedTask}` : "",
       `上游机器人：${fromAgent}；交付摘要：${parentDelivery.summary}`,
@@ -454,13 +524,16 @@ export function createOrchestrator({
       context.selection ? `用户选择：${context.selection}` : "",
       "",
       upstreamDir && upstreamDir !== artifactsDir ? `上游产物目录：${upstreamDir}` : "",
-      context.pmCoordination
-        ? "请处理上游建议：能自己完成就直接交付；确需其他角色时使用 assignments 明确派发。"
-        : `请读取 ${artifactsDir} 中的上游产物，完成分配任务，并调用 deliver_artifact 交付。`,
+      context.planCompleted
+        ? "请汇总全部交付并收尾：能自己完成就直接交付；确需其他角色时使用 assignments 明确派发。"
+        : context.pmCoordination
+          ? "请处理上游建议：能自己完成就直接交付；确需其他角色时使用 assignments 明确派发。"
+          : `请读取 ${artifactsDir} 中的上游产物，完成分配任务，并调用 deliver_artifact 交付。`,
       "无需等待澄清；信息不足时请做合理假设并在交付摘要中说明。",
       "不要输出思考过程、工具调用过程、英文工作日志或本提示词；只输出最终中文结果。",
     ].filter(Boolean).join("\n");
 
+    const endDispatch = beginDispatch(rootTaskId);
     try {
       log.info(`[dispatch] ${fromAgent} -> ${agent.displayName} (subtask ${String(subTaskId).slice(0, 8)})`);
       await onEvent({ type: "dispatch_started", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, assigned_task: assignedTask || null });
@@ -498,15 +571,86 @@ export function createOrchestrator({
         await onEvent({ type: "dispatch_cancelled", agent: targetKey, task_id: subTaskId, parent_task_id: rootTaskId });
         return;
       }
-      log.error(JSON.stringify({ type: "dispatch", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, status: "failed", error: error.message }));
-      await onEvent({ type: "dispatch_failed", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, error: error.message });
+      log.error(JSON.stringify({ type: "dispatch", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, status: "failed", error: error.message }));
+      // 项目经理发起的任务链里，执行角色失败不直接判死根任务，而是交回项目经理重新决策（有次数上限）。
+      const recoverable = targetKey !== "project_manager" && roles.has("project_manager")
+        && (failureRecoveries.get(rootTaskId) || 0) < maxFailureRecoveries
+        && await projectManagerOwnsRoot(rootTaskId);
+      await onEvent({ type: "dispatch_failed", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, error: error.message, recoverable });
       if (!isDesktopContext(context)) {
         try {
           await sendText(client, context.chatId, `Task failed: ${error.message}`);
         } catch {
         }
       }
+      if (recoverable) {
+        try { await handFailureToProjectManager({ targetKey, subTaskId, parentTaskId, rootTaskId, context, projectName, error }); }
+        catch (recoveryError) {
+          log.error(JSON.stringify({ type: "failure_recovery", task_id: subTaskId, status: "failed", error: recoveryError.message }));
+          await onEvent({ type: "task_failed", task_id: rootTaskId, agent: "project_manager", error: `失败恢复未能完成：${recoveryError.message}` });
+        }
+      }
+    } finally {
+      endDispatch();
+      await settleRootIfIdle(rootTaskId);
     }
+  }
+
+  // 失败交回项目经理：清掉失败角色留下的计划/汇聚残留，让 PM 基于失败原因重新规划，
+  // 否则残留的 planRuns / dispatchGroups 会让根任务既不结算也不推进。
+  async function handFailureToProjectManager({ targetKey, subTaskId, parentTaskId, rootTaskId, context, projectName, error }) {
+    failureRecoveries.set(rootTaskId, (failureRecoveries.get(rootTaskId) || 0) + 1);
+    planRuns.delete(rootTaskId);
+    pmConsolidations.delete(rootTaskId);
+    for (const key of [...dispatchGroups.keys()]) if (rootOf(key.split("->")[0]) === rootTaskId) dispatchGroups.delete(key);
+    await onEvent({ type: "failure_handed_to_pm", task_id: rootTaskId, failed_agent: targetKey, sub_task_id: subTaskId, attempt: failureRecoveries.get(rootTaskId), max_attempts: maxFailureRecoveries, project_name: projectName, chat_id: context?.chatId || null, error: error.message });
+    await dispatchTo("project_manager", parentTaskId, {
+      context: { ...withoutAssignments(context), failureRecovery: { agentKey: targetKey, error: String(error.message).slice(0, 500) }, pmCoordination: true, planCompleted: false, approvalBypass: false },
+      parentDelivery: { agentKey: targetKey, summary: `${targetKey} 执行失败：${String(error.message).slice(0, 500)}`, artifactPaths: [], projectName },
+      fromAgent: targetKey,
+    });
+  }
+
+  // 手动重试：用户对失败任务点“重试”时，不是盲目重跑失败的派发，而是把任务连同失败原因
+  // 交回项目经理重新决策。会重置失败恢复计数、轮次预算和计划残留，让新一轮从干净状态开始。
+  async function retryTask(taskId, { error = "" } = {}) {
+    const rootTaskId = rootOf(taskId);
+    const task = rootTaskId ? await getRootTask(rootTaskId) : null;
+    if (!task) return null;
+    const status = task.status_snapshot?.status || task.status;
+    if (status !== "failed") return { retried: false, status, reason: "只有失败的任务可以重试" };
+    if (await isTerminated(rootTaskId)) return { retried: false, status: "cancelled", reason: "任务已终止" };
+    if (!roles.has("project_manager")) return { retried: false, status, reason: "项目经理未启用" };
+    if (!(await projectManagerOwnsRoot(rootTaskId))) return { retried: false, status, reason: "只有项目经理发起的任务支持重试" };
+    const lastError = String(task.status_snapshot?.error || error || "").slice(0, 500);
+    const attempt = (task.attempt || 0) + 1;
+    failureRecoveries.delete(rootTaskId);
+    rootRounds.delete(rootTaskId);
+    planRuns.delete(rootTaskId);
+    pmConsolidations.delete(rootTaskId);
+    for (const key of [...dispatchGroups.keys()]) if (rootOf(key.split("->")[0]) === rootTaskId) dispatchGroups.delete(key);
+    await setPaused(rootTaskId, false);
+    const context = {
+      chatId: task.source_chat_id || null,
+      messageId: task.source_message_id || null,
+      correlationId: task.source_message_id || null,
+      channel: task.source_chat_id === "desktop-local" ? "desktop" : undefined,
+      requireHumanApproval: false,
+      projectName: task.project_name || null,
+      manualRetry: { error: lastError },
+      pmCoordination: true,
+      approvalBypass: false,
+    };
+    await onEvent({ type: "task_retried", task_id: rootTaskId, agent: "project_manager", project_name: task.project_name || null, chat_id: task.source_chat_id || null, attempt, error: lastError || undefined, channel: context.channel });
+    trackContinuation(
+      { taskId: rootTaskId, agentKey: "project_manager", chatId: task.source_chat_id || null },
+      () => dispatchTo("project_manager", rootTaskId, {
+        context,
+        parentDelivery: { agentKey: "user", summary: `用户请求重试失败的任务${lastError ? `：${lastError}` : ""}`, artifactPaths: [], projectName: task.project_name || null },
+        fromAgent: "user",
+      }),
+    );
+    return { retried: true, attempt };
   }
 
   async function resolveLatest(chatId, selection = "approve", requestedTaskId = null) {
@@ -608,6 +752,6 @@ export function createOrchestrator({
     return resolveLatest(chatId, "approve");
   }
 
-  return { registerRole, onTaskCompleted, approveLatest, resolveLatest, resumeTask, terminateTask, whenIdle };
+  return { registerRole, onTaskCompleted, approveLatest, resolveLatest, resumeTask, retryTask, terminateTask, whenIdle };
 }
 

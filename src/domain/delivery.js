@@ -30,7 +30,8 @@ export async function buildValidatedHandoff(delivery, { taskId, agent, agentKey,
     summary: supplied?.summary || "",
     artifacts,
     evidence: evidenceFor(supplied),
-    next_action: supplied?.next_action || supplied?.next || "",
+    // next 在工具里是可选字段；交接包要求非空，缺省时按是否终结给出占位，避免空 next 把整条任务判为交接包无效。
+    next_action: supplied?.next_action || supplied?.next || (supplied?.final === true ? "无需后续操作" : "由编排层按计划推进"),
     choices: Array.isArray(supplied?.choices) ? supplied.choices : [],
   });
   const result = validateHandoff(handoff);

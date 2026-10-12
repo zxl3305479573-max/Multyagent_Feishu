@@ -7,15 +7,18 @@ function belongsToRoot(event, taskId) {
 }
 
 function statusFor(event) {
+  if (event.type === "task_retried") return "in_progress";
+  if (event.type === "dispatch_failed" && event.recoverable === true) return null;
   if (["task_failed", "dispatch_failed", "selection_failed"].includes(event.type)) return "failed";
   if (event.type === "task_hold") return "paused";
   if (event.type === "approval_required") return "awaiting_approval";
-  if (event.type === "task_settle" || (event.type === "task_completed" && event.final === true)) return "completed";
+  if (["task_terminated", "task_cancelled"].includes(event.type)) return "cancelled";
+  if ((event.type === "task_settle" || event.type === "task_completed" && event.final === true) && !String(event.task_id || "").includes(":")) return "completed";
   if (["task_started", "dispatch_started", "delivery_received", "dispatch_completed"].includes(event.type)) return "in_progress";
   return null;
 }
 
-const TERMINAL_STATUSES = new Set(["completed", "failed"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const PROJECT_DECISION_EVENTS = new Set([
   "delivery_received",
   "task_completed",
@@ -37,7 +40,7 @@ export function summarizeTaskEvents(events, taskId, chatId) {
   for (const event of matched) {
     // Once a terminal lifecycle event is observed, late trace events from the
     // winding-down session must not reopen or move the task backwards.
-    if (TERMINAL_STATUSES.has(status) && !["task_terminated", "control_applied"].includes(event.type)) continue;
+    if (TERMINAL_STATUSES.has(status) && !["task_terminated", "control_applied", "task_retried"].includes(event.type)) continue;
     latest = event;
     if (event.project_name && (PROJECT_DECISION_EVENTS.has(event.type) || !projectName)) {
       projectName = event.project_name;
@@ -45,9 +48,10 @@ export function summarizeTaskEvents(events, taskId, chatId) {
     const agent = event.target || event.agent;
     if (["task_started", "agent_started", "dispatch_started", "approval_required"].includes(event.type) && agent) active.add(agent);
     if (["dispatch_completed", "dispatch_failed", "agent_finished"].includes(event.type) && agent) active.delete(agent);
-    if (["task_settle", "task_failed", "task_terminated"].includes(event.type) || (event.type === "task_completed" && event.final === true)) active.clear();
+    if (["task_failed", "task_terminated", "task_cancelled"].includes(event.type) || statusFor(event) === "completed") active.clear();
     if (event.type === "approval_required" && agent) active.add(agent);
-    if (event.error) error = event.error;
+    if (event.type === "task_retried") error = null;
+    else if (event.error && event.recoverable !== true) error = event.error;
     if (Array.isArray(event.blockers) && event.blockers.length) blockers = event.blockers;
     if (Array.isArray(event.risks) && event.risks.length) risks = event.risks;
     status = statusFor(event) || status;

@@ -59,4 +59,10 @@ export async function isPaused(taskId) { return Boolean((await store.getRoot(tas
 export async function setTerminated(taskId, terminated = true) { return legacy(await store.setTerminated(rootOf(taskId), terminated)); }
 export async function isTerminated(taskId) { return Boolean((await store.getRoot(taskId))?.terminated); }
 
+// 根任务的发起角色：桌面端提交与飞书 @项目经理 都记为 project_manager，
+// 用户直接 @某个执行角色时记为该角色。编排层据此判断「谁负责最终汇总」。
+export async function rootAgentKey(taskId) { const root = await store.getRoot(taskId); return root?.agent || root?.requested_role || null; }
+
+export async function getRootTask(taskId) { return legacy(await store.getRoot(taskId)); }
+
 export function _resetForTest(newFile) { store = new TaskStore(newFile || DEFAULT_FILE); }

@@ -1,5 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+// @ts-check
+import { readFile } from "node:fs/promises";
+import { readJsonFile, writeFileAtomic } from "../atomic-file.cjs";
 import { createTaskRecord } from "./task.js";
 import { transition } from "./task-state.js";
 
@@ -7,7 +8,7 @@ function clone(value) {
   return value ? JSON.parse(JSON.stringify(value)) : value;
 }
 
-const TERMINAL_SNAPSHOT_STATUSES = new Set(["completed", "failed"]);
+const TERMINAL_SNAPSHOT_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const PROJECT_DECISION_EVENTS = new Set([
   "delivery_received",
   "task_completed",
@@ -19,10 +20,13 @@ const PROJECT_DECISION_EVENTS = new Set([
 function rootOf(taskId) { return String(taskId || "").split(":")[0]; }
 
 function snapshotStatus(event = {}) {
+  if (event.type === "task_retried") return "in_progress";
+  if (event.type === "dispatch_failed" && event.recoverable === true) return null;
   if (["task_failed", "dispatch_failed", "selection_failed", "continuation_failed"].includes(event.type)) return "failed";
+  if (["task_terminated", "task_cancelled"].includes(event.type)) return "cancelled";
   if (event.type === "task_hold") return "paused";
   if (event.type === "approval_required") return "awaiting_approval";
-  if (event.type === "task_settle" || (event.type === "task_completed" && event.final === true)) return "completed";
+  if ((event.type === "task_settle" || event.type === "task_completed" && event.final === true) && event.task_id === rootOf(event.task_id)) return "completed";
   if (["task_started", "agent_started", "dispatch_started", "delivery_received", "dispatch_completed"].includes(event.type)) return "in_progress";
   return null;
 }
@@ -39,20 +43,30 @@ function projectNameForEvent(event, task, current) {
 }
 
 export class TaskStore {
-  constructor(file = "runtime/domain-tasks.json") {
+  constructor(file = "runtime/domain-tasks.json", { snapshotFlushMs = 250, log = console } = {}) {
     this.file = file;
     this.state = { tasks: {}, byIdempotencyKey: {}, aliases: {}, recent: {} };
     this.loaded = false;
-    this.writeChain = Promise.resolve();
+    this.loading = null;
+    this.dirty = false;
+    this.flushing = null;
+    this.flushTimer = null;
+    this.snapshotFlushMs = snapshotFlushMs;
+    this.log = log;
   }
 
   async load() {
     if (this.loaded) return;
-    try {
-      this.state = JSON.parse(await readFile(this.file, "utf8"));
-    } catch {
-      this.state = { tasks: {}, byIdempotencyKey: {}, aliases: {}, recent: {} };
-    }
+    // 并发首次访问共用同一次加载，避免重复读盘或互相覆盖。
+    this.loading ||= this.#loadOnce().finally(() => { this.loading = null; });
+    await this.loading;
+  }
+
+  async #loadOnce() {
+    if (this.loaded) return;
+    // 解析失败时备份坏文件并抛错：宁可拒绝启动，也不能用空状态覆盖历史任务。
+    const parsed = await readJsonFile(this.file, { fallback: null, onCorrupt: "throw" });
+    this.state = parsed && typeof parsed === "object" ? parsed : { tasks: {}, byIdempotencyKey: {}, aliases: {}, recent: {} };
     this.state.tasks ||= {};
     this.state.byIdempotencyKey ||= {};
     this.state.aliases ||= {};
@@ -72,12 +86,42 @@ export class TaskStore {
     this.loaded = true;
   }
 
-  async persist() {
-    this.writeChain = this.writeChain.then(async () => {
-      await mkdir(dirname(this.file), { recursive: true });
-      await writeFile(this.file, JSON.stringify(this.state, null, 2));
-    });
-    await this.writeChain;
+  // 合并写盘：写入进行中再次调用只会标记 dirty，由同一轮循环补写最新状态，
+  // 因而高频事件不会排起一长串整文件重写。返回的 Promise 在包含本次修改的写入落盘后完成。
+  persist() {
+    this.dirty = true;
+    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    this.flushing ||= this.#flushLoop().finally(() => { this.flushing = null; });
+    return this.flushing;
+  }
+
+  async #flushLoop() {
+    while (this.dirty) {
+      this.dirty = false;
+      try {
+        await writeFileAtomic(this.file, JSON.stringify(this.state, null, 2));
+      } catch (error) {
+        this.dirty = true;
+        throw error;
+      }
+    }
+  }
+
+  // 事件派生的状态快照可由 events.jsonl 重建，延迟合并写盘，不阻塞事件管线。
+  schedulePersist() {
+    this.dirty = true;
+    if (this.flushTimer || this.flushing) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.persist().catch((error) => this.log?.error?.(`[tasks] snapshot persist failed: ${error.message}`));
+    }, this.snapshotFlushMs);
+    this.flushTimer.unref?.();
+  }
+
+  // 退出前调用，确保延迟中的快照落盘。
+  async flush() {
+    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    if (this.dirty || this.flushing) await this.persist();
   }
 
   async create(input = {}) {
@@ -204,13 +248,13 @@ export class TaskStore {
     const task = this.state.tasks[rootTaskId];
     const current = task.status_snapshot || emptySnapshot(rootTaskId);
     const nextStatus = snapshotStatus(event);
-    if (TERMINAL_SNAPSHOT_STATUSES.has(current.status) && !["control_applied", "task_terminated", "task_resumed"].includes(event.type)) return clone(current);
+    if (TERMINAL_SNAPSHOT_STATUSES.has(current.status) && !["control_applied", "task_terminated", "task_resumed", "task_retried"].includes(event.type)) return clone(current);
 
     const active = new Set(current.active_agents || []);
     const agent = event.target || event.agent || null;
     if (["task_started", "agent_started", "dispatch_started", "approval_required"].includes(event.type) && agent) active.add(agent);
     if (["dispatch_completed", "dispatch_failed", "agent_finished"].includes(event.type) && agent) active.delete(agent);
-    if (["task_failed", "task_settle", "task_terminated"].includes(event.type) || (event.type === "task_completed" && event.final === true)) active.clear();
+    if (["task_failed", "task_terminated", "task_cancelled"].includes(event.type) || nextStatus === "completed") active.clear();
 
     const snapshot = {
       ...current,
@@ -220,13 +264,16 @@ export class TaskStore {
       latest_event: nextStatus || event.type === "control_applied" || event.type === "task_resumed" ? event.type : current.latest_event,
       updated_at: event.timestamp || new Date().toISOString(),
       project_name: projectNameForEvent(event, task, current),
-      error: event.error || current.error || null,
+      error: event.type === "task_retried" ? null : (event.recoverable === true ? null : event.error) || current.error || null,
       blockers: Array.isArray(event.blockers) && event.blockers.length ? event.blockers : current.blockers || [],
       risks: Array.isArray(event.risks) && event.risks.length ? event.risks : current.risks || [],
     };
     task.status_snapshot = snapshot;
     task.updated_at = snapshot.updated_at;
-    await this.persist();
+    // 状态变化（开始/待确认/完成/失败等）立即落盘；工具调用等高频事件只刷新
+    // 时间与活动角色，延迟合并写盘即可。
+    if (snapshot.status !== current.status) await this.persist();
+    else this.schedulePersist();
     return clone(snapshot);
   }
 
@@ -257,6 +304,20 @@ export class TaskStore {
     await this.load();
     const recovered = [];
     for (const task of Object.values(this.state.tasks)) {
+      // 任务状态机的 status 实际不会进入 running，真正的进行中标记在事件快照里：
+      // 进程重启后没有任何 Agent 还在跑，in_progress 的快照只能是被中断的孤儿。
+      const snapshot = task.status_snapshot;
+      if (snapshot?.status === "in_progress" && !task.terminated) {
+        task.status_snapshot = {
+          ...snapshot,
+          status: "failed",
+          active_agents: [],
+          error: snapshot.error || "网关重启时任务仍在执行，已中断",
+          updated_at: new Date().toISOString(),
+        };
+        task.updated_at = task.status_snapshot.updated_at;
+        recovered.push(task.task_id);
+      }
       if (task.status === "running") {
         task.status = "retrying";
         task.updated_at = new Date().toISOString();

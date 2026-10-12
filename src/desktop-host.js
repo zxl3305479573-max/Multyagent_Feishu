@@ -27,15 +27,15 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
       await recordEvent?.({ type: "control_applied", task_id: id, command: "terminate", result: outcome.terminated ? "terminated" : "not_terminated" });
       return outcome;
     },
+    // 重试 = 把失败任务连同失败原因交回项目经理重新决策，而不是重放失败的派发。
     async retry({ taskId, error }) {
       const id = rootOf(taskId);
-      if (!id || typeof taskStore.retry !== "function") throw new Error("task retry is unavailable");
-      const retried = await taskStore.retry(id, error);
-      if (!retried) throw new Error("task not found");
-      if (retried.status !== "retrying") return { retried: false, status: retried.status, attempt: retried.attempt };
-      const resumed = typeof orchestrator.resumeTask === "function" ? await orchestrator.resumeTask(id) : 0;
+      if (!id || typeof orchestrator.retryTask !== "function") throw new Error("task retry is unavailable");
+      const outcome = await orchestrator.retryTask(id, { error });
+      if (!outcome) throw new Error("task not found");
+      if (!outcome.retried) return outcome;
       await recordEvent?.({ type: "control_applied", task_id: id, command: "retry", result: "retrying" });
-      return { retried: true, resumed, attempt: retried.attempt };
+      return outcome;
     },
     async submit_task(input) {
       if (typeof submitTask !== "function") throw new Error("desktop task submission is unavailable");
