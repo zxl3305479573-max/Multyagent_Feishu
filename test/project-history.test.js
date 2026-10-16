@@ -59,3 +59,25 @@ test("restoring archived project history is idempotent and preserves its archive
     assert.equal((await readFile(archiveFile, "utf8")).includes('"old"'), true);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("project history cleanup also archives legacy agent events that only carry a task id", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-history-legacy-"));
+  try {
+    const eventsFile = join(root, "events.jsonl"); const archiveFile = join(root, "archive.jsonl");
+    const records = [
+      { event_id: "a-0", type: "task_created", task_id: "A", project_name: "alpha" },
+      { event_id: "a-1", type: "tool_call", task_id: "A:tester" },
+      { event_id: "a-2", type: "tool_result", task_id: "A:tester" },
+      { event_id: "b-0", type: "tool_call", task_id: "B:tester" },
+      { event_id: "g-0", type: "gateway_started" },
+    ];
+    await writeFile(eventsFile, records.map((event) => JSON.stringify(event)).join("\n") + "\n");
+    const taskStore = { list: async () => [{ task_id: "A", project_name: "alpha" }, { task_id: "B", project_name: "beta" }] };
+    const result = await archiveProjectHistory({ project: "alpha", taskStore, eventsFile, archiveFile, keep: 1 });
+    assert.equal(result.archived, 2);
+    const current = (await readFile(eventsFile, "utf8")).trim().split(/\r?\n/).map(JSON.parse);
+    assert.deepEqual(current.map((event) => event.event_id), ["a-2", "b-0", "g-0"]);
+    const archived = (await readFile(archiveFile, "utf8")).trim().split(/\r?\n/).map(JSON.parse);
+    assert.deepEqual(archived.map((event) => [event.event_id, event.project_name]), [["a-0", "alpha"], ["a-1", "alpha"]]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

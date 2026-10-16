@@ -87,3 +87,17 @@ test("event logger redacts commands and errors and excludes raw prompt/tool payl
   assert.equal("tool_output" in line, false);
   await rm(dir, { recursive: true, force: true });
 });
+
+test("event logger fills project_name from the root task so project-scoped views keep agent events", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "multyagent-events-project-"));
+  const file = join(dir, "events.jsonl");
+  const taskStore = { getRoot: async (id) => id === "T-1" ? { task_id: "T-1", project_name: "alpha" } : null };
+  const log = createEventLogger(file, { taskStore });
+  const inferred = await log({ type: "tool_call", task_id: "T-1:architect" });
+  const explicit = await log({ type: "tool_call", task_id: "T-1", project_name: "beta" });
+  const unknown = await log({ type: "gateway_started" });
+  assert.equal(inferred.project_name, "alpha");
+  assert.equal(explicit.project_name, "beta");
+  assert.equal("project_name" in unknown, false);
+  await rm(dir, { recursive: true, force: true });
+});

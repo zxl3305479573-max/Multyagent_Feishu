@@ -18,6 +18,60 @@ const COMMAND_NAMES: Record<string, string> = {
   export_project: "导出项目历史", cleanup_history: "归档历史", restore_history: "恢复历史",
 };
 
+const EVENT_LIMIT = 1000;
+const LIFECYCLE_STATUS: Record<string, string> = {
+  task_started: "running", task_hold: "paused", task_resumed: "running",
+  task_settle: "completed",
+  task_terminated: "cancelled", task_cancelled: "cancelled", task_failed: "failed",
+};
+const SETTLING_EVENTS = ["task_settle", "task_failed", "task_terminated", "task_cancelled"];
+
+// 按 event_id 去重并保留最近 EVENT_LIMIT 条；批量合并只做一次 Set 查重，避免逐条 O(n) 扫描。
+function mergeEvents(current: EventRecord[], incoming: EventRecord[], limit = EVENT_LIMIT): EventRecord[] {
+  const seen = new Set(current.map((item) => item.event_id).filter(Boolean));
+  const fresh = incoming.filter((event) => {
+    if (!event.event_id) return true;
+    if (seen.has(event.event_id)) return false;
+    seen.add(event.event_id);
+    return true;
+  });
+  if (!fresh.length) return current;
+  const merged = [...current, ...fresh];
+  return merged.length > limit ? merged.slice(-limit) : merged;
+}
+
+function lifecycleStatusOf(event: EventRecord): string {
+  if (event.type === "task_completed") return event.final === true ? "completed" : "running";
+  if (event.type === "control_applied") {
+    return event.command === "pause" ? "paused" : event.command === "terminate" ? "cancelled" : event.command === "retry" || event.command === "resume" ? "running" : "";
+  }
+  return LIFECYCLE_STATUS[event.type || ""] || "";
+}
+
+// 把一批事件按顺序折叠进任务状态；新任务由 task_created 补出，已结束任务不会被普通事件降级。
+function applyEventsToTasks(tasks: Task[], events: EventRecord[]): Task[] {
+  if (!events.length) return tasks;
+  const next = [...tasks];
+  const index = new Map(next.map((task, i) => [task.task_id, i]));
+  for (const event of events) {
+    if (event.type === "task_created" && event.task_id && !index.has(event.task_id)) {
+      next.unshift({ task_id: event.task_id, project_name: event.project_name, title: event.title, description: event.text, status: "received" });
+      index.clear();
+      next.forEach((task, i) => index.set(task.task_id, i));
+    }
+    if (!event.task_id) continue;
+    const position = index.get(rootTaskId(event.task_id));
+    if (position === undefined) continue;
+    const task = next[position];
+    const status = task.status_snapshot?.status || task.status;
+    const terminal = ["completed", "failed", "cancelled"].includes(status || "");
+    if (terminal && !SETTLING_EVENTS.includes(event.type || "")) continue;
+    const nextStatus = lifecycleStatusOf(event);
+    next[position] = { ...task, status_snapshot: { ...(task.status_snapshot || {}), latest_event: event.type, ...(nextStatus ? { status: nextStatus } : {}) } };
+  }
+  return next;
+}
+
 export function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
@@ -42,6 +96,8 @@ export function App() {
   const [pendingCommand, setPendingCommand] = useState<ControlCommand | null>(null);
   const [pendingProjectCommand, setPendingProjectCommand] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [taskHistory, setTaskHistory] = useState<Record<string, EventRecord[]>>({});
+  const historyRequests = useRef(new Map<string, string>());
   const [now, setNow] = useState(Date.now());
   const pendingSubmission = useRef<PendingSubmission | null>(null);
   const agentSectionRefs = useRef<Record<string, HTMLElement | null>>({});
@@ -56,13 +112,22 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [isTaskActive]);
   const visibleTasks = useMemo(() => project ? tasks.filter((task) => task.project_name === project) : tasks, [tasks, project]);
+  const selectedRoot = rootTaskId(selected);
+  const taskEventsLoading = Boolean(selectedRoot) && !(selectedRoot in taskHistory);
+  // 选中任务的记录 = 按需拉取的完整历史 + 之后实时推送到全局窗口里的事件。
   const taskEvents = useMemo(() => {
-    const selectedRoot = rootTaskId(selected);
     if (!selectedRoot) return [];
-    return events
-      .filter((event) => rootTaskId(event.task_id) === selectedRoot)
+    const live = events.filter((event) => rootTaskId(event.task_id) === selectedRoot);
+    return mergeEvents(taskHistory[selectedRoot] || [], live, Infinity)
       .sort((a, b) => eventTime(a) - eventTime(b));
-  }, [events, selected]);
+  }, [events, selectedRoot, taskHistory]);
+  useEffect(() => {
+    if (!selectedRoot || selectedRoot in taskHistory || connection !== "已连接" || !activeSocket) return;
+    if ([...historyRequests.current.values()].includes(selectedRoot)) return;
+    const requestId = crypto.randomUUID();
+    historyRequests.current.set(requestId, selectedRoot);
+    activeSocket.send({ type: "command", command: "task_events", taskId: selectedRoot, requestId });
+  }, [selectedRoot, taskHistory, connection]);
   const taskStartedAt = taskEvents.find((event) => event.type === "task_started")?.timestamp || selectedTask?.created_at;
   const taskDuration = taskStartedAt ? Math.max(0, (settledAt ? Date.parse(settledAt) : now) - Date.parse(taskStartedAt)) : null;
   const agentExecutionGroups = useMemo<AgentExecutionGroup[]>(() => {
@@ -121,6 +186,10 @@ export function App() {
   useEffect(() => {
     let socket: DesktopSocket | null = null;
     let unsubscribe = () => {};
+    // 重连（切换项目、归档/恢复历史后）要重新拉取任务记录；先回到“连接中”，ready 后再触发拉取。
+    setTaskHistory({});
+    historyRequests.current.clear();
+    setConnection("连接中");
     (async () => {
       if (!window.desktop) {
         setConnection("浏览器预览");
@@ -131,7 +200,9 @@ export function App() {
       activeSocket = currentSocket;
       unsubscribe = currentSocket.subscribe((message) => {
         if (message.type === "ready") {
-          setTasks((current) => mergeTasks(current, message.tasks || []));
+          const history = message.events || [];
+          setTasks((current) => applyEventsToTasks(mergeTasks(current, message.tasks || []), history));
+          if (history.length) setEvents((current) => mergeEvents(current, history));
           setProjects((current) => [...new Set([...current, ...(message.projects || [])])].sort());
           setAgents(message.agents || []);
           setTaskProject((current) => current || message.project || message.projects?.[0] || "");
@@ -143,6 +214,11 @@ export function App() {
             currentSocket.send({ type: "command", command: "submit_task", ...pending, requestId: crypto.randomUUID() });
             setNotice("已连接目标项目，正在创建任务…");
           }
+        } else if (message.type === "command_result" && message.command === "task_events") {
+          // 只读查询，不提示；失败时记为空，界面显示“暂无记录”而不是一直转圈。
+          const taskId = historyRequests.current.get(message.requestId || "") || message.result?.taskId;
+          historyRequests.current.delete(message.requestId || "");
+          if (taskId) setTaskHistory((current) => ({ ...current, [taskId]: message.result?.events || [] }));
         } else if (message.type === "command_result") {
           if (message.command === "create_project") setCreatingProject(false);
           if (message.command === "create_project" && message.result?.projectName) {
@@ -178,37 +254,8 @@ export function App() {
           else setNotice(message.result?.taskId ? "任务已创建，正在连接项目经理…" : `${COMMAND_NAMES[message.command || ""] || "操作"}已受理`);
         } else if (message.type === "event" && message.event) {
           const event = message.event;
-          setEvents((current) => {
-            if (event.event_id && current.some((item) => item.event_id === event.event_id)) return current;
-            return [...current.slice(-999), event];
-          });
-          if (event.type === "task_created" && event.task_id) {
-            setTasks((current) => current.some((task) => task.task_id === event.task_id)
-              ? current
-              : [{ task_id: event.task_id, project_name: event.project_name, title: event.title, description: event.text, status: "received" }, ...current]);
-          }
-          if (event.task_id) {
-            const rootId = rootTaskId(event.task_id);
-            const lifecycleStatus: Record<string, string> = {
-              task_started: "running", task_hold: "paused", task_resumed: "running",
-              task_completed: event.final === true ? "completed" : "running",
-              task_settle: "completed",
-              task_terminated: "cancelled", task_cancelled: "cancelled", task_failed: "failed",
-            };
-            if (event.type === "control_applied") {
-              lifecycleStatus.control_applied = event.command === "pause" ? "paused" : event.command === "terminate" ? "cancelled" : event.command === "retry" || event.command === "resume" ? "running" : "";
-            }
-            const nextStatus = lifecycleStatus[event.type || ""];
-            setTasks((current) => current.map((task) => {
-              if (task.task_id !== rootId) return task;
-              const status = task.status_snapshot?.status || task.status;
-              const terminal = ["completed", "failed", "cancelled"].includes(status || "");
-              const isDowngrade = terminal && !["task_settle", "task_failed", "task_terminated", "task_cancelled"].includes(event.type || "");
-              return isDowngrade
-                ? task
-                : { ...task, status_snapshot: { ...(task.status_snapshot || {}), latest_event: event.type, ...(nextStatus ? { status: nextStatus } : {}) } };
-            }));
-          }
+          setEvents((current) => mergeEvents(current, [event]));
+          setTasks((current) => applyEventsToTasks(current, [event]));
         }
       });
     })().catch((error) => {
@@ -438,6 +485,7 @@ export function App() {
           agents={agents}
           selectedAgent={selectedAgent}
           taskEvents={taskEvents}
+          taskEventsLoading={taskEventsLoading}
           groups={agentExecutionGroups}
           taskStartedAt={taskStartedAt}
           taskDuration={taskDuration}

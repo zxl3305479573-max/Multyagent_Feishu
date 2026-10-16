@@ -48,7 +48,9 @@ export type DesktopMessage = {
   agents?: Agent[];
   project?: string | null;
   event?: EventRecord;
-  result?: { taskId?: string; projectName?: string; storagePath?: string; title?: string; retried?: boolean; resumed?: number; attempt?: number; status?: string; outputFile?: string; archived?: number; restored?: number; [key: string]: unknown };
+  events?: EventRecord[];
+  requestId?: string | null;
+  result?: { taskId?: string; events?: EventRecord[]; projectName?: string; storagePath?: string; title?: string; retried?: boolean; resumed?: number; attempt?: number; status?: string; outputFile?: string; archived?: number; restored?: number; [key: string]: unknown };
   error?: string;
 };
 export type DesktopSocket = {

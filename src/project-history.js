@@ -50,13 +50,15 @@ export async function exportProjectSnapshot({ project, taskStore, eventsFile = "
   return snapshot;
 }
 
-export async function archiveProjectHistory({ project, eventsFile = "runtime/events.jsonl", archiveFile, keep = 1000 } = {}) {
+export async function archiveProjectHistory({ project, taskStore, eventsFile = "runtime/events.jsonl", archiveFile, keep = 1000 } = {}) {
   const name = String(project || "").trim();
   if (!name) throw new Error("project is required");
+  // 旧日志里的 Agent 执行事件只带 task_id，要按任务归属判断项目，否则这些事件永远不会被归档。
+  const taskMap = new Map((await taskStore?.list?.() || []).filter((task) => task?.project_name).map((task) => [task.task_id, task.project_name]));
   // 记下读取时的文件长度：重写期间网关仍在追加事件，换文件前要把这段增量补上。
   const sizeAtRead = await stat(eventsFile).then((info) => info.size, () => 0);
   const events = await readEvents(eventsFile);
-  const matching = events.filter((event) => (event.project_name || event.projectName) === name);
+  const matching = events.filter((event) => eventProject(event, taskMap) === name);
   const keepCount = Math.max(0, Number(keep) || 0);
   const archived = matching.slice(0, Math.max(0, matching.length - keepCount));
   const retained = new Set(archived);
@@ -64,7 +66,9 @@ export async function archiveProjectHistory({ project, eventsFile = "runtime/eve
   const archiveTarget = resolve(archiveFile || `${eventsFile}.${name}.archive.jsonl`);
   if (archived.length) {
     await mkdir(dirname(archiveTarget), { recursive: true });
-    await appendFile(archiveTarget, `${archived.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+    // 归档时补上项目名，恢复后即使任务记录已不存在，事件也仍归属原项目。
+    const stamped = archived.map((event) => event.project_name || event.projectName ? event : { ...event, project_name: name });
+    await appendFile(archiveTarget, `${stamped.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
   }
   const target = resolve(eventsFile);
   await mkdir(dirname(target), { recursive: true });

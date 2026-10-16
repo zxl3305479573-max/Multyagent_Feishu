@@ -35,8 +35,13 @@ export function createEventLogger(file = "runtime/events.jsonl", options = {}) {
   let sequence = 0;
 
   return async function record(event = {}) {
+    const taskStore = typeof options.taskStore === "function" ? options.taskStore() : options.taskStore;
+    // Agent 执行事件（tool_call 等）只带 task_id；补上项目名，桌面端按项目订阅和回放时才不会丢掉它们。
+    const rootId = String(event.task_id || event.parent_task_id || "").split(":")[0];
+    const inferredProject = !event.project_name && rootId && taskStore?.getRoot ? (await taskStore.getRoot(rootId))?.project_name : null;
     const entry = {
       ...sanitizeLoggedEvent(event),
+      ...(inferredProject ? { project_name: inferredProject } : {}),
       schema_version: 1,
       event_id: randomUUID(),
       run_id: runId,
@@ -47,7 +52,6 @@ export function createEventLogger(file = "runtime/events.jsonl", options = {}) {
     };
     await mkdir(dirname(file), { recursive: true });
     await appendFile(file, `${JSON.stringify(entry)}\n`);
-    const taskStore = typeof options.taskStore === "function" ? options.taskStore() : options.taskStore;
     if (taskStore?.applyEvent) await taskStore.applyEvent(entry);
     return entry;
   };

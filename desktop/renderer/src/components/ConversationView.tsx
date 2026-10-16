@@ -84,6 +84,7 @@ type ConversationProps = {
   agents: Agent[];
   selectedAgent: string;
   taskEvents: EventRecord[];
+  taskEventsLoading: boolean;
   groups: AgentExecutionGroup[];
   taskStartedAt?: string;
   taskDuration: number | null;
@@ -91,7 +92,7 @@ type ConversationProps = {
   onOpenFile: OpenFile;
 };
 
-export function ConversationView({ selected, selectedTask, project, agents, selectedAgent, taskEvents, groups, taskStartedAt, taskDuration, sectionRefs, onOpenFile }: ConversationProps) {
+export function ConversationView({ selected, selectedTask, project, agents, selectedAgent, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, sectionRefs, onOpenFile }: ConversationProps) {
   return <div className="conversation-scroll" key={selected || "empty"}>
     {!selectedTask ? (
       <div className="welcome-state">
@@ -103,7 +104,9 @@ export function ConversationView({ selected, selectedTask, project, agents, sele
     ) : (
       <div className="conversation-content">
         <div className="conversation-task-overview"><strong>{selectedTask.title || "当前任务"}</strong><span>{selectedTask.project_name || project} · {taskStatus(selectedTask)}{taskStartedAt ? ` · 开始 ${formatTime(taskStartedAt)} · 总耗时 ${formatDuration(taskDuration)}` : ""}</span></div>
-        {taskEvents.length === 0 && <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>}
+        {taskEvents.length === 0 && (taskEventsLoading
+          ? <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>
+          : <div className="conversation-empty">暂无任务记录</div>)}
         {taskEvents.filter((event) => event.type === "task_created").map((event, index) => <article className="message user-message" key={event.event_id || `request-${index}`}><div className="message-avatar user-avatar">你</div><div className="message-body"><div className="message-author">你 <time>{formatTime(event.timestamp)}</time></div><p>{selectedTask.description || event.text || selectedTask.title}</p></div></article>)}
         {groups.map((group) => <ExecutionGroup key={group.key} group={group} agents={agents} focused={selectedAgent === group.key} sectionRef={(element) => { sectionRefs.current[group.key] = element; }} onOpenFile={onOpenFile} />)}
         {["running", "in_progress"].includes(snapshotStatus(selectedTask)) && <div className="running-indicator"><span className="pulse-dot" />Agent 正在执行</div>}
