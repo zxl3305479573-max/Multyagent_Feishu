@@ -247,6 +247,26 @@ npm run desktop:package # 生成 Windows 安装包
 - 首次启动会从应用目录下的 `.env` 迁移凭据；其他位置可在运行设置或 `MULTYAGENT_LEGACY_ENV_FILE` 中指定。
 - 退出时先通过 IPC 请求网关优雅退出，8 秒内未退出再强制结束。
 
+### 桌面端与飞书同时使用
+
+桌面端拉起的网关同时连接飞书机器人和桌面工作台，两边看到的是同一份任务、事件和项目：
+飞书里发起的任务会实时出现在桌面端，飞书新建的项目（`workspace/<项目名>`）也会出现在侧边栏；
+飞书端项目经理在创建项目时能看到已有项目列表，包括桌面端创建的项目。
+
+- **同一时间只运行一个网关。** 同一套机器人有两个长连接时，飞书只把消息投给其中一个，会出现“点了没反应”。
+  网关按项目经理机器人的 App ID 在用户目录 `.multyagent-feishu/locks/` 下加全局锁：已有网关在运行时，
+  `npm start` 会拒绝启动，桌面端也不会重复拉起，并提示占用的进程和数据目录。
+- **命令行与桌面端共用数据：** 在仓库 `.env` 中设置 `PI_DATA_DIR` 为桌面端数据目录
+  （开发版为 `%APPDATA%\Electron`），`npm start` 就会读写同一份 `runtime/`、`workspace/`、`logs/`。
+- **合并已有的命令行数据：** 先停止所有网关，再运行
+
+  ```powershell
+  npm run data:merge            # 预览
+  npm run data:merge -- --apply # 执行；目标原文件先备份到 runtime/merge-backup-<时间>/
+  ```
+
+  任务按 `task_id`、事件按 `event_id` 去重合并；仓库里的项目目录以目录联接的方式挂到目标 `workspace/` 下，不搬动文件。
+
 ## 开发检查
 
 ```powershell

@@ -138,6 +138,8 @@ function buildEnvCatalog({ roles = roleConfig().roles } = {}) {
         { key: "PI_LEGACY_TASKS_FILE", label: "旧版任务文件（迁移用）", type: "path", managedDefault: true, advanced: true },
         { key: "PI_TASKS_FILE", label: "任务状态文件（旧名）", type: "path", advanced: true, description: "旧版本变量名，优先级低于“任务状态文件”。" },
         { key: "PI_LOCK_FILE", label: "单实例锁文件", type: "path", managedDefault: true, advanced: true },
+        { key: "PI_LOCK_DIR", label: "机器人全局锁目录", type: "path", advanced: true, description: "按飞书机器人 App ID 放置全局单实例锁，默认在用户目录 .multyagent-feishu/locks。命令行与桌面端须一致。" },
+        { key: "PI_DATA_DIR", label: "数据根目录", type: "path", managed: true, advanced: true, description: "由桌面端管理。命令行 npm start 在 .env 中设置为同一目录即可共用任务、事件与项目。" },
         { key: "MULTYAGENT_LEGACY_ENV_FILE", label: "旧版 .env 位置（凭据迁移）", type: "path", advanced: true, description: "首次启动时从该文件导入尚未保存的凭据。" },
         { key: "PI_DESKTOP_TOKEN_FILE", label: "桌面会话令牌文件", type: "path", managed: true, advanced: true, description: "由桌面端管理，不能修改。" },
         { key: "PI_DESKTOP_CONTROL", label: "桌面控制面", type: "text", managed: true, advanced: true, description: "桌面端依赖它连接网关，始终开启。" },

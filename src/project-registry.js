@@ -1,4 +1,4 @@
-import { lstat, mkdir, symlink } from "node:fs/promises";
+import { lstat, mkdir, readdir, symlink } from "node:fs/promises";
 import { readJsonFile, writeFileAtomic } from "./atomic-file.cjs";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -46,10 +46,20 @@ export function createProjectRegistry({ file = "runtime/projects.json", root = p
     await persist();
     return clone(project);
   }
+  async function workspaceProjects() {
+    try {
+      const entries = await readdir(workspace, { withFileTypes: true });
+      return entries.filter((entry) => (entry.isDirectory() || entry.isSymbolicLink()) && PROJECT_NAME.test(entry.name)).map((entry) => entry.name);
+    } catch {
+      return [];
+    }
+  }
   return {
     async list(extraNames = []) {
       await load();
-      const names = new Set([...Object.keys(state.projects), ...extraNames.map((name) => String(name || "").trim()).filter(Boolean)]);
+      // 飞书端项目经理用 create_project 直接建 workspace/<项目名>，不经过注册表；把这些目录也列出来，
+      // 桌面端才能看到飞书端创建的项目。
+      const names = new Set([...Object.keys(state.projects), ...await workspaceProjects(), ...extraNames.map((name) => String(name || "").trim()).filter(Boolean)]);
       return [...names].sort().map((name) => clone(state.projects[name] || { name, storagePath: resolve(workspace, name) }));
     },
     create,

@@ -7,6 +7,7 @@ const { createGatewayProcess } = require("./gateway-process.cjs");
 const { buildEnvCatalog, catalogFields, isSecretKey } = require("../../src/env-catalog.cjs");
 const { createSettingsStore, describeSettings } = require("../../src/settings-store.cjs");
 const { roleConfig } = require("../../src/role-config.cjs");
+const { activeLock, describeLock, globalLockFile } = require("../../src/gateway-lock.cjs");
 
 const root = join(__dirname, "..", "..");
 let win = null; let tray = null; let quitting = false; let gateway = null; let credentials = null; let settings = null; let gatewayStopping = false;
@@ -121,7 +122,18 @@ async function gatewayEnv(paths) {
     ...(await credentials.toEnv()),
     PI_DESKTOP_TOKEN_FILE: paths.tokenFile,
     PI_DESKTOP_CONTROL: "true",
+    // 数据根目录始终是桌面端目录；命令行网关把 PI_DATA_DIR 指向这里即可共用同一份数据。
+    PI_DATA_DIR: paths.runtimeRoot,
   };
+}
+
+// 另一个网关（例如命令行 npm start）已占用同一套飞书机器人时返回说明；桌面端不再重复启动，
+// 否则两个进程会分抢飞书消息和卡片回调。
+function foreignGatewayError(env) {
+  const file = globalLockFile(roleConfig().agents, env);
+  const lock = file && activeLock(file);
+  if (!lock || lock.pid === gateway?.child?.pid) return "";
+  return `已有其他网关在使用同一套飞书机器人（${describeLock(lock)}）。请先停止它（例如关闭运行 npm start 的终端），再在运行设置里重启服务。`;
 }
 
 function managedDefaultsFor({ runtimeDir, logsDir }) {
@@ -153,7 +165,7 @@ async function start() {
   const logsDir = join(runtimeRoot, "logs");
   await mkdir(runtimeDir, { recursive: true });
   await mkdir(logsDir, { recursive: true });
-  const paths = { runtimeDir, logsDir, tokenFile: join(runtimeDir, "desktop-session.token") };
+  const paths = { runtimeRoot, runtimeDir, logsDir, tokenFile: join(runtimeDir, "desktop-session.token") };
   process.env.PI_DESKTOP_TOKEN_FILE = paths.tokenFile;
   credentials = createCredentialStore({ file: join(runtimeRoot, "credentials.json"), safeStorage, isAllowedKey: (key) => isSecretKey(key, envCatalog) });
   settings = createSettingsStore({ file: join(runtimeRoot, "settings.json"), catalog: envCatalog, roleKeys });
@@ -179,19 +191,23 @@ async function start() {
     return settingsSnapshot(paths);
   });
 
-  gateway = createGatewayProcess({ entry: join(root, "src", "index.js"), cwd: runtimeRoot, env: await gatewayEnv(paths) });
-  gateway.start();
+  const initialEnv = await gatewayEnv(paths);
+  gateway = createGatewayProcess({ entry: join(root, "src", "index.js"), cwd: runtimeRoot, env: initialEnv });
+  let gatewayError = foreignGatewayError(initialEnv);
+  if (gatewayError) console.error(`[desktop] ${gatewayError}`);
+  else gateway.start();
   // The renderer reads the session token immediately on load. Wait until the
   // gateway has published its token and health endpoint so first launch does
   // not look disconnected and force a manual service restart.
   try {
-    await waitForGateway();
+    if (!gatewayError) await waitForGateway();
   } catch (error) {
     // 网关没起来时仍然打开窗口：界面会显示“连接失败”，用户可以去运行设置里修正配置后重启服务。
     console.error(`[desktop] ${error.message}`);
   }
   // 渲染进程运行在沙箱里，不能自己读令牌文件，由主进程读取后返回。
   handle("desktop:session", async () => {
+    if (gatewayError) throw new Error(gatewayError);
     const { token, port } = JSON.parse(await readFile(paths.tokenFile, "utf8"));
     return { token, port };
   });
@@ -209,7 +225,12 @@ async function start() {
     }
   });
   // 重启时重新组装完整环境（托管路径 + 运行设置 + 凭据），新配置在此生效。
-  handle("desktop:gateway:restart", async () => { await gateway.restart(await gatewayEnv(paths)); await waitForGateway(); win?.webContents.reload(); return { restarted: true }; });
+  handle("desktop:gateway:restart", async () => {
+    const env = await gatewayEnv(paths);
+    gatewayError = foreignGatewayError(env);
+    if (gatewayError) { win?.webContents.reload(); throw new Error(gatewayError); }
+    await gateway.restart(env); await waitForGateway(); win?.webContents.reload(); return { restarted: true };
+  });
   handle("desktop:window:show", () => showWindow());
   handle("desktop:app:quit", () => { quitting = true; app.quit(); });
   await createWindow();

@@ -13,6 +13,7 @@
     "desktop": "electron desktop/electron/main.cjs",
     "desktop:portable": "npm run desktop:build && electron-builder --win dir",
     "desktop:package": "npm run desktop:build && electron-builder --win",
+    "data:merge": "node scripts/merge-data-dir.mjs",
     "test": "node --test \"test/*.test.js\"",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.node.json && tsc -p desktop/tsconfig.json",

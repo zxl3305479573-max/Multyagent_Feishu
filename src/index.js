@@ -1,5 +1,7 @@
 import "dotenv/config";
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+// 必须紧跟 dotenv：按 PI_DATA_DIR 切换工作目录，之后所有相对路径（runtime/、workspace/、logs/）都落在共享数据目录。
+import "./data-dir.js";
+import { unlinkSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
@@ -20,6 +22,7 @@ import { createProjectRegistry } from "./project-registry.js";
 import { createShutdown } from "./shutdown.js";
 import { roleConfig } from "./role-config.cjs";
 import { rotateEventLog } from "./event-log.js";
+import { activeLock, describeLock, globalLockFile, releaseLock as releaseGatewayLock, writeLock } from "./gateway-lock.cjs";
 
 // 角色定义来自 config/roles/*.json；配置有误时在这里直接报错退出。
 const config = { agents: roleConfig().agents };
@@ -35,34 +38,24 @@ let desktopHost = null;
 // 单实例守卫：同一套应用凭据只允许一个长连接网关。
 // 两个网关同时运行时，事件与卡片回调只会投给其中一个，
 // 而待确认状态在内存里，点击就会落到没有状态的进程上，表现为「点了没反应」。
+// 数据目录锁防止同一份数据被两个进程写；全局锁（按机器人 App ID，放在用户目录）
+// 防止命令行与桌面端从不同数据目录各起一个网关、抢同一套飞书机器人。
 const lockFile = process.env.PI_LOCK_FILE || "logs/gateway.lock";
-const alive = (pid) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-};
-try {
-  const held = Number(readFileSync(lockFile, "utf8").trim());
-  if (held && held !== process.pid && alive(held)) {
-    console.error(`[fatal] gateway already running (pid=${held}). 先停掉旧实例再启动，否则卡片回调会落到另一个进程而拿不到待确认状态。`);
+const botLockFile = globalLockFile(config.agents);
+for (const [file, reason] of [[lockFile, "同一数据目录"], [botLockFile, "同一套飞书机器人"]]) {
+  const held = file && activeLock(file);
+  if (held) {
+    console.error(`[fatal] gateway already running for ${reason} (${describeLock(held)}). 先停掉旧实例再启动，否则飞书消息与卡片回调会被两个进程分抢。`);
     process.exit(1);
   }
-} catch {
-  // 无锁文件或内容不可读：按首次启动处理。
 }
-mkdirSync(dirname(lockFile), { recursive: true });
-writeFileSync(lockFile, String(process.pid));
+for (const file of [lockFile, botLockFile]) if (file) writeLock(file);
 
 const lifecycle = createShutdown({ log: console, timeoutMs: Number(process.env.PI_SHUTDOWN_TIMEOUT_MS) || 10_000 });
 lifecycle.installSignalHandlers();
 function releaseLock() {
-  try {
-    if (Number(readFileSync(lockFile, "utf8").trim()) === process.pid) unlinkSync(lockFile);
-  } catch {
-  }
+  releaseGatewayLock(lockFile);
+  if (botLockFile) releaseGatewayLock(botLockFile);
 }
 // 最先注册 → 最后执行：所有组件关闭后再释放单实例锁。
 lifecycle.register("lock", releaseLock);
@@ -275,7 +268,7 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
   const cleanupHistory = async ({ projectName, keep = 1000 } = {}) => {
     const project = String(projectName || "").trim();
     if (!project) throw new Error("projectName is required");
-    const result = await archiveProjectHistory({ project, keep, eventsFile: eventsFile, archiveFile: `runtime/events-archive/${project}.jsonl` });
+    const result = await archiveProjectHistory({ project, keep, taskStore, eventsFile: eventsFile, archiveFile: `runtime/events-archive/${project}.jsonl` });
     await publishRecordEvent({ type: "project_history_archived", project_name: project, archived_count: result.archived, kept_count: result.kept, archive_file: result.archiveFile, channel: "desktop" });
     return result;
   };

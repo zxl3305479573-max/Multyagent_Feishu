@@ -255,12 +255,15 @@ export function App() {
         } else if (message.type === "event" && message.event) {
           const event = message.event;
           setEvents((current) => mergeEvents(current, [event]));
+          // 飞书端发起的任务也走同一个网关：出现新项目名时直接加入侧边栏，不必重连。
+          const eventProject = event.project_name;
+          if (eventProject) setProjects((current) => current.includes(eventProject) ? current : [...current, eventProject].sort());
           setTasks((current) => applyEventsToTasks(current, [event]));
         }
       });
     })().catch((error) => {
       setConnection("连接失败");
-      setNotice(`无法连接本地任务服务：${String(error?.message || error)}`);
+      setNotice(`无法连接本地任务服务：${String(error?.message || error).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "")}`);
     });
     return () => {
       unsubscribe();

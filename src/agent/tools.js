@@ -1,4 +1,5 @@
 // Agent 可调用的受控工具：交付产物、创建项目、查询任务状态、受控 CLI。
+import { readdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -118,11 +119,23 @@ export function normalizeAssignments(value, { selfAgentKey = null, maxAssignment
     .slice(0, maxAssignments);
 }
 
+// 已有项目（含桌面端创建的），写进工具说明，飞书端项目经理据此复用而不是另起同义新项目。
+function existingProjects(root) {
+  try {
+    return readdirSync(join(root, "workspace"), { withFileTypes: true })
+      .filter((entry) => (entry.isDirectory() || entry.isSymbolicLink()) && /^[a-z][a-z0-9-]*$/.test(entry.name))
+      .map((entry) => entry.name).sort().slice(0, 50);
+  } catch {
+    return [];
+  }
+}
+
 export function createProjectTool({ onProject, root = process.cwd() }) {
+  const known = existingProjects(root);
   return defineTool({
     name: "create_project",
     label: "创建项目",
-    description: "确认英文项目名后调用：创建或切换到 workspace/<项目名>/ 项目目录。",
+    description: `确认英文项目名后调用：创建或切换到 workspace/<项目名>/ 项目目录。${known.length ? `已有项目：${known.join("、")}；用户提到的是已有项目时直接用原名切换。` : ""}`,
     parameters: Type.Object({
       name: Type.String({ description: "英文项目名：小写字母开头，仅含小写字母、数字、连字符" }),
     }),
