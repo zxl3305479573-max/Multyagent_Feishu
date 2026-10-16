@@ -77,8 +77,10 @@ export function mergeTaskStates(source, target) {
 }
 
 export function mergeEventLists(source, target) {
-  const seen = new Set(target.map((event) => event.event_id).filter(Boolean));
-  const fresh = source.filter((event) => !event.event_id || !seen.has(event.event_id));
+  // 早期事件没有 event_id，用整条内容作去重键，重复执行合并也不会把它们再写一遍。
+  const keyOf = (event) => event.event_id || JSON.stringify(event);
+  const seen = new Set(target.map(keyOf));
+  const fresh = source.filter((event) => !seen.has(keyOf(event)));
   const time = (event) => Date.parse(event.timestamp || "") || 0;
   // 稳定排序：同一时间戳保持原有先后（目标在前）。
   const merged = [...target, ...fresh].map((event, index) => ({ event, index }))

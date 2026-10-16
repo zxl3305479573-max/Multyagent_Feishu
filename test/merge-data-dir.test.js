@@ -20,3 +20,11 @@ test("merging event logs dedupes by event id and orders by time", () => {
   assert.equal(added, 1);
   assert.deepEqual(merged.map((event) => event.event_id), ["s1", "t2", "t1"]);
 });
+
+test("re-running the merge does not duplicate legacy events without an event id", () => {
+  const legacy = { type: "task_started", task_id: "OLD", timestamp: "2026-09-01T00:00:00Z" };
+  const first = mergeEventLists([legacy], []);
+  const second = mergeEventLists([{ ...legacy }], first.merged);
+  assert.equal(second.added, 0);
+  assert.equal(second.merged.length, 1);
+});
