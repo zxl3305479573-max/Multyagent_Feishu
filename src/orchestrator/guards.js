@@ -6,6 +6,7 @@
 //    这里识别这两种情况，由编排层先纠正一次、仍失败再按文字推断兜底。
 // 2. 验收门禁：测试必须提交结构化验收结果（结论 + 逐项检查 + 证据），
 //    “单元测试通过 / 页面能打开”不能当作通过；未通过时交回项目经理决定打回谁修复。
+import { writeScopeOf, writeScopesOverlap } from "./assignments.js";
 
 /** 文字里声称已经派发/分配的说法。只在没有有效 assignments 时才有意义。 */
 const DISPATCH_CLAIM = /(?:已经?|现已|正在|将会?|马上|立即)\s*(?:派发|派给|分派|分配|指派|交给|交由|转交|安排)|派发(?:给|至)|(?:交给|交由|转交给?|分配给|指派给|安排)\s*(?:架构|前端|后端|测试|审计|architect|frontend|backend|tester|auditor)/iu;
@@ -69,6 +70,81 @@ export function dispatchCorrectionNote(detection, availableKeys = []) {
     `请立即重新调用 deliver_artifact：需要其他角色时在 assignments 中逐个填写 agentKey（只能是：${roles}）和具体 task；`,
     "确实不需要派发时，删去派发说法，自己完成或设置 final=true 并如实说明。",
   ].join("\n");
+}
+
+// 粒度门禁：前端/后端的一条 assignment 应是一个可独立验收的切片（一个接口、一个页面或一个组件）。
+// 只用可量化的信号判断“过大”：验收标准条数、任务描述长度、任务里罗列的条目数。
+export const SLICE_LIMITS = {
+  roles: ["frontend_developer", "backend_developer"],
+  maxCriteria: Number(process.env.PI_SLICE_MAX_CRITERIA) || 5,
+  maxTaskChars: Number(process.env.PI_SLICE_MAX_TASK_CHARS) || 800,
+  maxListItems: Number(process.env.PI_SLICE_MAX_LIST_ITEMS) || 6,
+};
+
+const LIST_ITEM = /^\s*(?:\d+[.、)）]|[-*•·])\s*\S/;
+
+/**
+ * 找出明显过大的前端/后端 assignment。
+ * @param {Array<any>} [assignments] @param {typeof SLICE_LIMITS} [limits]
+ * @returns {Array<{ id: string, agentKey: string, reasons: string[] }>}
+ */
+export function oversizedAssignments(assignments = [], limits = SLICE_LIMITS) {
+  const result = [];
+  for (const item of Array.isArray(assignments) ? assignments : []) {
+    if (!item || !limits.roles.includes(item.agentKey)) continue;
+    const task = String(item.task || "");
+    const criteria = Array.isArray(item.acceptanceCriteria) ? item.acceptanceCriteria.length : 0;
+    const listItems = task.split(/\r?\n/).filter((line) => LIST_ITEM.test(line)).length;
+    const reasons = [];
+    if (criteria > limits.maxCriteria) reasons.push(`验收标准 ${criteria} 条（上限 ${limits.maxCriteria}）`);
+    if (task.length > limits.maxTaskChars) reasons.push(`任务描述 ${task.length} 字（上限 ${limits.maxTaskChars}）`);
+    if (listItems >= limits.maxListItems) reasons.push(`任务里罗列了 ${listItems} 个条目`);
+    if (reasons.length) result.push({ id: item.id || item.agentKey, agentKey: item.agentKey, reasons });
+  }
+  return result;
+}
+
+/**
+ * 同角色、没有依赖关系、却声明了重叠写入范围的切片对：它们本想并行，但会改到同一批文件，调度时只能退回串行。
+ * @param {Array<any>} [assignments]
+ * @returns {Array<{ agentKey: string, ids: [string, string] }>}
+ */
+export function overlappingSlices(assignments = []) {
+  const items = (Array.isArray(assignments) ? assignments : []).filter((item) => item && writeScopeOf(item).length);
+  const dependsOn = (a, b) => (Array.isArray(a.dependsOn) ? a.dependsOn : []).includes(b.id);
+  const pairs = [];
+  for (let i = 0; i < items.length; i += 1) {
+    for (let j = i + 1; j < items.length; j += 1) {
+      const [a, b] = [items[i], items[j]];
+      if (a.agentKey !== b.agentKey || dependsOn(a, b) || dependsOn(b, a)) continue;
+      if (writeScopesOverlap(writeScopeOf(a), writeScopeOf(b))) pairs.push({ agentKey: a.agentKey, ids: [a.id || a.agentKey, b.id || b.agentKey] });
+    }
+  }
+  return pairs;
+}
+
+/**
+ * @param {Array<{ id: string, agentKey: string, reasons: string[] }>} oversized
+ * @param {Array<{ agentKey: string, ids: [string, string] }>} [overlaps]
+ */
+export function sliceCorrectionNote(oversized, overlaps = []) {
+  const lines = [];
+  if (oversized.length) {
+    lines.push(
+      `任务粒度校验未通过：${oversized.map((item) => `${item.id}（${item.agentKey}）${item.reasons.join("、")}`).join("；")}。`,
+      "请把这些任务拆成多个切片：同一角色可以有多条 assignment，每条是一个可独立验收的接口、页面或组件，",
+      "各自带唯一 id、1–3 条 acceptanceCriteria，有先后关系时用 dependsOn 指向前一片的 id。",
+    );
+  }
+  if (overlaps.length) {
+    lines.push(
+      `写入范围重叠：${overlaps.map((item) => `${item.ids.join(" 与 ")}（${item.agentKey}）`).join("；")}。`,
+      "同角色切片只有 fileWriteAllowlist 互不重叠（含父子目录）时才会并行；请重新划分写入范围，或用 dependsOn 明确先后，",
+      "多个切片都要改的公共文件（路由注册、菜单、依赖等）放进一个依赖它们的集成切片。",
+    );
+  }
+  lines.push("修正后重新调用 deliver_artifact；如果确实无法调整，原样再提交一次即可放行（重叠的切片会串行执行）。");
+  return lines.join("\n");
 }
 
 const VERDICTS = new Set(["pass", "fail", "skip"]);
@@ -141,6 +217,7 @@ export function acceptanceFailureNote(acceptance) {
     "【验收未通过】测试提交的结构化验收结论为 fail，以下检查未通过：",
     failed || "- （未列出具体检查项）",
     "请据此决定：用 assignments 把具体缺陷派给对应开发角色修复，并在修复后安排测试重新验收；",
+    "检查编号形如 <切片id>-AC<n> 时，前缀就是出问题的切片：只返工这些切片，不要整块重做。",
     "若判断为测试误判，请说明理由后继续推进。不要在未修复的情况下直接设置 final=true。",
   ].join("\n");
 }

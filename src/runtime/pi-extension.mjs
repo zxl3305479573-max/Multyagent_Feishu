@@ -74,7 +74,8 @@ export function createRpcExtension(api, { context, tools, root = process.cwd() }
     artifactsDir: context.artifactsDir,
   });
 
-  tools.createPolicyFactory(agent, getProjectName)(api);
+  // 任务级权限（切片的写入白名单等）随 RPC 上下文传入，与内置模式同样生效。
+  tools.createPolicyFactory(agent, getProjectName, () => context.taskPermissions || null)(api);
 
   if (!context.statusQuery) {
     api.registerTool(tools.createDeliverTool({
@@ -82,6 +83,7 @@ export function createRpcExtension(api, { context, tools, root = process.cwd() }
       getProjectName,
       agentKey: context.agentKey,
       agentName: agent.displayName,
+      taskId: context.taskId || null,
       onDeliver: async (delivery) => {
         const file = rpcDeliveryFile({ root, taskId: context.taskId, agentKey: context.agentKey });
         // RPC 父进程轮询读取此文件，必须原子替换，避免读到半截 JSON。

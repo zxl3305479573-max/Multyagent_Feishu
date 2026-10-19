@@ -11,9 +11,15 @@ function safePart(value, label) {
   return part;
 }
 
+// 编排层派发的子任务 ID 形如 <根任务>:<角色>[.<切片>]，冒号在 Windows 路径里非法：
+// 目录名里换成 "__"，其余字符仍按白名单校验（"/"、".." 等照样拒绝）。
+function taskSegment(taskId) {
+  return safePart(String(taskId || "").replaceAll(":", "__"), "task id");
+}
+
 export function worktreePath({ root = process.cwd(), agentKey, taskId } = {}) {
   const agent = safePart(agentKey, "agent key");
-  const task = safePart(taskId, "task id");
+  const task = taskSegment(taskId);
   return join(resolve(root), "runtime", "workspaces", agent, task);
 }
 
@@ -85,7 +91,7 @@ export async function applyWorktreePatch({ root = process.cwd(), agentKey, taskI
   await run("git", ["-C", target, "add", "-A"]);
   const { stdout: patch } = await run("git", ["-C", target, "diff", "--cached", "--binary"]);
   if (!String(patch).trim()) return { applied: false, empty: true, conflict: false };
-  const patchPath = join(resolve(root), "runtime", "worktree-patches", `${safePart(agentKey, "agent key")}-${safePart(taskId, "task id")}.patch`);
+  const patchPath = join(resolve(root), "runtime", "worktree-patches", `${safePart(agentKey, "agent key")}-${taskSegment(taskId)}.patch`);
   await mkdir(dirname(patchPath), { recursive: true });
   await writeFile(patchPath, String(patch));
   try {

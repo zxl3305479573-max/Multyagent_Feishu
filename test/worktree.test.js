@@ -9,6 +9,9 @@ test("worktreePath keeps agent and task inside the managed workspace", () => {
   assert.match(worktreePath({ root: "D:/repo", agentKey: "frontend_developer", taskId: "T-001" }), /runtime[\\/]workspaces[\\/]frontend_developer[\\/]T-001$/);
   assert.throws(() => worktreePath({ root: "D:/repo", agentKey: "../escape", taskId: "T-001" }), /Invalid agent key/);
   assert.throws(() => worktreePath({ root: "D:/repo", agentKey: "frontend", taskId: "../escape" }), /Invalid task id/);
+  // 编排层派发的子任务 ID 带冒号，目录名里转成 "__"
+  assert.match(worktreePath({ root: "D:/repo", agentKey: "frontend_developer", taskId: "T-001:frontend_developer.fe-login" }), /[\\/]T-001__frontend_developer\.fe-login$/);
+  assert.throws(() => worktreePath({ root: "D:/repo", agentKey: "frontend", taskId: "T-1:../x" }), /Invalid task id/);
 });
 
 test("listWorktrees parses porcelain output", async () => {

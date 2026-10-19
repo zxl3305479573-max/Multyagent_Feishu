@@ -41,10 +41,17 @@ export async function ensureArtifactsDir(dir) {
   return dir;
 }
 
-// 交付包落盘：<artifactsDir>/<agentKey>-delivery.json
-export async function saveDelivery(artifactsDir, agentKey, delivery) {
+// 交付包文件名前缀：切片子任务（…:frontend_developer.fe-login）用 <角色>.<切片 id>，
+// 否则同一父任务下并行的同角色切片会写同一个文件互相覆盖。
+export function deliveryNameFor(agentKey, taskId) {
+  const last = String(taskId || "").split(":").at(-1);
+  return last.startsWith(`${agentKey}.`) && /^[\w.-]+$/.test(last) ? last : agentKey;
+}
+
+// 交付包落盘：<artifactsDir>/<deliveryName>-delivery.json（deliveryName 默认为 agentKey）
+export async function saveDelivery(artifactsDir, agentKey, delivery, { deliveryName = agentKey } = {}) {
   await ensureArtifactsDir(artifactsDir);
-  const file = join(artifactsDir, `${agentKey}-delivery.json`);
+  const file = join(artifactsDir, `${deliveryName}-delivery.json`);
   await writeFileAtomic(file, JSON.stringify({ ...delivery, agentKey, deliveredAt: Date.now() }, null, 2));
   return file;
 }

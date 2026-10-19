@@ -154,6 +154,7 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
     getProjectName: () => activeProject,
     agentKey: agent.key,
     agentName: agent.displayName,
+    taskId: context.taskId || null,
     roleLimits: () => buildTaskPlanRoleLimits(activeProject),
     onDeliver: (d) => { delivery = d; },
   });

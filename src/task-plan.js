@@ -1,4 +1,6 @@
 const PROJECT_SLUG = /^[a-z][a-z0-9-]*$/;
+// 一份计划的切片总数上限：拆得过细会让派发轮次和汇总成本失控。
+export const MAX_PLAN_ASSIGNMENTS = Number(process.env.PI_MAX_PLAN_ASSIGNMENTS) || 12;
 
 function stringList(value) {
   return Array.isArray(value) ? value.filter((item) => typeof item === "string").map((item) => item.trim()) : [];
@@ -25,6 +27,8 @@ export function validateTaskPlan(input, { projectName, roleLimits = {} } = {}) {
   if (projectName && input.project !== projectName) errors.push("plan project does not match the task project");
   if (typeof input.goal !== "string" || !input.goal.trim()) errors.push("goal is required");
   if (!Array.isArray(input.stages) || input.stages.length === 0) errors.push("at least one stage is required");
+  const totalAssignments = (Array.isArray(input.stages) ? input.stages : []).reduce((sum, stage) => sum + (Array.isArray(stage?.assignments) ? stage.assignments.length : 0), 0);
+  if (totalAssignments > MAX_PLAN_ASSIGNMENTS) errors.push(`plan has ${totalAssignments} assignments; keep it within ${MAX_PLAN_ASSIGNMENTS} slices`);
 
   const seenStages = new Set();
   const assignments = new Map();

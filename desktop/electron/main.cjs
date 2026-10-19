@@ -145,6 +145,7 @@ function managedDefaultsFor({ runtimeDir, logsDir }) {
     PI_LOCK_FILE: join(logsDir, "gateway.lock"),
     PI_APPROVALS_FILE: join(runtimeDir, "approvals.json"),
     PI_CHECKPOINTS_FILE: join(runtimeDir, "checkpoints.json"),
+    PI_PLAN_RUNS_FILE: join(runtimeDir, "plan-runs.json"),
     PI_DOMAIN_TASKS_FILE: join(runtimeDir, "domain-tasks.json"),
     PI_EVENTS_FILE: join(runtimeDir, "events.jsonl"),
     PI_LEGACY_TASKS_FILE: join(runtimeDir, "tasks.json"),

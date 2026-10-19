@@ -3,7 +3,7 @@ import { readdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { ensureArtifactsDir, saveDelivery } from "../artifacts.js";
+import { deliveryNameFor, ensureArtifactsDir, saveDelivery } from "../artifacts.js";
 import { readProjectSummary } from "../project-summary.js";
 import { sanitizeAgentReply } from "./prompts.js";
 import { executeAgentCli } from "../agent-cli.js";
@@ -11,7 +11,8 @@ import { loadTaskStatus } from "../task-status.js";
 import { validateTaskPlan } from "../task-plan.js";
 import { roleConfig } from "../role-config.cjs";
 import { getCapabilityRegistry } from "../capabilities/index.js";
-import { validateAcceptance } from "../orchestrator/guards.js";
+import { overlappingSlices, oversizedAssignments, sliceCorrectionNote, validateAcceptance } from "../orchestrator/guards.js";
+import { SLICEABLE_ROLES } from "../orchestrator/assignments.js";
 import { resolveProjectFile } from "../project-file.cjs";
 
 const loadedRoleConfig = roleConfig();
@@ -56,12 +57,14 @@ async function checkAcceptance(input, { root, projectName }) {
   return errors.length ? { ...checked, valid: false, errors } : checked;
 }
 
-export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, roleLimits = {}, onDeliver, root = process.cwd() }) {
+export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, taskId = null, roleLimits = {}, onDeliver, root = process.cwd() }) {
   const limitsForPlan = () => typeof roleLimits === "function"
     ? roleLimits()
     : Object.keys(roleLimits || {}).length
       ? roleLimits
       : buildTaskPlanRoleLimits(getProjectName?.() || null);
+  // 粒度门禁每次运行只拦一次：项目经理确认无法再拆时，原样再提交即放行，避免卡死。
+  let sliceGateTriggered = false;
   return defineTool({
     name: "deliver_artifact",
     label: "交付产物",
@@ -85,10 +88,14 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
       }), { description: "需要用户点击选择的选项列表" })),
       final: Type.Optional(Type.Boolean({ description: "是否为最终交付（汇总完成、无需下游协作）。默认为 false" })),
       assignments: Type.Optional(Type.Array(Type.Object({
+        id: Type.Optional(Type.String({ description: "切片唯一 id，例如 fe-login-page；同一角色有多条 assignment 时必填" })),
         agentKey: Type.String(),
-        task: Type.String(),
+        task: Type.String({ description: "一个可独立验收的切片：一个接口、一个页面或一个组件" }),
         reason: Type.Optional(Type.String()),
-      }))),
+        acceptanceCriteria: Type.Optional(Type.Array(Type.String(), { description: "该切片的 1–3 条验收标准" })),
+        dependsOn: Type.Optional(Type.Array(Type.String(), { description: "必须先完成的切片 id" })),
+        fileWriteAllowlist: Type.Optional(Type.Array(Type.String(), { description: "该切片允许写入的路径（目录或文件，例如 workspace/<项目>/frontend/src/pages/login）；同角色切片互不重叠时才会并行" })),
+      }), { description: "派发给其他角色的任务。前端/后端的大任务拆成多条切片，同一角色的切片按顺序依次执行" })),
       plan: Type.Optional(Type.Any({ description: "项目经理使用的结构化阶段计划；包含 project、goal、stages 和权限快照" })),
       acceptance: Type.Optional(Type.Object({
         verdict: Type.String({ description: "pass | fail | skip。单元测试通过或页面能打开不等于 pass" }),
@@ -143,6 +150,23 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         acceptance = checked.acceptance;
       }
       const rawAssignments = params.assignments || (plan?.stages?.[0]?.assignments || []);
+      let granularityWarnings = [];
+      if (agentKey === "project_manager" && params.final !== true) {
+        // 计划首阶段通常与 assignments 重复，按 id 合并后再检查，避免同一切片报两次。
+        const planned = plan ? plan.stages.flatMap((stage) => stage.assignments) : [];
+        const merged = new Map();
+        for (const item of [...(Array.isArray(params.assignments) ? params.assignments : []), ...planned]) {
+          if (item) merged.set(item.id || `${item.agentKey}|${item.task}`, item);
+        }
+        const candidates = [...merged.values()];
+        const oversized = oversizedAssignments(candidates);
+        const overlaps = overlappingSlices(candidates);
+        if ((oversized.length || overlaps.length) && !sliceGateTriggered) {
+          sliceGateTriggered = true;
+          return { content: [{ type: "text", text: sliceCorrectionNote(oversized, overlaps) }], details: { oversizedAssignments: oversized, overlappingSlices: overlaps } };
+        }
+        granularityWarnings = [...oversized, ...overlaps.map((item) => ({ id: item.ids.join("+"), agentKey: item.agentKey, reasons: ["写入范围重叠，将串行执行"] }))];
+      }
       const delivery = {
         summary: sanitizeAgentReply(params.summary),
         artifactPaths: params.artifactPaths || [],
@@ -154,6 +178,7 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         choices: params.choices || [],
         assignments: normalizeAssignments(rawAssignments, { selfAgentKey: agentKey, allowDispatch: agentKey === "project_manager" }),
         droppedAssignments: agentKey === "project_manager" ? droppedAssignments(rawAssignments, { selfAgentKey: agentKey }) : [],
+        granularityWarnings,
         acceptance,
         plan,
         diagram: params.diagram || null,
@@ -163,7 +188,7 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         agentKey,
         agentName,
       };
-      await saveDelivery(artifactsDir, agentKey, delivery);
+      await saveDelivery(artifactsDir, agentKey, delivery, { deliveryName: deliveryNameFor(agentKey, taskId) });
       await onDeliver?.(delivery);
       return {
         content: [{ type: "text", text: `已交付：${sanitizeAgentReply(params.summary)}` }],
@@ -174,46 +199,57 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
 }
 
 // 被 normalizeAssignments 过滤掉的派发项及原因；编排层据此识别“给了派发却全部无效”的情况。
-export function droppedAssignments(value, { selfAgentKey = null, maxAssignments = 3 } = {}) {
-  if (!Array.isArray(value)) return [];
+// 单次派发上限：最多 maxRoles 个不同角色；前端/后端可拆成多个切片，切片总数不超过 maxAssignments。
+export const MAX_DISPATCH_ROLES = 3;
+export const MAX_DISPATCH_ASSIGNMENTS = Number(process.env.PI_MAX_ASSIGNMENTS) || 8;
+
+// 同一角色重复出现时，只有前端/后端的不同切片（不同 id 或不同任务）才算有效。
+function assignmentKey(item) {
+  if (!SLICEABLE_ROLES.has(item.agentKey)) return item.agentKey;
+  return `${item.agentKey}|${String(item.id || "").trim() || item.task.trim()}`;
+}
+
+function screenAssignments(value, { selfAgentKey, maxRoles, maxAssignments }) {
   const allowed = new Set(agentsConfig.agents.map((agent) => agent.key));
   const seen = new Set();
-  const dropped = [];
-  let kept = 0;
-  for (const item of value) {
+  const roles = new Set();
+  return (Array.isArray(value) ? value : []).map((item) => {
     const agentKey = item && typeof item.agentKey === "string" ? item.agentKey : "";
     let reason = "";
     if (!allowed.has(agentKey)) reason = "未知角色";
     else if (agentKey === selfAgentKey) reason = "不能派给自己";
     else if (typeof item.task !== "string" || !item.task.trim()) reason = "缺少 task";
-    else if (seen.has(agentKey)) reason = "重复派发";
-    else if (kept >= maxAssignments) reason = `超过单次 ${maxAssignments} 个上限`;
-    if (reason) dropped.push({ agentKey: agentKey || "?", reason });
-    else { seen.add(agentKey); kept += 1; }
-  }
-  return dropped;
+    else if (seen.has(assignmentKey(item))) reason = "重复派发";
+    else if (!roles.has(agentKey) && roles.size >= maxRoles) reason = `超过单次 ${maxRoles} 个角色上限`;
+    else if (seen.size >= maxAssignments) reason = `超过单次 ${maxAssignments} 个切片上限`;
+    if (!reason) { seen.add(assignmentKey(item)); roles.add(agentKey); }
+    return { item, agentKey, reason };
+  });
 }
 
-export function normalizeAssignments(value, { selfAgentKey = null, maxAssignments = 3, allowDispatch = true } = {}) {
+export function droppedAssignments(value, { selfAgentKey = null, maxRoles = MAX_DISPATCH_ROLES, maxAssignments = MAX_DISPATCH_ASSIGNMENTS } = {}) {
+  return screenAssignments(value, { selfAgentKey, maxRoles, maxAssignments })
+    .filter((entry) => entry.reason)
+    .map((entry) => ({ agentKey: entry.agentKey || "?", reason: entry.reason }));
+}
+
+export function normalizeAssignments(value, { selfAgentKey = null, maxRoles = MAX_DISPATCH_ROLES, maxAssignments = MAX_DISPATCH_ASSIGNMENTS, allowDispatch = true } = {}) {
   if (!allowDispatch) return [];
   if (!Array.isArray(value)) return [];
-  const allowed = new Set(agentsConfig.agents.map((agent) => agent.key));
-  const seen = new Set();
-  return value
-    .filter((item) => item && allowed.has(item.agentKey) && item.agentKey !== selfAgentKey && typeof item.task === "string" && item.task.trim())
-    .map((item) => ({
+  return screenAssignments(value, { selfAgentKey, maxRoles, maxAssignments })
+    .filter((entry) => !entry.reason)
+    .map(({ item }) => ({
       ...(item.id ? { id: String(item.id).trim() } : {}),
       agentKey: item.agentKey,
       task: item.task.trim(),
       reason: typeof item.reason === "string" ? item.reason.trim() : "",
       ...(Array.isArray(item.dependsOn) ? { dependsOn: item.dependsOn.filter((dependency) => typeof dependency === "string") } : {}),
+      ...(Array.isArray(item.acceptanceCriteria) ? { acceptanceCriteria: item.acceptanceCriteria.filter((criterion) => typeof criterion === "string" && criterion.trim()).map((criterion) => criterion.trim()) } : {}),
       ...(Array.isArray(item.toolAllowlist) ? { toolAllowlist: item.toolAllowlist.filter((tool) => typeof tool === "string") } : {}),
       ...(Array.isArray(item.fileReadAllowlist) ? { fileReadAllowlist: item.fileReadAllowlist.filter((path) => typeof path === "string") } : {}),
       ...(Array.isArray(item.fileWriteAllowlist) ? { fileWriteAllowlist: item.fileWriteAllowlist.filter((path) => typeof path === "string") } : {}),
       ...(item.networkPolicy && typeof item.networkPolicy === "object" ? { networkPolicy: item.networkPolicy } : {}),
-    }))
-    .filter((item) => !seen.has(item.agentKey) && seen.add(item.agentKey))
-    .slice(0, maxAssignments);
+    }));
 }
 
 // 已有项目（含桌面端创建的），写进工具说明，飞书端项目经理据此复用而不是另起同义新项目。

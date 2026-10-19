@@ -10,12 +10,16 @@ export function permissionsOf(assignment = {}) {
   };
 }
 
+// 同一角色有多个切片时，按角色索引的 assignmentTasks 只保留第一条；
+// 切片自己的任务与权限由 dispatchTo 的 assignment 参数传入，这里只做兼容。
 export function withAssignments(context, assignments = []) {
+  const firstByRole = new Map();
+  for (const item of assignments) if (!firstByRole.has(item.agentKey)) firstByRole.set(item.agentKey, item);
   return {
     ...context,
-    selectedAgents: assignments.map((item) => item.agentKey),
-    assignmentTasks: Object.fromEntries(assignments.map((item) => [item.agentKey, item.task])),
-    assignmentPermissions: Object.fromEntries(assignments.map((item) => [item.agentKey, permissionsOf(item)])),
+    selectedAgents: [...firstByRole.keys()],
+    assignmentTasks: Object.fromEntries([...firstByRole].map(([key, item]) => [key, item.task])),
+    assignmentPermissions: Object.fromEntries([...firstByRole].map(([key, item]) => [key, permissionsOf(item)])),
   };
 }
 
@@ -32,7 +36,7 @@ export const ARCHITECT_KEY = "architect";
 
 export function sequenceArchitectFirst(delivery) {
   if (!delivery || delivery.plan?.stages?.length) return delivery;
-  const assignments = Array.isArray(delivery.assignments) ? delivery.assignments : [];
+  const assignments = ensureAssignmentIds(Array.isArray(delivery.assignments) ? delivery.assignments : []);
   const architect = assignments.find((item) => item?.agentKey === ARCHITECT_KEY);
   const others = assignments.filter((item) => item && item.agentKey !== ARCHITECT_KEY);
   if (!architect || !others.length) return delivery;
@@ -40,7 +44,6 @@ export function sequenceArchitectFirst(delivery) {
   const design = { ...architect, id: architectId, dependsOn: [] };
   const followers = others.map((item) => ({
     ...item,
-    id: item.id || item.agentKey,
     dependsOn: [...new Set([...(Array.isArray(item.dependsOn) ? item.dependsOn : []), architectId])],
   }));
   return {
@@ -56,5 +59,107 @@ export function sequenceArchitectFirst(delivery) {
       acceptanceCriteria: [],
       autoSequenced: true,
     },
+  };
+}
+
+// 任务切片：前端/后端的大任务由项目经理拆成多个可独立验收的切片（同一角色多条 assignment），
+// 每个切片单独派发、单独交付；同一角色的切片共用一个工作区，写入范围互不重叠时才并行（见 scheduleByRole）。
+export const SLICEABLE_ROLES = new Set(["frontend_developer", "backend_developer"]);
+
+const safeId = (value) => String(value || "").trim().replace(/[^\w-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+
+// 补齐并去重 assignment id：只出现一次的角色沿用角色名作 id，重复的角色编号为 <角色>-1、<角色>-2。
+export function ensureAssignmentIds(assignments = []) {
+  const counts = new Map();
+  for (const item of assignments) counts.set(item?.agentKey, (counts.get(item?.agentKey) || 0) + 1);
+  const used = new Set();
+  const ordinal = new Map();
+  return assignments.map((item) => {
+    if (!item) return item;
+    const n = (ordinal.get(item.agentKey) || 0) + 1;
+    ordinal.set(item.agentKey, n);
+    const base = safeId(item.id) || (counts.get(item.agentKey) > 1 ? `${item.agentKey}-${n}` : item.agentKey);
+    let id = base;
+    for (let suffix = 2; used.has(id); suffix += 1) id = `${base}-${suffix}`;
+    used.add(id);
+    return id === item.id ? item : { ...item, id };
+  });
+}
+
+// 扁平 assignments 里同一角色出现多次（切片），或条目之间用 dependsOn 声明了先后时，
+// 转成单阶段计划交给计划调度：依赖照常生效，由 scheduleByRole 决定同角色切片串行还是并行。已有计划时不改写。
+export function sequenceRepeatedRoles(delivery) {
+  if (!delivery || delivery.plan?.stages?.length) return delivery;
+  const assignments = Array.isArray(delivery.assignments) ? delivery.assignments : [];
+  const roles = assignments.map((item) => item?.agentKey);
+  const slices = ensureAssignmentIds(assignments);
+  const ids = new Set(slices.map((item) => item?.id));
+  const linked = slices.some((item) => (Array.isArray(item?.dependsOn) ? item.dependsOn : []).some((dep) => ids.has(dep)));
+  if (new Set(roles).size === roles.length && !linked) return delivery;
+  return {
+    ...delivery,
+    assignments: slices,
+    plan: {
+      project: delivery.projectName || null,
+      goal: String(delivery.summary || "").slice(0, 200),
+      stages: [{ id: "slices", assignments: slices }],
+      acceptanceCriteria: [],
+      autoSequenced: true,
+    },
+  };
+}
+
+export function sequenceAssignments(delivery) {
+  return sequenceRepeatedRoles(sequenceArchitectFirst(delivery));
+}
+
+// 同角色切片并行的唯一依据是写入范围：各自声明了 fileWriteAllowlist 且互不重叠（含父子目录）时才同时执行，
+// 策略层会按该白名单拦截越界写入；没声明或有重叠就退回串行。并发数受 PI_MAX_PARALLEL_SLICES 限制。
+export const MAX_PARALLEL_SLICES = Math.max(1, Number(process.env.PI_MAX_PARALLEL_SLICES) || 2);
+
+const normalizeScope = (path) => String(path).replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/+$/, "");
+
+export function writeScopeOf(assignment) {
+  return (Array.isArray(assignment?.fileWriteAllowlist) ? assignment.fileWriteAllowlist : []).map(normalizeScope).filter(Boolean);
+}
+
+export function writeScopesOverlap(left = [], right = []) {
+  return left.map(normalizeScope).some((a) => right.map(normalizeScope).some((b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)));
+}
+
+function canRunAlongside(assignment, peers) {
+  if (!peers.length) return true;
+  const scope = writeScopeOf(assignment);
+  return scope.length > 0 && peers.every((peer) => {
+    const other = writeScopeOf(peer);
+    return other.length > 0 && !writeScopesOverlap(scope, other);
+  });
+}
+
+// 从候选里挑出本轮可以启动的 assignment：running 是各角色正在执行的切片。
+export function scheduleByRole(candidates = [], running = [], { maxParallel = MAX_PARALLEL_SLICES } = {}) {
+  const lanes = new Map();
+  for (const item of running) lanes.set(item.agentKey, [...(lanes.get(item.agentKey) || []), item]);
+  const picked = [];
+  for (const item of candidates) {
+    if (!item) continue;
+    const peers = lanes.get(item.agentKey) || [];
+    if (peers.length >= maxParallel || !canRunAlongside(item, peers)) continue;
+    lanes.set(item.agentKey, [...peers, item]);
+    picked.push(item);
+  }
+  return picked;
+}
+
+// 切片在计划中的位置，用于提示下游“只做这一片”。同角色只有一个 assignment 时返回 null。
+export function sliceInfoFor(plan, assignment) {
+  if (!plan || !assignment?.id) return null;
+  const peers = (plan.stages || []).flatMap((stage) => stage.assignments || []).filter((item) => item.agentKey === assignment.agentKey);
+  if (peers.length < 2) return null;
+  return {
+    id: assignment.id,
+    index: peers.findIndex((item) => item.id === assignment.id) + 1,
+    total: peers.length,
+    others: peers.filter((item) => item.id !== assignment.id).map((item) => `${item.id}：${String(item.task || "").slice(0, 80)}`),
   };
 }

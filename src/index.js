@@ -70,6 +70,7 @@ const orchestrator = createOrchestrator({
   onEvent: (event) => recordEvent(event),
   approvalsFile: process.env.PI_APPROVALS_FILE || "runtime/approvals.json",
   checkpointFile: process.env.PI_CHECKPOINTS_FILE || "runtime/checkpoints.json",
+  planRunsFile: process.env.PI_PLAN_RUNS_FILE || "runtime/plan-runs.json",
 });
 const taskStore = new TaskStore(process.env.PI_DOMAIN_TASKS_FILE || "runtime/domain-tasks.json");
 // 启动时显式加载：任务文件损坏会在这里报错并保留备份，而不是被空状态覆盖。
