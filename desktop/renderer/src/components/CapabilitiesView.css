@@ -1,16 +1,18 @@
 /* 机器人能力页（独立样式文件，只使用全局颜色变量）。 */
 .capabilities-view { display: grid; width: 100%; gap: 12px; align-content: start; }
 .capability-tabs { display: flex; gap: 6px; }
-.capability-tabs button { display: inline-flex; gap: 6px; align-items: center; min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--muted); font-size: 13px; cursor: pointer; }
+.capability-tabs button { display: inline-flex; gap: 6px; align-items: center; min-height: var(--control-height); padding: 0 12px; border: var(--control-border); border-radius: var(--control-radius); background: var(--surface-raised); color: var(--muted); font-size: 13px; cursor: pointer; transition: var(--control-transition); }
 .capability-tabs button span { color: var(--subtle); font-size: 12px; }
+.capability-tabs button:hover { border-color: var(--control-hover-border); background: var(--surface); }
 .capability-tabs button.is-selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .capability-intro { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
-.capability-add { justify-self: start; min-height: 32px; padding: 0 12px; border: 1px dashed var(--line); border-radius: 6px; background: #fff; color: var(--accent); font-size: 13px; cursor: pointer; }
+.capability-add { justify-self: start; min-height: var(--control-height); padding: 0 12px; border: 1px dashed var(--line); border-radius: var(--control-radius); background: var(--surface-raised); color: var(--accent); font-size: 13px; cursor: pointer; transition: var(--control-transition); }
 .capability-add:disabled { opacity: .5; cursor: not-allowed; }
-.capability-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; width: 100%; max-width: none; padding: clamp(14px, 2vw, 20px); border: 1px solid var(--line); border-radius: 8px; }
+.capability-add:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); }
+.capability-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; width: 100%; max-width: none; padding: clamp(14px, 2vw, 20px); border: var(--control-border); border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-xs); }
 .capability-form > .capability-sources, .capability-form > .capability-local, .capability-form > .capability-roles, .capability-form > .capability-trust, .capability-form > .capability-form-actions { grid-column: 1 / -1; }
 .capability-form > label, .capability-form fieldset { display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
-.capability-form input:not([type="checkbox"]):not([type="radio"]), .capability-form textarea { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); font: inherit; font-size: 13px; }
+.capability-form input:not([type="checkbox"]):not([type="radio"]), .capability-form textarea { min-height: var(--control-height); padding: 7px 9px; border: var(--control-border); border-radius: var(--control-radius); color: var(--ink); font: inherit; font-size: 13px; }
 .capability-form textarea { resize: vertical; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
 .capability-sources, .capability-roles { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .capability-sources label, .capability-roles label, .capability-trust, .capability-switch { display: inline-flex; gap: 5px; align-items: center; color: var(--ink); font-size: 13px; }
@@ -20,9 +22,11 @@
 .capability-local span { min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; }
 .capability-trust { padding: 8px 10px; border-radius: 6px; background: var(--surface); }
 .capability-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.capability-primary { min-height: 30px; padding: 0 14px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-size: 13px; cursor: pointer; }
+.capability-primary { min-height: var(--control-height); padding: 0 14px; border: 0; border-radius: var(--control-radius); background: var(--accent); color: #fff; font-size: 13px; cursor: pointer; transition: var(--control-transition); }
+.capability-primary:hover:not(:disabled) { background: var(--accent-hover); }
 .capability-primary:disabled { opacity: 0.5; cursor: default; }
-.capability-card { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.capability-card { display: grid; gap: 8px; padding: 14px; border: var(--control-border); border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-xs); transition: var(--control-transition); }
+.capability-card:hover { border-color: var(--control-hover-border); box-shadow: var(--shadow-sm); }
 .capability-card.is-disabled { background: var(--surface); }
 .capability-card.is-disabled strong, .capability-card.is-disabled p { color: var(--muted); }
 .capability-card-heading { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }

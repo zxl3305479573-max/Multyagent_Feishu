@@ -1,13 +1,15 @@
 /* 输入框下方的模式切换（独立样式，只用全局颜色变量）。 */
-.mode-bar { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; min-width: 0; }
-.mode-segment { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
-.mode-segment button { min-height: 24px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
+.mode-bar { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; min-width: 0; }
+.mode-segment { display: inline-flex; min-height: var(--control-height-sm); padding: 2px; border: var(--control-border); border-radius: var(--control-radius); background: var(--surface); }
+.mode-segment button { position: relative; min-height: 24px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; transition: var(--control-transition); }
 .mode-segment button:hover:not(:disabled) { color: var(--ink); }
 .mode-segment button.is-selected { background: #fff; color: var(--accent); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
 .mode-segment button:disabled { cursor: not-allowed; opacity: 0.6; }
-.mode-select { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; }
-.mode-select select { min-height: 26px; max-width: 150px; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); font-size: 12px; }
+.mode-select { position: relative; display: inline-flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; }
+.mode-select select { min-height: var(--control-height-sm); max-width: 150px; padding: 0 7px; border: var(--control-border); border-radius: var(--control-radius); background: var(--surface-raised); color: var(--ink); font-size: 12px; transition: var(--control-transition); }
+.mode-select select:hover:not(:disabled) { border-color: var(--control-hover-border); }
 .mode-select select:disabled { color: var(--muted); background: var(--surface); }
+.mode-select:last-child[data-tooltip]::after { right: 0; left: auto; }
 
 /* 规划模式下等待确认的提示条 */
 .approval-banner { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; margin: 0 0 12px; padding: 10px 12px; border: 1px solid #f0d9a8; border-radius: 8px; background: #fffaf0; }

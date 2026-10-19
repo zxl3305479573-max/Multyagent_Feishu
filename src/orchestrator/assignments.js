@@ -86,16 +86,14 @@ export function ensureAssignmentIds(assignments = []) {
   });
 }
 
-// 扁平 assignments 里同一角色出现多次（切片），或条目之间用 dependsOn 声明了先后时，
-// 转成单阶段计划交给计划调度：依赖照常生效，由 scheduleByRole 决定同角色切片串行还是并行。已有计划时不改写。
+// 扁平 assignments 有两条及以上时转成单阶段计划交给计划调度：依赖照常生效，同角色切片由 scheduleByRole
+// 决定串行还是并行，全部交付后才交回项目经理汇总（扁平并行时先完成的一方就会触发汇总），
+// 进度也会以 plan_progress 广播给桌面端。只有一条或已有计划时不改写。
 export function sequenceRepeatedRoles(delivery) {
   if (!delivery || delivery.plan?.stages?.length) return delivery;
-  const assignments = Array.isArray(delivery.assignments) ? delivery.assignments : [];
-  const roles = assignments.map((item) => item?.agentKey);
+  const assignments = Array.isArray(delivery.assignments) ? delivery.assignments.filter(Boolean) : [];
+  if (assignments.length < 2) return delivery;
   const slices = ensureAssignmentIds(assignments);
-  const ids = new Set(slices.map((item) => item?.id));
-  const linked = slices.some((item) => (Array.isArray(item?.dependsOn) ? item.dependsOn : []).some((dep) => ids.has(dep)));
-  if (new Set(roles).size === roles.length && !linked) return delivery;
   return {
     ...delivery,
     assignments: slices,

@@ -105,6 +105,14 @@ function buildEnvCatalog({ roles = roleConfig().roles } = {}) {
       ],
     },
     {
+      id: "profile",
+      title: "个人",
+      description: "只影响桌面工作台中的个人显示，不会发送给模型或飞书。",
+      fields: [
+        { key: "PI_USER_DISPLAY_NAME", label: "个人称呼", type: "text", default: "我", placeholder: "例如：小林", description: "用于对话头像的首字和悬停提示；留空时显示“我”。" },
+      ],
+    },
+    {
       id: "agent",
       title: "Agent 运行",
       description: "Agent 的运行方式、协作流程与超时。",

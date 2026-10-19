@@ -154,8 +154,8 @@ export function createDesktopTaskSubmitter({
           messageId,
           correlationId: messageId,
           channel: "desktop",
-          // 规划模式：项目经理的派发、单个机器人的执行，都要先在桌面端确认。
-          requireHumanApproval: modes.mode === "plan",
+          // 团队任务统一在项目经理产出计划后等待确认；单个机器人仅在规划模式下等待确认。
+          requireHumanApproval: modes.mode !== "ask" && (!singleRole || modes.mode === "plan"),
           projectName,
           ...(modes.runtime ? { runtime: modes.runtime } : {}),
           ...(singleRole ? { singleRole: true } : {}),

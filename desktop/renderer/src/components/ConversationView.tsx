@@ -151,6 +151,7 @@ type ConversationProps = {
   selectedTask?: Task;
   project: string;
   agents: Agent[];
+  userDisplayName: string;
   selectedAgent: string;
   taskEvents: EventRecord[];
   taskEventsLoading: boolean;
@@ -163,7 +164,9 @@ type ConversationProps = {
   onApprove?: (taskId: string) => void;
 };
 
-export function ConversationView({ selected, selectedTask, project, agents, selectedAgent, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, sectionRefs, onOpenFile, approving = false, onApprove }: ConversationProps) {
+export function ConversationView({ selected, selectedTask, project, agents, userDisplayName, selectedAgent, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, sectionRefs, onOpenFile, approving = false, onApprove }: ConversationProps) {
+  const userName = userDisplayName.trim() || "我";
+  const userInitial = Array.from(userName)[0] || "我";
   const approval = selectedTask && onApprove ? pendingApproval(taskEvents) : null;
   const approverName = approval ? agents.find((agent) => agent.key === approval.agent)?.displayName || approval.agent : "";
   return <div className="conversation-scroll" key={selected || "empty"}>
@@ -184,7 +187,7 @@ export function ConversationView({ selected, selectedTask, project, agents, sele
         {taskEvents.length === 0 && (taskEventsLoading
           ? <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>
           : <div className="conversation-empty">暂无任务记录</div>)}
-        {taskEvents.filter((event) => ["task_created", "task_reused"].includes(event.type || "")).map((event, index) => <article className="message user-message" key={event.event_id || `request-${index}`}><div className="message-avatar user-avatar">你</div><div className="message-body"><div className="message-author">你 <time>{formatTime(event.timestamp)}</time></div><p>{event.type === "task_reused" ? event.text || "继续当前任务" : selectedTask.description || event.text || selectedTask.title}</p></div></article>)}
+        {taskEvents.filter((event) => ["task_created", "task_reused"].includes(event.type || "")).map((event, index) => <article className="message user-message" key={event.event_id || `request-${index}`}><div className="message-avatar user-avatar" title={userName} aria-label={userName}>{userInitial}</div><div className="message-body"><div className="message-author"><time>{formatTime(event.timestamp)}</time></div><p>{event.type === "task_reused" ? event.text || "继续当前任务" : selectedTask.description || event.text || selectedTask.title}</p></div></article>)}
         {groups.map((group) => <ExecutionGroup key={group.key} group={group} agents={agents} focused={selectedAgent === group.key} sectionRef={(element) => { sectionRefs.current[group.key] = element; }} onOpenFile={onOpenFile} />)}
         {["running", "in_progress"].includes(snapshotStatus(selectedTask)) && <div className="running-indicator"><span className="pulse-dot" />Agent 正在执行</div>}
       </div>
@@ -217,7 +220,7 @@ export function Composer({ value, onChange, onSubmit, hasTask, canSubmit, runtim
       <div className="composer-send-row">
         <ModeBar value={modes} agents={modeAgents} lockTarget={lockTarget} disabled={!runtimeConnected} onChange={onModesChange} />
         <RuntimeModelPicker config={runtimeConfig} connected={runtimeConnected} busy={runtimeBusy} onLoadProvider={onLoadProvider} onSelect={onRuntimeChange} onThinking={onThinkingChange} />
-        <button className="send-button" type="submit" disabled={!canSubmit} aria-label="提交任务" title="提交新任务">↑</button>
+        <button className="send-button" type="submit" disabled={!canSubmit} aria-label={hasTask ? "发送后续消息" : "提交任务"} data-tooltip={hasTask ? "发送到当前任务；保留同一任务和对话记忆。" : "创建一个新任务并开始执行。"}>↑</button>
       </div>
     </form>
   </div>;

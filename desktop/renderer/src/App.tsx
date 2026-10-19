@@ -107,6 +107,7 @@ export function App() {
   const [configuredCredentials, setConfiguredCredentials] = useState<string[]>([]);
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus | null>(null);
   const [feishuEnabled, setFeishuEnabled] = useState(true);
+  const [userDisplayName, setUserDisplayName] = useState("我");
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [runtimeConfigBusy, setRuntimeConfigBusy] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -345,7 +346,10 @@ export function App() {
   const refreshCredentials = () => {
     window.desktop?.credentials?.list?.().then(setConfiguredCredentials).catch(() => {});
     window.desktop?.credentials?.status?.().then(setCredentialStatus).catch(() => {});
-    window.desktop?.settings?.get?.().then((snapshot) => setFeishuEnabled(snapshot.entries.FEISHU_ENABLED?.effective !== "false")).catch(() => {});
+    window.desktop?.settings?.get?.().then((snapshot) => {
+      setFeishuEnabled(snapshot.entries.FEISHU_ENABLED?.effective !== "false");
+      setUserDisplayName(snapshot.entries.PI_USER_DISPLAY_NAME?.effective?.trim() || "我");
+    }).catch(() => {});
   };
   useEffect(refreshCredentials, []);
 
@@ -643,6 +647,7 @@ export function App() {
           selectedTask={selectedTask}
           project={project}
           agents={agents}
+          userDisplayName={userDisplayName}
           selectedAgent={selectedAgent}
           taskEvents={taskEvents}
           taskEventsLoading={taskEventsLoading}

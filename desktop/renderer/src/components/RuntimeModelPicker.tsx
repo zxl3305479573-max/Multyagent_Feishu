@@ -94,7 +94,10 @@ export function RuntimeModelPicker({ config, connected, busy, onLoadProvider, on
   if (!config) return <span className="composer-model-loading">模型加载中…</span>;
   return <div className="composer-runtime-pickers" ref={rootRef}>
     <details className="composer-picker composer-model-picker">
-      <summary title={`当前模型：${providerName(config, config.provider)} / ${modelName(config, config.model)}`}>
+      <summary
+        aria-label={`当前模型：${providerName(config, config.provider)} / ${modelName(config, config.model)}`}
+        data-tooltip="切换底层模型。新模型从下一次 Agent 执行开始生效，并保存为默认模型。"
+      >
         <span className="composer-picker-mark">M</span>
         <span className="composer-picker-value">{providerName(config, config.provider)} · {modelName(config, config.model)}</span>
         <span className="composer-picker-chevron">⌄</span>
@@ -119,7 +122,10 @@ export function RuntimeModelPicker({ config, connected, busy, onLoadProvider, on
       </div>
     </details>
     <details className="composer-picker composer-thinking-picker">
-      <summary title={`思考强度：${thinking?.label || config.thinking}`}>
+      <summary
+        aria-label={`思考强度：${thinking?.label || config.thinking}`}
+        data-tooltip="调整 Agent 的思考强度。更高等级会增加推理时间与 Token 消耗。"
+      >
         <span className="composer-picker-mark">T</span>
         <span className="composer-picker-value">{thinking?.label || config.thinking}</span>
         <span className="composer-picker-chevron">⌄</span>

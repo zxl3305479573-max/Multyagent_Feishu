@@ -124,6 +124,7 @@ function subsectionFor(groupId: string, field: SettingsField): Subsection {
     }
     return { id: "other", title: "其他模型参数", order: 60 };
   }
+  if (groupId === "profile") return { id: "identity", title: "个人称呼", description: "设置桌面工作台里用于识别你的称呼。", order: 10 };
   if (groupId === "agent") {
     if (["PI_AGENT_RUNTIME", "PI_RPC_COMMAND", "PI_AGENT_WORKTREE"].includes(field.key)) return { id: "execution", title: "执行方式", description: "控制 Pi 在进程内运行，还是拆到独立 RPC 子进程。", order: 10 };
     if (["PI_CONFIRM_ROLES", "PI_DIAGRAM_ROLES", "PI_DIAGRAM_SKILL_PATH", "PI_ARCHITECT_DIAGRAM_SKILL_PATH"].includes(field.key)) return { id: "collaboration", title: "协作与展示", description: "人工确认节点与架构图能力。", order: 20 };
