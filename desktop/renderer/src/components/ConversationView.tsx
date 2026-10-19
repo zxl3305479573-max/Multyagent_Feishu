@@ -4,7 +4,20 @@ import { eventLabels, statusLabels, verdictLabels } from "../labels";
 import { formatDuration, formatFileSize, formatTime, snapshotStatus, taskStatus } from "../format";
 import { collectArtifacts, toolExecutionStatus } from "../execution-view";
 import { RuntimeModelPicker } from "./RuntimeModelPicker";
-import type { RuntimeConfig } from "../types";
+import { ModeBar } from "./ModeBar";
+import type { RuntimeConfig, TaskModes } from "../types";
+
+// 规划模式下等待确认的内容：最近一条 approval_required 之后还没有派发、结算或失败等后续事件。
+const SETTLING_AFTER_APPROVAL = new Set(["dispatch_started", "task_settle", "task_failed", "task_terminated", "task_cancelled", "selection_failed", "control_applied"]);
+export function pendingApproval(taskEvents: EventRecord[]) {
+  let index = -1;
+  taskEvents.forEach((event, position) => { if (event.type === "approval_required") index = position; });
+  if (index < 0) return null;
+  if (taskEvents.slice(index + 1).some((event) => SETTLING_AFTER_APPROVAL.has(event.type || ""))) return null;
+  const approval = taskEvents[index];
+  const delivery = [...taskEvents.slice(0, index + 1)].reverse().find((event) => event.type === "delivery_received" && event.task_id === approval.task_id);
+  return { taskId: approval.task_id || "", agent: approval.agent || "", summary: delivery?.summary || "", next: delivery?.next || "" };
+}
 
 type OpenFile = (event: EventRecord) => void;
 
@@ -146,9 +159,13 @@ type ConversationProps = {
   taskDuration: number | null;
   sectionRefs: React.MutableRefObject<Record<string, HTMLElement | null>>;
   onOpenFile: OpenFile;
+  approving?: boolean;
+  onApprove?: (taskId: string) => void;
 };
 
-export function ConversationView({ selected, selectedTask, project, agents, selectedAgent, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, sectionRefs, onOpenFile }: ConversationProps) {
+export function ConversationView({ selected, selectedTask, project, agents, selectedAgent, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, sectionRefs, onOpenFile, approving = false, onApprove }: ConversationProps) {
+  const approval = selectedTask && onApprove ? pendingApproval(taskEvents) : null;
+  const approverName = approval ? agents.find((agent) => agent.key === approval.agent)?.displayName || approval.agent : "";
   return <div className="conversation-scroll" key={selected || "empty"}>
     {!selectedTask ? (
       <div className="welcome-state">
@@ -159,6 +176,10 @@ export function ConversationView({ selected, selectedTask, project, agents, sele
       </div>
     ) : (
       <div className="conversation-content">
+        {approval && <div className="approval-banner" role="status">
+          <div><strong>{approverName} 的方案等待你确认</strong><span>{approval.next || approval.summary.slice(0, 160) || "确认后开始执行"}</span></div>
+          <button type="button" disabled={approving} onClick={() => onApprove?.(approval.taskId)}>{approving ? "确认中…" : "确认执行"}</button>
+        </div>}
         <div className="conversation-task-overview"><strong>{selectedTask.title || "当前任务"}</strong><span>{selectedTask.project_name || project} · {taskStatus(selectedTask)}{taskStartedAt ? ` · 开始 ${formatTime(taskStartedAt)} · 总耗时 ${formatDuration(taskDuration)}` : ""}</span></div>
         {taskEvents.length === 0 && (taskEventsLoading
           ? <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>
@@ -183,13 +204,18 @@ type ComposerProps = {
   onLoadProvider: (provider: string) => Promise<RuntimeConfig>;
   onRuntimeChange: (input: { provider: string; model: string; thinking: string }) => void;
   onThinkingChange: (thinking: string) => void;
+  modes: TaskModes;
+  modeAgents: Agent[];
+  lockTarget?: string | null;
+  onModesChange: (modes: TaskModes) => void;
 };
 
-export function Composer({ value, onChange, onSubmit, hasTask, canSubmit, runtimeConnected, runtimeConfig, runtimeBusy, onLoadProvider, onRuntimeChange, onThinkingChange }: ComposerProps) {
+export function Composer({ value, onChange, onSubmit, hasTask, canSubmit, runtimeConnected, runtimeConfig, runtimeBusy, onLoadProvider, onRuntimeChange, onThinkingChange, modes, modeAgents, lockTarget = null, onModesChange }: ComposerProps) {
   return <div className="composer-wrap">
     <form className="composer" onSubmit={onSubmit}>
       <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={hasTask ? "继续当前任务…" : "描述你想完成的任务…"} rows={3} aria-label="任务描述" />
       <div className="composer-send-row">
+        <ModeBar value={modes} agents={modeAgents} lockTarget={lockTarget} disabled={!runtimeConnected} onChange={onModesChange} />
         <RuntimeModelPicker config={runtimeConfig} connected={runtimeConnected} busy={runtimeBusy} onLoadProvider={onLoadProvider} onSelect={onRuntimeChange} onThinking={onThinkingChange} />
         <button className="send-button" type="submit" disabled={!canSubmit} aria-label="提交任务" title="提交新任务">↑</button>
       </div>

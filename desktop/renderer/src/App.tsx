@@ -11,6 +11,17 @@ import { Composer, ConversationView } from "./components/ConversationView";
 import { NewProjectModal } from "./components/NewProjectModal";
 import { TicketsView } from "./components/TicketsView";
 import { CapabilitiesView } from "./components/CapabilitiesView";
+import type { TaskModes } from "./types";
+
+// 输入框下方模式切换的选择记在本机，下次打开沿用；读写失败（如隐私模式）时用默认值。
+const MODES_KEY = "desktop.taskModes";
+const DEFAULT_MODES: TaskModes = { mode: "auto", target: "team", runtime: "" };
+function loadModes(): TaskModes {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(MODES_KEY) || "null");
+    return saved && typeof saved === "object" ? { ...DEFAULT_MODES, ...saved } : DEFAULT_MODES;
+  } catch { return DEFAULT_MODES; }
+}
 import { ConfirmDialog } from "./components/ConfirmDialog";
 
 let activeSocket: DesktopSocket | null = null;
@@ -110,6 +121,26 @@ export function App() {
   const historyRequests = useRef(new Map<string, string>());
   const [now, setNow] = useState(Date.now());
   const pendingSubmission = useRef<PendingSubmission | null>(null);
+  const [modes, setModes] = useState<TaskModes>(loadModes);
+  const [approving, setApproving] = useState(false);
+  // 规划模式：确认后由编排层继续派发或执行；结果通过事件流回到对话里。
+  const approveTask = async (taskId: string) => {
+    setApproving(true);
+    try {
+      await request("approve_task", { taskId });
+      setNotice("已确认，正在执行…");
+    } catch (error) {
+      setNotice(`确认失败：${(error as Error).message}`);
+    } finally {
+      setApproving(false);
+    }
+  };
+  const updateModes = (next: TaskModes) => {
+    setModes(next);
+    try { window.localStorage.setItem(MODES_KEY, JSON.stringify(next)); } catch {}
+  };
+  // 提交时带上模式；runtime 为空表示沿用运行设置，不发送。
+  const modePayload = (forContinue = false) => ({ mode: modes.mode, ...(forContinue ? {} : { target: modes.target }), ...(modes.runtime ? { runtime: modes.runtime } : {}) });
   // 需要等结果的命令（工单页）：按 requestId 对应 command_result，不走通用的提示文案。
   const pendingRequests = useRef(new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>());
   const request = useCallback(<T,>(command: string, payload: Record<string, unknown> = {}) => new Promise<T>((resolve, reject) => {
@@ -441,6 +472,7 @@ export function App() {
         command: "continue_task",
         taskId: selectedTask.task_id,
         message: description.trim(),
+        ...modePayload(true),
         requestId: crypto.randomUUID(),
       });
       setDescription("");
@@ -452,7 +484,7 @@ export function App() {
       return;
     }
     if (taskProject.trim() !== project && project) {
-      pendingSubmission.current = { projectName: taskProject.trim(), title: title.trim(), description: description.trim() };
+      pendingSubmission.current = { projectName: taskProject.trim(), title: title.trim(), description: description.trim(), ...modePayload() };
       setConnection("连接中");
       setProject(taskProject.trim());
       setDescription("");
@@ -469,6 +501,7 @@ export function App() {
       projectName: taskProject.trim(),
       title: title.trim(),
       description: description.trim(),
+      ...modePayload(),
       requestId: crypto.randomUUID(),
     });
     setDescription("");
@@ -618,6 +651,8 @@ export function App() {
           taskDuration={taskDuration}
           sectionRefs={agentSectionRefs}
           onOpenFile={(event) => void openEventFile(event)}
+          approving={approving}
+          onApprove={(taskId) => void approveTask(taskId)}
         />}
 
         {workspaceView === "conversation" && <Composer
@@ -632,6 +667,10 @@ export function App() {
           onLoadProvider={loadRuntimeModels}
           onRuntimeChange={(input) => void changeRuntimeConfig(input)}
           onThinkingChange={changeThinking}
+          modes={modes}
+          modeAgents={agents}
+          lockTarget={selectedTask ? (selectedTask.agent && selectedTask.agent !== "project_manager" ? selectedTask.agent : "team") : null}
+          onModesChange={updateModes}
         />}
       </section>
 

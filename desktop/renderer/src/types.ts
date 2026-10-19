@@ -4,6 +4,8 @@ export type Task = {
   project_name?: string | null;
   title?: string;
   description?: string;
+  // 任务的负责角色：项目经理发起为 project_manager，桌面端“单独交给”某个机器人时为该角色。
+  agent?: string | null;
   status?: string;
   created_at?: string;
   updated_at?: string;
@@ -85,7 +87,9 @@ export type Ticket = {
   status: string;
   taskId?: string | null;
 };
-export type PendingSubmission = { projectName: string; title: string; description: string };
+// 输入框下方的模式切换：执行模式、协作对象（team 或某个角色）、运行方式（空字符串 = 沿用运行设置）。
+export type TaskModes = { mode: "ask" | "plan" | "auto"; target: string; runtime: "" | "embedded" | "rpc" };
+export type PendingSubmission = { projectName: string; title: string; description: string } & Partial<TaskModes>;
 export type ControlCommand = "pause" | "resume" | "terminate" | "retry";
 
 export type ToolExecution = {
