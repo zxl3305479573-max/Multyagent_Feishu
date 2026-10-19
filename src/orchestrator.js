@@ -596,6 +596,11 @@ export function createOrchestrator({
       log.warn(`[orchestrator] 未注册的角色: ${targetKey}`);
       return;
     }
+    // 没有飞书机器人的角色只能处理桌面端任务；飞书群里的任务派不到它。
+    if (!role.client && !isDesktopContext(context)) {
+      log.warn(`[orchestrator] 角色 ${targetKey} 未接入飞书，无法处理飞书任务`);
+      return;
+    }
     const { agent, client } = role;
     const subTaskId = `${parentTaskId}:${targetKey}`;
     // 项目名必须与写入白名单同源：上游交付包里的 projectName 是最新事实，
@@ -798,6 +803,7 @@ export function createOrchestrator({
     const role = roles.get(pending.agentKey);
     const chatId = pending.context?.chatId;
     if (!role || !chatId) return;
+    if (!role.client && !isDesktopContext(pending.context)) return;
     const rootTaskId = rootOf(pending.taskId);
     if (await isTerminated(rootTaskId)) return;
     const { agent, client } = role;

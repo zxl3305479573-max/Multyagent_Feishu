@@ -10,6 +10,7 @@ import { AgentStatusStrip } from "./components/AgentStatusStrip";
 import { Composer, ConversationView } from "./components/ConversationView";
 import { NewProjectModal } from "./components/NewProjectModal";
 import { TicketsView } from "./components/TicketsView";
+import { CapabilitiesView } from "./components/CapabilitiesView";
 
 let activeSocket: DesktopSocket | null = null;
 
@@ -92,6 +93,7 @@ export function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [configuredCredentials, setConfiguredCredentials] = useState<string[]>([]);
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus | null>(null);
+  const [feishuEnabled, setFeishuEnabled] = useState(true);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectNameInput, setProjectNameInput] = useState("");
   const [projectPathInput, setProjectPathInput] = useState("");
@@ -295,6 +297,7 @@ export function App() {
   const refreshCredentials = () => {
     window.desktop?.credentials?.list?.().then(setConfiguredCredentials).catch(() => {});
     window.desktop?.credentials?.status?.().then(setCredentialStatus).catch(() => {});
+    window.desktop?.settings?.get?.().then((snapshot) => setFeishuEnabled(snapshot.entries.FEISHU_ENABLED?.effective !== "false")).catch(() => {});
   };
   useEffect(refreshCredentials, []);
 
@@ -443,11 +446,13 @@ export function App() {
 
   const headerTitle = workspaceView === "settings" ? "运行设置"
     : workspaceView === "tickets" ? "GitHub 工单"
+    : workspaceView === "capabilities" ? "机器人能力"
     : workspaceView === "project" ? "项目上下文"
       : workspaceView === "agent" ? `${agents.find((agent) => agent.key === selectedAgent)?.displayName || selectedAgent || "全部 Agent"} · 执行观察`
         : selectedTask?.title || (selected ? selected : "新建任务");
   const headerSubtitle = workspaceView === "settings" ? "管理全部运行配置"
     : workspaceView === "tickets" ? project || "全部项目"
+    : workspaceView === "capabilities" ? "为各个角色添加 Skill 与插件"
     : workspaceView === "project" ? project || "全部项目"
       : selectedTask?.project_name || project || "选择项目";
 
@@ -476,6 +481,7 @@ export function App() {
         onObserveAgent={(agentKey) => { setSelectedAgent(agentKey); setWorkspaceView("agent"); }}
         onOpenSettings={showSettings}
         onOpenTickets={() => { setWorkspaceView("tickets"); setSelectedAgent(""); }}
+        onOpenCapabilities={() => { setWorkspaceView("capabilities"); setSelectedAgent(""); }}
         onNewProject={openNewProject}
         onNewConversation={openNewProjectConversation}
       />
@@ -487,17 +493,17 @@ export function App() {
             {workspaceView !== "conversation" && <button className="workspace-back-button" onClick={() => { setWorkspaceView("conversation"); setSelectedAgent(""); }} aria-label="返回对话" title="返回对话">‹ <span>返回对话</span></button>}
             <div className="conversation-heading-copy"><h1>{headerTitle}</h1><span className="header-project">{headerSubtitle}</span></div>
           </div>
+          {workspaceView === "conversation" && <AgentStatusStrip cards={agentCards} selectedAgent={selectedAgent} onSelect={scrollToAgent} />}
           {workspaceView === "conversation" && selectedTask && <span className={`task-state state-${snapshotStatus(selectedTask)}`}><i />{taskStatus(selectedTask)}</span>}
         </header>
 
         {notice && <div className="notice-bar" role="status"><span>{notice}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}
         {connection === "连接失败" && <div className="connection-alert" role="alert"><div><strong>本地任务服务暂不可用</strong><span>检查网关是否运行，或打开运行设置重新启动。</span></div><button className="quiet-button" onClick={showSettings}>打开运行设置</button></div>}
         {credentialStatus?.encryptionAvailable === false && workspaceView !== "settings" && <div className="connection-alert" role="alert"><div><strong>系统凭据加密不可用</strong><span>已保存的凭据无法读取，机器人不会启动。</span></div><button className="quiet-button" onClick={showSettings}>查看详情</button></div>}
-        {!hasManagerCredentials && connection === "已连接" && <div className="setup-hint"><span>尚未配置项目经理凭据，任务暂时无法开始。</span><button onClick={showSettings}>配置凭据</button></div>}
-
-        {workspaceView === "conversation" && <AgentStatusStrip cards={agentCards} selectedAgent={selectedAgent} onSelect={scrollToAgent} />}
+        {feishuEnabled && !hasManagerCredentials && connection === "已连接" && workspaceView !== "settings" && <div className="setup-hint"><span>飞书已开启但未配置项目经理 App ID / Secret，飞书群暂不可用；桌面端任务不受影响。不使用飞书可在运行设置中关闭。</span><button onClick={showSettings}>前往设置</button></div>}
 
         {workspaceView === "settings" && <SettingsView onSaved={refreshCredentials} onNotice={setNotice} />}
+        {workspaceView === "capabilities" && <CapabilitiesView agents={agents} request={request} onNotice={setNotice} />}
         {workspaceView === "tickets" && <TicketsView project={project} projects={projects} request={request} onNotice={setNotice} onOpenTask={(taskId) => { setSelected(taskId); setSelectedAgent(""); setWorkspaceView("conversation"); }} />}
         {workspaceView === "project" && <ProjectView
           project={project}

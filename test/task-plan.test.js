@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { validateTaskPlan } from "../src/task-plan.js";
 import { createDeliverTool } from "../src/pi-agent.js";
 
@@ -80,4 +83,34 @@ test("project manager delivery rejects an invalid structured plan before saving"
   const result = await tool.execute("call-1", { summary: "plan", plan: { project: "demo", goal: "x", stages: [{ id: "s1", assignments: [{ id: "a1", agentKey: "architect", task: "x", toolAllowlist: ["bash"] }] }] } });
   assert.match(result.content[0].text, /计划校验失败/);
   assert.equal(delivered, null);
+});
+
+test("project manager can submit a plan using all configured role limits without passing them explicitly", async () => {
+  const root = await mkdtemp(join(tmpdir(), "task-plan-delivery-"));
+  try {
+    let delivered = null;
+    const tool = createDeliverTool({
+      getArtifactsDir: () => join(root, "workspace", "demo", "artifacts", "T-1"),
+      getProjectName: () => "demo",
+      agentKey: "project_manager",
+      agentName: "项目经理",
+      onDeliver: (value) => { delivered = value; },
+      root,
+    });
+    const result = await tool.execute("call-2", {
+      summary: "按阶段执行",
+      plan: {
+        project: "demo",
+        goal: "设计并验证功能",
+        stages: [
+          { id: "design", assignments: [{ id: "architecture", agentKey: "architect", task: "设计接口", toolAllowlist: ["read", "write"], fileWriteAllowlist: ["workspace/demo/artifacts"] }] },
+          { id: "verify", assignments: [{ id: "tests", agentKey: "tester", task: "验证实现", dependsOn: ["architecture"], toolAllowlist: ["read", "bash"] }] },
+        ],
+      },
+    });
+    assert.equal(result.details.planErrors, undefined, result.content[0].text);
+    assert.deepEqual(delivered.plan.stages.map((stage) => stage.id), ["design", "verify"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

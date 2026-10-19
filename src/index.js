@@ -21,8 +21,10 @@ import { archiveProjectHistory, exportProjectSnapshot, restoreProjectHistory } f
 import { createProjectRegistry } from "./project-registry.js";
 import { createGitHubClient } from "./tickets/github.js";
 import { createTicketService } from "./tickets/service.js";
+import { getCapabilityRegistry } from "./capabilities/index.js";
 import { createShutdown } from "./shutdown.js";
 import { roleConfig } from "./role-config.cjs";
+import { feishuEnabled } from "./feishu-mode.cjs";
 import { rotateEventLog } from "./event-log.js";
 import { activeLock, describeLock, globalLockFile, releaseLock as releaseGatewayLock, writeLock } from "./gateway-lock.cjs";
 
@@ -127,8 +129,10 @@ async function resolveBotIdentity(client, key) {
   }
 }
 
+const useFeishu = feishuEnabled();
 const prepared = [];
-for (const definition of config.agents) {
+if (!useFeishu) console.log("[feishu] disabled by FEISHU_ENABLED=false; running desktop-only");
+for (const definition of useFeishu ? config.agents : []) {
   const appId = process.env[definition.appIdEnv];
   const appSecret = process.env[definition.appSecretEnv];
   if (!definition.enabled || !appId || !appSecret) {
@@ -151,7 +155,12 @@ const bitableTraceTableId = process.env.FEISHU_BITABLE_TRACE_TABLE_ID || "";
 let bitableControl = null;
 let bitableTraceProjection = null;
 const boardOwner = prepared.find((item) => item.definition.key === "project_manager");
-if (!boardOwner) {
+// 桌面端任务只需要模型凭据：未接入飞书（或缺项目经理飞书凭据）时用配置里的项目经理定义。
+const pmDefinition = config.agents.find((item) => item.key === "project_manager" && item.enabled);
+const projectManagerAgent = boardOwner?.agent || (pmDefinition ? { ...pmDefinition } : null);
+if (!useFeishu) {
+  // 关闭飞书时多维表格看板一并停用。
+} else if (!boardOwner) {
   if (bitableTableId || bitableTraceTableId) console.warn("[bitable] control plane disabled: project-manager credentials are required; no other role will use Bitable");
 } else if (!bitableTableId || (!bitableWikiToken && !bitableAppToken)) {
   console.log("[bitable] dashboard sync disabled: set FEISHU_BITABLE_TABLE_ID plus FEISHU_BITABLE_WIKI_TOKEN or FEISHU_BITABLE_APP_TOKEN");
@@ -253,12 +262,12 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
     ticketService?.handleEvent(entry).catch((error) => console.warn(`[tickets] ${error.message}`));
     return entry;
   };
-  const submitTask = boardOwner?.agent
+  const submitTask = projectManagerAgent
     ? createDesktopTaskSubmitter({
       taskStore,
       orchestrator,
       runAgent,
-      projectManagerAgent: boardOwner.agent,
+      projectManagerAgent,
       recordEvent: publishRecordEvent,
     })
     : null;
@@ -269,7 +278,8 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
       submitTask,
       recordEvent: publishRecordEvent,
       // 飞书确认卡由项目经理机器人发出，回调同样落到项目经理的卡片处理器。
-      sendCard: (chatId, card) => sendCard(boardOwner.client, chatId, card),
+      // 未接入飞书时不发确认卡，工单直接派发。
+      sendCard: boardOwner ? (chatId, card) => sendCard(boardOwner.client, chatId, card) : null,
       defaultChatId: allowedChatId,
     })
     : null;
@@ -318,6 +328,7 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
     cleanupHistory,
     restoreHistory,
     tickets: ticketService,
+    capabilities: getCapabilityRegistry(),
     host: "127.0.0.1",
     port: Number(process.env.PI_DESKTOP_PORT) || 0,
   });
@@ -330,6 +341,11 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
     // 令牌随进程失效，删掉文件避免桌面端读到过期端口。
     try { unlinkSync(desktopTokenFile); } catch {}
   });
+}
+
+// 没有飞书机器人的角色也要注册（client 为空），桌面端任务派发不经过飞书。
+for (const definition of config.agents) {
+  if (definition.enabled && !prepared.some((item) => item.definition.key === definition.key)) orchestrator.registerRole({ ...definition }, null);
 }
 
 for (const { definition, agent, client, appId, appSecret, identity } of prepared) {
@@ -371,8 +387,9 @@ for (const { definition, agent, client, appId, appSecret, identity } of prepared
 }
 
 if (!active.length) {
-  console.error("No configured Feishu bots. Copy .env.example to .env and fill at least one App ID and App Secret.");
+  if (useFeishu) console.error("No configured Feishu bots. Fill at least one App ID and App Secret, or set FEISHU_ENABLED=false to run desktop-only.");
   if (process.env.PI_DESKTOP_CONTROL === "false") process.exitCode = 1;
+  else console.log(`[ready] pid=${process.pid} desktop-only mode (no Feishu bots connected)`);
 } else {
   console.log(`[ready] pid=${process.pid} active agents: ${active.join(", ")}`);
 }

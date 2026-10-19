@@ -1,7 +1,19 @@
 // 策略闸门：Pi 会话每次调用工具前都会经过这里。
 // 依次检查任务级工具白名单、敏感文件、删除命令、联网、Shell 写入与 write/edit 落点。
 import { checkNetworkAllowed, checkShellCommand, checkWriteAllowed, isDeleteCommand, resolveWritePaths } from "../policy.js";
+import { isAbsolute, relative, resolve } from "node:path";
 import { roleConfig } from "../role-config.cjs";
+import { getCapabilityRegistry } from "../capabilities/index.js";
+
+// 分配给该角色的 Skill 目录始终可读：任务级读取白名单只约束项目文件，不能让 Agent 读不到自己的 Skill。
+function insideAssignedSkill(agentKey, cwd, requested) {
+  if (!requested) return false;
+  const target = resolve(cwd || process.cwd(), requested);
+  return getCapabilityRegistry().forRole(agentKey).skillPaths.some((dir) => {
+    const inside = relative(dir, target);
+    return inside === "" || (!inside.startsWith("..") && !isAbsolute(inside));
+  });
+}
 
 const { policy } = roleConfig();
 
@@ -79,7 +91,8 @@ export function createPolicyFactory(agent, projectNameOrGetter, taskPermissionsG
           if (!taskCheck.allowed) return { block: true, reason: "当前任务文件写入白名单拒绝该路径" };
         }
       }
-      if (["read", "grep", "find", "ls"].includes(event.toolName) && Array.isArray(taskPermissions.fileReadAllowlist) && taskPermissions.fileReadAllowlist.length) {
+      if (["read", "grep", "find", "ls"].includes(event.toolName) && Array.isArray(taskPermissions.fileReadAllowlist) && taskPermissions.fileReadAllowlist.length
+        && !insideAssignedSkill(agent.key, ctx?.cwd, event.input?.path)) {
         const requested = String(event.input?.path || event.input?.pattern || "");
         const normalized = requested.replaceAll("\\", "/");
         const allowed = taskPermissions.fileReadAllowlist.some((root) => {

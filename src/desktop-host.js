@@ -10,7 +10,11 @@ async function scopedSource(tickets, { sourceId, projectName }) {
   return source;
 }
 
-export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, recordEvent, agents, submitTask, createProject, listProjects, exportProject, cleanupHistory, restoreHistory, tickets = null, host, port } = {}) {
+export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, recordEvent, agents, submitTask, createProject, listProjects, exportProject, cleanupHistory, restoreHistory, tickets = null, capabilities = null, host, port } = {}) {
+  const requireCapabilities = () => {
+    if (!capabilities) throw new Error("能力管理不可用");
+    return capabilities;
+  };
   const requireTickets = () => {
     if (!tickets) throw new Error("工单功能不可用（需要启用项目经理）");
     return tickets;
@@ -68,6 +72,24 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
     async restore_history(input) {
       if (typeof restoreHistory !== "function") throw new Error("history restore is unavailable");
       return restoreHistory(input || {});
+    },
+    async capabilities_list() {
+      return requireCapabilities().list();
+    },
+    async capabilities_install({ kind, source, trustPlugin, roles } = {}) {
+      const installed = await requireCapabilities().install({ kind, source, trustPlugin, roles });
+      await recordEvent?.({ type: "capability_installed", kind, name: installed.name, source: installed.source, roles: installed.roles, channel: "desktop" });
+      return { capability: installed };
+    },
+    async capabilities_assign({ kind, name, roles, enabled } = {}) {
+      const updated = await requireCapabilities().assign({ kind, name, roles, enabled });
+      await recordEvent?.({ type: "capability_updated", kind, name, roles: updated.roles, enabled: updated.enabled, channel: "desktop" });
+      return { capability: updated };
+    },
+    async capabilities_remove({ kind, name } = {}) {
+      const result = await requireCapabilities().remove({ kind, name });
+      await recordEvent?.({ type: "capability_removed", kind, name, channel: "desktop" });
+      return result;
     },
     async tickets_sources({ projectName } = {}) {
       const service = requireTickets();

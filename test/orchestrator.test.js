@@ -156,6 +156,30 @@ test("桌面通道派发只记录事件，不向飞书发送卡片", async () =>
   assert.equal(messages, 0);
 });
 
+test("未接入飞书的角色（client 为空）可处理桌面任务，但不接飞书任务", async () => {
+  let ran = 0;
+  const orch = createOrchestrator({
+    runAgent: async () => { ran += 1; return { text: "done", delivery: { summary: "done", artifactPaths: [], next: "无需后续操作", final: true } }; },
+    log: { info() {}, error() {}, warn() {} },
+  });
+  orch.registerRole({ key: "project_manager", displayName: "PM" }, null);
+  orch.registerRole({ key: "architect", displayName: "AR" }, null);
+  await orch.onTaskCompleted("project_manager", "T-nofeishu-desktop", {
+    delivery: { summary: "plan", assignments: [{ agentKey: "architect", task: "design" }], artifactPaths: [], next: "执行计划" },
+    context: { chatId: "desktop-local", channel: "desktop", projectName: "demo" },
+  });
+  await orch.whenIdle();
+  assert.equal(ran, 2);
+
+  ran = 0;
+  await orch.onTaskCompleted("project_manager", "T-nofeishu-chat", {
+    delivery: { summary: "plan", assignments: [{ agentKey: "architect", task: "design" }], artifactPaths: [], artifactsDir: "d" },
+    context: { chatId: "c1" },
+  });
+  await orch.whenIdle();
+  assert.equal(ran, 0);
+});
+
 test("dispatch_started events include the assigned task but not the generated prompt", async () => {
   const events = [];
   const client = { im: { message: { create: async () => ({ code: 0 }) } } };

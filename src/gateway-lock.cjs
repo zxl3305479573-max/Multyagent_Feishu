@@ -8,6 +8,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const { dirname, join } = require("node:path");
+const { feishuEnabled } = require("./feishu-mode.cjs");
 
 function isAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -52,6 +53,8 @@ function releaseLock(file) {
 
 /** 按项目经理（没有则取第一个已配置角色）的 App ID 定位全局锁；未配置任何机器人时返回 null。 */
 function globalLockFile(agents = [], env = process.env, home = process.env.PI_LOCK_DIR || join(os.homedir(), ".multyagent-feishu", "locks")) {
+  // 关闭飞书时不连接机器人，也就不会与其他网关抢同一套机器人。
+  if (!feishuEnabled(env)) return null;
   const ordered = [...agents].sort((a, b) => Number(b.key === "project_manager") - Number(a.key === "project_manager"));
   const appId = ordered.map((agent) => env[agent.appIdEnv]).find(Boolean);
   if (!appId) return null;

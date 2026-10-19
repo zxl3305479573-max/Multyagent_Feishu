@@ -65,7 +65,7 @@ export type DesktopSocket = {
   subscribe: (listener: (message: DesktopMessage) => void) => () => void;
   close: () => void;
 };
-export type WorkspaceView = "conversation" | "agent" | "project" | "settings" | "tickets";
+export type WorkspaceView = "conversation" | "agent" | "project" | "settings" | "tickets" | "capabilities";
 export type TicketSource = {
   id: string;
   repo: string;

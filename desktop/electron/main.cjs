@@ -80,6 +80,10 @@ async function createWindow() {
   win = new BrowserWindow({
     width: 1320, height: 900, minWidth: 720, minHeight: 560,
     icon: join(__dirname, "assets", "icon.png"),
+    // 无边框：隐藏系统标题栏，由页面顶栏充当拖拽区，Windows/Linux 保留系统窗口按钮叠加在右上角。
+    backgroundColor: "#ffffff",
+    titleBarStyle: "hidden",
+    ...(process.platform === "darwin" ? { trafficLightPosition: { x: 16, y: 21 } } : { titleBarOverlay: { color: "#ffffff", symbolColor: "#1f2329", height: 58 } }),
     // preload 只用 contextBridge/ipcRenderer，可在沙箱中运行；文件读取全部交给主进程。
     webPreferences: { preload: join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });

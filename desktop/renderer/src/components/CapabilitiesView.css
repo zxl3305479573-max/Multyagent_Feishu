@@ -1,0 +1,33 @@
+/* 机器人能力页（独立样式文件，只使用全局颜色变量）。 */
+.capabilities-view { display: grid; gap: 12px; align-content: start; }
+.capability-tabs { display: flex; gap: 6px; }
+.capability-tabs button { display: inline-flex; gap: 6px; align-items: center; min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--muted); font-size: 13px; cursor: pointer; }
+.capability-tabs button span { color: var(--subtle); font-size: 12px; }
+.capability-tabs button.is-selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.capability-intro { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.capability-add { justify-self: start; min-height: 32px; padding: 0 12px; border: 1px dashed var(--line); border-radius: 6px; background: #fff; color: var(--accent); font-size: 13px; cursor: pointer; }
+.capability-form { display: grid; gap: 10px; max-width: 620px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; }
+.capability-form > label, .capability-form fieldset { display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
+.capability-form input:not([type="checkbox"]):not([type="radio"]), .capability-form textarea { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); font: inherit; font-size: 13px; }
+.capability-form textarea { resize: vertical; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+.capability-sources, .capability-roles { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.capability-sources label, .capability-roles label, .capability-trust, .capability-switch { display: inline-flex; gap: 5px; align-items: center; color: var(--ink); font-size: 13px; }
+.capability-roles { margin: 0; padding: 0; border: 0; }
+.capability-roles legend { margin-bottom: 4px; color: var(--muted); }
+.capability-local { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.capability-local span { min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; }
+.capability-trust { padding: 8px 10px; border-radius: 6px; background: var(--surface); }
+.capability-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.capability-primary { min-height: 30px; padding: 0 14px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-size: 13px; cursor: pointer; }
+.capability-primary:disabled { opacity: 0.5; cursor: default; }
+.capability-card { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.capability-card.is-disabled { background: var(--surface); }
+.capability-card.is-disabled strong, .capability-card.is-disabled p { color: var(--muted); }
+.capability-card-heading { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.capability-card-heading strong { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+.capability-card p { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.capability-card small { color: var(--subtle); font-size: 12px; overflow-wrap: anywhere; }
+.capability-warning { color: var(--red); font-size: 12px; }
+.capability-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+.capability-tools code { padding: 1px 6px; border-radius: 4px; background: var(--surface); color: var(--ink); }
+.capability-empty { color: var(--muted); font-size: 13px; }

@@ -28,9 +28,10 @@ import { isTerminated } from "./tasks.js";
 import { registerActiveSession } from "./session-control.js";
 import { roleConfig } from "./role-config.cjs";
 import { createPolicyFactory } from "./agent/policy-gate.js";
+import { getCapabilityRegistry } from "./capabilities/index.js";
 import { buildPrompt, buildSystemPrompt, DEFAULT_TOOLS, extractText, sanitizeAgentReply } from "./agent/prompts.js";
 import { mapPiToolEvent } from "./agent/tool-events.js";
-import { createAgentCliTool, createDeliverTool, createProjectTool, createTaskStatusTool } from "./agent/tools.js";
+import { buildTaskPlanRoleLimits, createAgentCliTool, createDeliverTool, createProjectTool, createTaskStatusTool } from "./agent/tools.js";
 
 // 对外接口保持不变：策略闸门、提示构造、事件映射和受控工具已拆到 src/agent/ 下，这里统一转出。
 export { createPolicyFactory, SENSITIVE_PATTERNS } from "./agent/policy-gate.js";
@@ -84,13 +85,16 @@ function getLoader(agent, projectNameOrGetter, taskPermissionsGetter = null) {
   const dynamicProject = typeof projectNameOrGetter === "function";
   const getProjectName = dynamicProject ? projectNameOrGetter : () => projectNameOrGetter;
   const projectName = getProjectName();
-  const cacheKey = `${agent.key}:${projectName || "default"}`;
+  // 用户给该角色添加的 Skill / 插件；能力库每次变更版本号都会变，缓存随之失效，无需重启网关。
+  const capabilities = getCapabilityRegistry().forRole(agent.key);
+  const cacheKey = `${agent.key}:${projectName || "default"}:${capabilities.version}`;
   let loaderPromise = loaderCache.get(cacheKey);
   if (!loaderPromise || dynamicProject) {
     const loader = new DefaultResourceLoader({
       cwd: process.cwd(),
       agentDir: getAgentDir(),
-      additionalSkillPaths: diagramSkillPaths(agent.key),
+      additionalSkillPaths: [...diagramSkillPaths(agent.key), ...capabilities.skillPaths],
+      additionalExtensionPaths: capabilities.extensionPaths,
       systemPromptOverride: () => buildSystemPrompt(agent, getProjectName()),
       extensionFactories: [createPolicyFactory(agent, getProjectName, taskPermissionsGetter)],
     });
@@ -150,17 +154,15 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
     getProjectName: () => activeProject,
     agentKey: agent.key,
     agentName: agent.displayName,
-    roleLimits: {
-      ...cfg,
-      readPaths: (cfg.readPaths || cfg.writePaths || []).map((path) => String(path).replaceAll("{project}", activeProject || "default")),
-      writePaths: (cfg.writePaths || []).map((path) => String(path).replaceAll("{project}", activeProject || "default")),
-    },
+    roleLimits: () => buildTaskPlanRoleLimits(activeProject),
     onDeliver: (d) => { delivery = d; },
   });
 
   const tools = [...(cfg.tools || DEFAULT_TOOLS)];
   const customTools = [];
   if (!context.statusQuery) {
+    // 插件声明的工具要显式加入可用工具列表，否则即使扩展注册了也不会启用。
+    for (const tool of getCapabilityRegistry().forRole(agent.key).tools) if (!tools.includes(tool)) tools.push(tool);
     tools.push("deliver_artifact");
     customTools.push(deliverTool);
     tools.push("agent_cli");

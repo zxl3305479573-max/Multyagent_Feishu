@@ -10,10 +10,38 @@ import { executeAgentCli } from "../agent-cli.js";
 import { loadTaskStatus } from "../task-status.js";
 import { validateTaskPlan } from "../task-plan.js";
 import { roleConfig } from "../role-config.cjs";
+import { getCapabilityRegistry } from "../capabilities/index.js";
 import { validateAcceptance } from "../orchestrator/guards.js";
 import { resolveProjectFile } from "../project-file.cjs";
 
-const agentsConfig = { agents: roleConfig().agents };
+const loadedRoleConfig = roleConfig();
+const agentsConfig = { agents: loadedRoleConfig.agents };
+const planPolicies = loadedRoleConfig.policy.agents;
+
+function projectPaths(paths, projectName) {
+  const project = String(projectName || "default");
+  return (Array.isArray(paths) ? paths : []).map((path) => String(path).replaceAll("{project}", project));
+}
+
+/**
+ * 结构化计划校验使用“所有角色”的权限上限，而不是项目经理自己的上限。
+ * 用户给角色安装的插件工具也属于该角色当前可用的工具，否则计划里的插件调用会被误拒绝。
+ */
+export function buildTaskPlanRoleLimits(projectName, registry = getCapabilityRegistry()) {
+  return Object.fromEntries(agentsConfig.agents
+    .filter((agent) => agent.enabled !== false)
+    .map((agent) => {
+      const limits = planPolicies[agent.key] || {};
+      const pluginTools = registry?.forRole?.(agent.key)?.tools || [];
+      return [agent.key, {
+        tools: [...new Set([...(limits.tools || []), ...pluginTools])],
+        readPaths: projectPaths(limits.writePaths, projectName),
+        writePaths: projectPaths(limits.writePaths, projectName),
+        networkAccess: limits.networkAccess === true,
+        networkDomains: Array.isArray(limits.networkDomains) ? limits.networkDomains : [],
+      }];
+    }));
+}
 
 // 测试的结构化验收结果；证据里的文件/截图必须真实存在于当前项目目录。
 async function checkAcceptance(input, { root, projectName }) {
@@ -29,6 +57,11 @@ async function checkAcceptance(input, { root, projectName }) {
 }
 
 export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, roleLimits = {}, onDeliver, root = process.cwd() }) {
+  const limitsForPlan = () => typeof roleLimits === "function"
+    ? roleLimits()
+    : Object.keys(roleLimits || {}).length
+      ? roleLimits
+      : buildTaskPlanRoleLimits(getProjectName?.() || null);
   return defineTool({
     name: "deliver_artifact",
     label: "交付产物",
@@ -95,7 +128,7 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         if (agentKey !== "project_manager") {
           return { content: [{ type: "text", text: "计划校验失败：只有项目经理可以提交结构化阶段计划" }], details: {} };
         }
-        const checked = validateTaskPlan(params.plan, { projectName: getProjectName?.() || null, roleLimits });
+        const checked = validateTaskPlan(params.plan, { projectName: getProjectName?.() || null, roleLimits: limitsForPlan() });
         if (!checked.valid) {
           return { content: [{ type: "text", text: `计划校验失败：${checked.errors.join("；")}` }], details: { planErrors: checked.errors } };
         }

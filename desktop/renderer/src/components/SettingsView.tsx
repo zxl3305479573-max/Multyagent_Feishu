@@ -98,10 +98,20 @@ function FieldRow({ field, entry, draft, onChange }: { field: SettingsField; ent
   </div>;
 }
 
-function GroupSection({ group, snapshot, drafts, query, provider, setDraft }: { group: SettingsGroup; snapshot: SettingsSnapshot; drafts: Drafts; query: string; provider: string; setDraft: (key: string, value: string | undefined) => void }) {
-  const visible = group.fields.filter((field) => matches(field, query));
+// 关闭飞书后这些分组只保留开关，凭据与看板配置收起（已保存的值不动）。
+const FEISHU_GROUPS = new Set(["feishu", "bitable"]);
+
+function GroupSection({ group, snapshot, drafts, query, provider, feishuOff, setDraft }: { group: SettingsGroup; snapshot: SettingsSnapshot; drafts: Drafts; query: string; provider: string; feishuOff: boolean; setDraft: (key: string, value: string | undefined) => void }) {
+  const hidden = feishuOff && FEISHU_GROUPS.has(group.id);
+  const visible = group.fields.filter((field) => matches(field, query) && (!hidden || field.key === "FEISHU_ENABLED"));
   if (!visible.length) return null;
   const row = (field: SettingsField) => <FieldRow key={field.key} field={field} entry={snapshot.entries[field.key]} draft={drafts[field.key]} onChange={(value) => setDraft(field.key, value)} />;
+  if (hidden) {
+    return <section className="settings-group" id={`settings-${group.id}`}>
+      <header><h3>{group.title}</h3><p>飞书已关闭：任务只在桌面端下发与查看，已保存的飞书配置保留但不使用。</p></header>
+      <div className="settings-rows">{visible.map(row)}</div>
+    </section>;
+  }
   // 模型分组：当前服务商的 API Key 与专属配置放在最前，其余服务商折叠。
   const forProvider = (field: SettingsField) => (field.providers || (field.provider ? [field.provider] : [])).includes(provider);
   const isOtherProvider = (field: SettingsField) => Boolean(field.providers || field.provider) && !forProvider(field);
@@ -138,6 +148,7 @@ export function SettingsView({ onSaved, onNotice }: Props) {
 
   const dirtyCount = Object.keys(drafts).length;
   const provider = drafts.PI_AGENT_PROVIDER || snapshot?.entries.PI_AGENT_PROVIDER?.effective || "deepseek";
+  const feishuOff = (drafts.FEISHU_ENABLED ?? snapshot?.entries.FEISHU_ENABLED?.effective ?? "true") === "false";
   const groups = snapshot?.groups || [];
   const visibleGroups = useMemo(() => groups.filter((group) => group.fields.some((field) => matches(field, query))), [groups, query]);
 
@@ -187,7 +198,7 @@ export function SettingsView({ onSaved, onNotice }: Props) {
         <nav aria-label="配置分组">{visibleGroups.map((group) => <a key={group.id} href={`#settings-${group.id}`} onClick={(event) => { event.preventDefault(); document.getElementById(`settings-${group.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>{group.title}</a>)}</nav>
       </div>
       {visibleGroups.length === 0 && <p className="settings-empty">没有匹配“{query}”的配置项</p>}
-      {visibleGroups.map((group) => <GroupSection key={group.id} group={group} snapshot={snapshot} drafts={drafts} query={query} provider={provider} setDraft={setDraft} />)}
+      {visibleGroups.map((group) => <GroupSection key={group.id} group={group} snapshot={snapshot} drafts={drafts} query={query} provider={provider} feishuOff={feishuOff} setDraft={setDraft} />)}
       <div className={`settings-savebar ${dirtyCount ? "has-changes" : ""}`}>
         <span>{dirtyCount ? `${dirtyCount} 项未保存` : "没有未保存的更改"}</span>
         <button type="button" className="quiet-button" onClick={() => setDrafts({})} disabled={!dirtyCount || Boolean(saving)}>放弃更改</button>

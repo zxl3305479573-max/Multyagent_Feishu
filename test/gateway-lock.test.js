@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activeLock, globalLockFile, readLock, releaseLock, writeLock } from "../src/gateway-lock.cjs";
+import { feishuEnabled } from "../src/feishu-mode.cjs";
 
 const agents = [{ key: "architect", appIdEnv: "ARCH_ID" }, { key: "project_manager", appIdEnv: "PM_ID" }];
 
@@ -11,6 +12,13 @@ test("global gateway lock is keyed by the project manager bot so every launch pa
   assert.equal(globalLockFile(agents, { ARCH_ID: "cli_arch", PM_ID: "cli_pm" }, "/locks"), join("/locks", "cli_pm.lock"));
   assert.equal(globalLockFile(agents, { ARCH_ID: "cli_arch" }, "/locks"), join("/locks", "cli_arch.lock"));
   assert.equal(globalLockFile(agents, {}, "/locks"), null);
+  assert.equal(globalLockFile(agents, { PM_ID: "cli_pm", FEISHU_ENABLED: "false" }, "/locks"), null, "飞书关闭时不占机器人锁");
+});
+
+test("FEISHU_ENABLED defaults on and accepts common off values", () => {
+  assert.equal(feishuEnabled({}), true);
+  assert.equal(feishuEnabled({ FEISHU_ENABLED: "true" }), true);
+  for (const value of ["false", "0", "OFF", " no "]) assert.equal(feishuEnabled({ FEISHU_ENABLED: value }), false, value);
 });
 
 test("gateway lock reads legacy pid files and ignores dead or own processes", async () => {

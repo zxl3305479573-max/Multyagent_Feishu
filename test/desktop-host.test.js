@@ -69,3 +69,33 @@ test("desktop host exposes project export and recoverable history cleanup", asyn
   assert.deepEqual(await host.commandHandlers.restore_history({ projectName: "demo" }), { restored: 2 });
   assert.deepEqual(calls, [["export", { projectName: "demo" }], ["cleanup", { projectName: "demo", keep: 10 }], ["restore", { projectName: "demo" }]]);
 });
+
+test("desktop host exposes capability management and records each change", async () => {
+  const calls = [];
+  const recorded = [];
+  const capability = { kind: "skill", name: "api-review", roles: ["architect"], enabled: true, source: "desktop" };
+  const capabilities = {
+    list: async () => ({ skills: [capability], plugins: [], roles: ["architect"] }),
+    install: async (input) => { calls.push(["install", input]); return capability; },
+    assign: async (input) => { calls.push(["assign", input]); return { ...capability, ...input }; },
+    remove: async (input) => { calls.push(["remove", input]); return { removed: true }; },
+  };
+  const host = createDesktopHost({
+    token: "desktop-session-token-for-tests",
+    eventsFile: ".tmp/no-events.jsonl",
+    taskStore: { list: async () => [] },
+    orchestrator: {},
+    capabilities,
+    recordEvent: async (event) => recorded.push(event),
+  });
+  const handlers = host.commandHandlers;
+
+  assert.deepEqual(await handlers.capabilities_list(), { skills: [capability], plugins: [], roles: ["architect"] });
+  assert.deepEqual(await handlers.capabilities_install({ kind: "skill", source: { type: "local", path: "C:/skill" }, roles: ["architect"] }), { capability });
+  assert.equal((await handlers.capabilities_assign({ kind: "skill", name: "api-review", enabled: false })).capability.enabled, false);
+  assert.deepEqual(await handlers.capabilities_remove({ kind: "skill", name: "api-review" }), { removed: true });
+
+  assert.deepEqual(calls.map(([action]) => action), ["install", "assign", "remove"]);
+  assert.deepEqual(recorded.map((event) => event.type), ["capability_installed", "capability_updated", "capability_removed"]);
+  assert.ok(recorded.every((event) => event.channel === "desktop"));
+});

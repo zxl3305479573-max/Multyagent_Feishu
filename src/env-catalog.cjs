@@ -46,7 +46,7 @@ function roleFields(roles) {
   const fields = [];
   for (const role of roles) {
     fields.push({ key: role.feishu.appIdEnv, label: `${role.displayName} App ID`, type: "secret", role: role.key, description: `飞书开放平台「${role.displayName}」自建应用的 App ID。` });
-    fields.push({ key: role.feishu.appSecretEnv, label: `${role.displayName} App Secret`, type: "secret", role: role.key, description: `「${role.displayName}」应用的 App Secret。缺少 App ID 或 Secret 的角色启动时会被跳过。` });
+    fields.push({ key: role.feishu.appSecretEnv, label: `${role.displayName} App Secret`, type: "secret", role: role.key, description: `「${role.displayName}」应用的 App Secret。可留空：缺少 App ID 或 Secret 的角色不连接飞书，只在桌面端工作。` });
   }
   return fields;
 }
@@ -66,8 +66,9 @@ function buildEnvCatalog({ roles = roleConfig().roles } = {}) {
     {
       id: "feishu",
       title: "飞书机器人",
-      description: "每个角色对应一个飞书自建应用。凭据使用系统加密保存在本机。",
+      description: "可选。每个角色对应一个飞书自建应用，凭据使用系统加密保存在本机。不使用飞书时关闭开关，只在桌面端下发任务。",
       fields: [
+        { key: "FEISHU_ENABLED", label: "启用飞书", type: "boolean", trueValue: "true", falseValue: "false", default: "true", description: "关闭后不连接任何飞书机器人、不同步多维表格，已保存的 App ID / Secret 保留但不使用。开启时只连接填写了 App ID 与 Secret 的角色，其余角色仅在桌面端可用。" },
         ...roleFields(roles),
         { key: "FEISHU_ALLOWED_CHAT_ID", label: "限定群聊 ID", type: "text", placeholder: "oc_xxx，留空表示不限制", description: "只处理来自这个群聊的消息，避免机器人被拉进其他群后误触发。" },
       ],

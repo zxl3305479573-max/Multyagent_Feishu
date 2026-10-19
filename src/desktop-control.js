@@ -102,7 +102,8 @@ export function createDesktopControlServer({
         return;
       }
       const scopedProject = clientProjects.get(client);
-      if (scopedProject && message.command !== "create_project") {
+      // 新建项目和机器人能力属于全局配置，不受当前项目作用域限制。
+      if (scopedProject && message.command !== "create_project" && !String(message.command || "").startsWith("capabilities_")) {
         const requestedProject = message.projectName || message.project || null;
         const task = message.taskId ? await taskFor(message.taskId) : null;
         const effectiveProject = requestedProject || task?.project_name || null;

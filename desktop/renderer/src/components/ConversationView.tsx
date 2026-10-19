@@ -1,5 +1,5 @@
 import React from "react";
-import type { Agent, AgentExecutionGroup, EventRecord, Task } from "../types";
+import type { Agent, AgentExecutionGroup, AgentExecutionItem, EventRecord, Task } from "../types";
 import { eventLabels, statusLabels, verdictLabels } from "../labels";
 import { formatDuration, formatFileSize, formatTime, snapshotStatus, taskStatus } from "../format";
 import { collectArtifacts, toolExecutionStatus } from "../execution-view";
@@ -64,6 +64,38 @@ function FinalResult({ group, onOpenFile }: { group: AgentExecutionGroup; onOpen
   </div>;
 }
 
+type ToolExecutionData = Extract<AgentExecutionItem, { kind: "tool" }>["execution"];
+type ExecutionBlock = { kind: "event"; event: EventRecord } | { kind: "tools"; executions: ToolExecutionData[] };
+
+// 连续的工具调用合并成一个可折叠块，避免过程里一长串工具卡片。
+function groupExecutionItems(items: AgentExecutionItem[]): ExecutionBlock[] {
+  const blocks: ExecutionBlock[] = [];
+  for (const item of items) {
+    if (item.kind === "event") { blocks.push(item); continue; }
+    const last = blocks[blocks.length - 1];
+    if (last?.kind === "tools") last.executions.push(item.execution);
+    else blocks.push({ kind: "tools", executions: [item.execution] });
+  }
+  return blocks;
+}
+
+function ToolRun({ executions, agents, onOpenFile }: { executions: ToolExecutionData[]; agents: Agent[]; onOpenFile: OpenFile }) {
+  const statuses = executions.map((execution) => toolExecutionStatus(execution.events));
+  const runStatus = statuses.includes("failed") ? "failed" : statuses.includes("running") ? "running" : "completed";
+  const failedCount = statuses.filter((status) => status === "failed").length;
+  const names = [...new Set(executions.map((execution) => execution.tool))];
+  return <details className={`tool-run tool-run-${runStatus}`}>
+    <summary><span className="tool-run-chevron">›</span><span className="tool-run-title">工具调用 · {executions.length} 次</span><span className="tool-run-names">{names.join("、")}</span><span className="tool-run-status">{runStatus === "failed" ? `${failedCount} 次失败` : statusLabels[runStatus] || runStatus}</span></summary>
+    <div className="tool-run-content">{executions.map((execution, index) => {
+      const status = toolExecutionStatus(execution.events);
+      return <details className={`tool-execution tool-${status}`} key={`tool-${execution.events[0]?.event_id || index}`}>
+        <summary><span className="tool-execution-chevron">›</span><span className="tool-execution-title">{execution.tool}</span><span className="tool-execution-status">{statusLabels[status] || status}</span><span className="tool-execution-count">{execution.events.length} 个步骤</span></summary>
+        <div className="tool-execution-content">{execution.events.map((event, eventIndex) => <ExecutionEvent key={event.event_id || `${event.type}-${eventIndex}`} event={event} agents={agents} onOpenFile={onOpenFile} />)}</div>
+      </details>;
+    })}</div>
+  </details>;
+}
+
 function ExecutionGroup({ group, agents, focused, sectionRef, onOpenFile }: { group: AgentExecutionGroup; agents: Agent[]; focused: boolean; sectionRef: (element: HTMLElement | null) => void; onOpenFile: OpenFile }) {
   return <section className={`agent-execution-group ${focused ? "is-focused" : ""}`} ref={sectionRef}>
     <header className="agent-execution-overview">
@@ -83,12 +115,9 @@ function ExecutionGroup({ group, agents, focused, sectionRef, onOpenFile }: { gr
     </header>
     <details className="agent-execution-process">
       <summary><span className="agent-execution-chevron">›</span><span>执行过程 · {group.items.length} 项</span></summary>
-      <div className="agent-execution-events">{group.items.map((item, index) => item.kind === "event"
-        ? <ExecutionEvent key={item.event.event_id || `${item.event.type}-${index}`} event={item.event} agents={agents} onOpenFile={onOpenFile} />
-        : <details className={`tool-execution tool-${toolExecutionStatus(item.execution.events)}`} key={`tool-${item.execution.events[0]?.event_id || index}`}>
-          <summary><span className="tool-execution-chevron">›</span><span className="tool-execution-title">{item.execution.tool}</span><span className="tool-execution-status">{statusLabels[toolExecutionStatus(item.execution.events)] || toolExecutionStatus(item.execution.events)}</span><span className="tool-execution-count">{item.execution.events.length} 个步骤</span></summary>
-          <div className="tool-execution-content">{item.execution.events.map((event, eventIndex) => <ExecutionEvent key={event.event_id || `${event.type}-${eventIndex}`} event={event} agents={agents} onOpenFile={onOpenFile} />)}</div>
-        </details>)}</div>
+      <div className="agent-execution-events">{groupExecutionItems(group.items).map((block, index) => block.kind === "event"
+        ? <ExecutionEvent key={block.event.event_id || `${block.event.type}-${index}`} event={block.event} agents={agents} onOpenFile={onOpenFile} />
+        : <ToolRun key={`run-${block.executions[0]?.events[0]?.event_id || index}`} executions={block.executions} agents={agents} onOpenFile={onOpenFile} />)}</div>
     </details>
     <FinalResult group={group} onOpenFile={onOpenFile} />
   </section>;
