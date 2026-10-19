@@ -8,6 +8,9 @@ export type ExecutionEvent = {
   tool?: string;
   tool_call_id?: string;
   task_id?: string;
+  sub_task_id?: string;
+  parent_task_id?: string;
+  assignment_id?: string;
   run_id?: string;
   status?: string;
   artifact_paths?: string[];
@@ -17,6 +20,84 @@ export type ExecutionEvent = {
 export type ExecutionItem<E extends ExecutionEvent> =
   | { kind: "event"; event: E }
   | { kind: "tool"; execution: { tool: string; events: E[] } };
+
+export type ConversationTurn<E extends ExecutionEvent> = {
+  turn: number;
+  userEvent: E | null;
+  events: E[];
+};
+
+export type AgentExecutionInstance<E extends ExecutionEvent> = {
+  agentKey: string;
+  executionId: string;
+  events: E[];
+};
+
+export function isUserInputEvent(event: ExecutionEvent) {
+  return ["task_created", "task_reused"].includes(event.type || "");
+}
+
+/** Split a task timeline at each user message so later executions stay below the input that caused them. */
+export function splitConversationTurns<E extends ExecutionEvent>(events: E[]): ConversationTurn<E>[] {
+  const turns: ConversationTurn<E>[] = [];
+  let current: ConversationTurn<E> | null = null;
+  for (const event of [...events].sort((left, right) => Date.parse(left.timestamp || "") - Date.parse(right.timestamp || ""))) {
+    if (isUserInputEvent(event)) {
+      if (current?.userEvent === null) current.userEvent = event;
+      else {
+        current = { turn: turns.length, userEvent: event, events: [] };
+        turns.push(current);
+      }
+      continue;
+    }
+    if (!current) {
+      current = { turn: turns.length, userEvent: null, events: [] };
+      turns.push(current);
+    }
+    current.events.push(event);
+  }
+  return turns;
+}
+
+/** The task id identifies one dispatched child bot; dispatch snapshots also carry it in sub_task_id. */
+export function executionInstanceId(event: ExecutionEvent) {
+  const primary = event.type?.startsWith("dispatch_") ? event.sub_task_id || event.task_id : event.task_id || event.sub_task_id;
+  return primary || event.run_id || "";
+}
+
+/** Keep same-role children separate instead of merging every frontend/backend slice into one execution card. */
+export function groupAgentExecutionInstances<E extends ExecutionEvent>(events: E[]): AgentExecutionInstance<E>[] {
+  const groups = new Map<string, AgentExecutionInstance<E>>();
+  for (const event of events) {
+    const agentKey = executionOwner(event);
+    const executionId = executionInstanceId(event);
+    const key = `${agentKey}|${executionId}`;
+    const group = groups.get(key) || { agentKey, executionId, events: [] };
+    group.events.push(event);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+type NumberableExecutionGroup = { agentKey: string; executionId: string; displayName: string };
+
+/** Number distinct same-role child bots by first appearance; continuing the same child keeps its number. */
+export function numberAgentInstances<T extends NumberableExecutionGroup>(groups: T[]): T[] {
+  const identities = new Map<string, string[]>();
+  for (const group of groups) {
+    const keys = identities.get(group.agentKey) || [];
+    const identity = group.executionId || `${group.agentKey}:default`;
+    if (!keys.includes(identity)) keys.push(identity);
+    identities.set(group.agentKey, keys);
+  }
+  return groups.map((group) => {
+    const keys = identities.get(group.agentKey) || [];
+    if (keys.length < 2) return group;
+    const identity = group.executionId || `${group.agentKey}:default`;
+    const index = keys.indexOf(identity);
+    return { ...group, displayName: `${index + 1}号${group.displayName}` };
+  });
+}
 
 /** Match by invocation ID; old logs fall back to FIFO within the same task, run and tool. */
 export function groupToolExecutions<E extends ExecutionEvent>(events: E[]): ExecutionItem<E>[] {

@@ -5,7 +5,52 @@ import ts from "typescript";
 
 const source = readFileSync(new URL("../desktop/renderer/src/execution-view.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { groupToolExecutions, toolExecutionStatus, collectArtifacts, executionOwner, agentStatus, executionTiming, latestPlanProgress } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { groupToolExecutions, toolExecutionStatus, collectArtifacts, executionOwner, executionInstanceId, groupAgentExecutionInstances, numberAgentInstances, agentStatus, executionTiming, latestPlanProgress, splitConversationTurns } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+
+test("conversation turns keep each user input before the execution it triggered", () => {
+  const at = (seconds) => new Date(seconds * 1000).toISOString();
+  const turns = splitConversationTurns([
+    { type: "task_created", timestamp: at(1) },
+    { type: "task_started", agent: "project_manager", timestamp: at(2) },
+    { type: "task_completed", agent: "project_manager", timestamp: at(3) },
+    { type: "task_reused", timestamp: at(4) },
+    { type: "task_started", agent: "project_manager", timestamp: at(5) },
+    { type: "task_completed", agent: "project_manager", timestamp: at(6) },
+  ]);
+  assert.equal(turns.length, 2);
+  assert.deepEqual(turns.map((turn) => turn.userEvent?.type), ["task_created", "task_reused"]);
+  assert.deepEqual(turns.map((turn) => turn.events.map((event) => event.type)), [
+    ["task_started", "task_completed"],
+    ["task_started", "task_completed"],
+  ]);
+});
+
+test("same-role child bots keep separate execution groups and receive stable instance numbers", () => {
+  assert.equal(executionInstanceId({ type: "dispatch_started", task_id: "T:frontend_developer.a", sub_task_id: "T:frontend_developer.a" }), "T:frontend_developer.a");
+  assert.equal(executionInstanceId({ type: "agent_started", task_id: "T:frontend_developer.b" }), "T:frontend_developer.b");
+
+  const groups = groupAgentExecutionInstances([
+    { type: "dispatch_started", target: "frontend_developer", task_id: "T:frontend_developer.a", timestamp: "2026-01-01T00:00:01Z" },
+    { type: "agent_started", agent: "frontend_developer", task_id: "T:frontend_developer.a", timestamp: "2026-01-01T00:00:02Z" },
+    { type: "dispatch_started", target: "frontend_developer", task_id: "T:frontend_developer.b", timestamp: "2026-01-01T00:00:03Z" },
+    { type: "agent_started", agent: "backend_developer", task_id: "T:backend_developer", timestamp: "2026-01-01T00:00:04Z" },
+  ]);
+  assert.deepEqual(groups.map((group) => [group.agentKey, group.executionId, group.events.length]), [
+    ["frontend_developer", "T:frontend_developer.a", 2],
+    ["frontend_developer", "T:frontend_developer.b", 1],
+    ["backend_developer", "T:backend_developer", 1],
+  ]);
+
+  const numbered = numberAgentInstances(groups.map((group) => ({ ...group, displayName: group.agentKey === "frontend_developer" ? "前端开发" : "后端开发" })));
+  assert.deepEqual(numbered.map((group) => group.displayName), ["1号前端开发", "2号前端开发", "后端开发"]);
+
+  const continued = numberAgentInstances([
+    ...numbered,
+    { ...groups[0], displayName: "前端开发" },
+    { ...groups[1], displayName: "前端开发" },
+  ]);
+  assert.deepEqual(continued.slice(-2).map((group) => group.displayName), ["1号前端开发", "2号前端开发"], "继续执行同一个子机器人时沿用原编号");
+});
 
 test("overlapping identical tools pair by call ID across intervening lifecycle events", () => {
   const events = [

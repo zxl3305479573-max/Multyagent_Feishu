@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import type { Agent, AgentExecutionGroup, AgentExecutionItem, EventRecord, Task } from "../types";
 import { eventLabels, statusLabels, verdictLabels } from "../labels";
 import { formatDuration, formatFileSize, formatTime, snapshotStatus, taskStatus } from "../format";
@@ -87,6 +87,25 @@ function FinalResult({ group, onOpenFile }: { group: AgentExecutionGroup; onOpen
   </div>;
 }
 
+function UserMessage({ event, task, userName, userInitial }: { event: EventRecord; task: Task; userName: string; userInitial: string }) {
+  return <article className="message user-message">
+    <div className="message-avatar user-avatar" title={userName} aria-label={userName}>{userInitial}</div>
+    <div className="message-body">
+      <div className="message-author"><time>{formatTime(event.timestamp)}</time></div>
+      <p>{event.type === "task_reused" ? event.text || "继续当前任务" : task.description || event.text || task.title}</p>
+    </div>
+  </article>;
+}
+
+type PendingApproval = NonNullable<ReturnType<typeof pendingApproval>>;
+
+function ApprovalCard({ approval, approverName, approving = false, onApprove }: { approval: PendingApproval; approverName: string; approving?: boolean; onApprove?: (taskId: string) => void }) {
+  return <div className="approval-banner" role="status">
+    <div><strong>{approverName} 的方案等待你确认</strong><span>{approval.next || approval.summary.slice(0, 160) || "确认后开始执行"}</span></div>
+    <button type="button" disabled={approving} onClick={() => onApprove?.(approval.taskId)}>{approving ? "确认中…" : "确认执行"}</button>
+  </div>;
+}
+
 type ToolExecutionData = Extract<AgentExecutionItem, { kind: "tool" }>["execution"];
 type ExecutionBlock = { kind: "event"; event: EventRecord } | { kind: "tools"; executions: ToolExecutionData[] };
 
@@ -119,8 +138,8 @@ function ToolRun({ executions, agents, onOpenFile }: { executions: ToolExecution
   </details>;
 }
 
-function ExecutionGroup({ group, agents, focused, sectionRef, onOpenFile }: { group: AgentExecutionGroup; agents: Agent[]; focused: boolean; sectionRef: (element: HTMLElement | null) => void; onOpenFile: OpenFile }) {
-  return <section className={`agent-execution-group ${focused ? "is-focused" : ""}`} ref={sectionRef}>
+function ExecutionGroup({ group, agents, approval, approverName, approving, onApprove, onOpenFile }: { group: AgentExecutionGroup; agents: Agent[]; approval: PendingApproval | null; approverName: string; approving?: boolean; onApprove?: (taskId: string) => void; onOpenFile: OpenFile }) {
+  return <section className="agent-execution-group">
     <header className="agent-execution-overview">
       <span className="message-avatar agent-avatar">{group.displayName.slice(0, 1)}</span>
       <div className="agent-execution-overview-copy">
@@ -143,6 +162,7 @@ function ExecutionGroup({ group, agents, focused, sectionRef, onOpenFile }: { gr
         : <ToolRun key={`run-${block.executions[0]?.events[0]?.event_id || index}`} executions={block.executions} agents={agents} onOpenFile={onOpenFile} />)}</div>
     </details>
     <FinalResult group={group} onOpenFile={onOpenFile} />
+    {approval && <ApprovalCard approval={approval} approverName={approverName} approving={approving} onApprove={onApprove} />}
   </section>;
 }
 
@@ -152,43 +172,53 @@ type ConversationProps = {
   project: string;
   agents: Agent[];
   userDisplayName: string;
-  selectedAgent: string;
   taskEvents: EventRecord[];
   taskEventsLoading: boolean;
   groups: AgentExecutionGroup[];
   taskStartedAt?: string;
   taskDuration: number | null;
-  sectionRefs: React.MutableRefObject<Record<string, HTMLElement | null>>;
+  scrollToBottomRequest?: number;
   onOpenFile: OpenFile;
   approving?: boolean;
   onApprove?: (taskId: string) => void;
 };
 
-export function ConversationView({ selected, selectedTask, project, agents, userDisplayName, selectedAgent, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, sectionRefs, onOpenFile, approving = false, onApprove }: ConversationProps) {
+export function ConversationView({ selected, selectedTask, project, agents, userDisplayName, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, scrollToBottomRequest = 0, onOpenFile, approving = false, onApprove }: ConversationProps) {
   const userName = userDisplayName.trim() || "我";
   const userInitial = Array.from(userName)[0] || "我";
   const approval = selectedTask && onApprove ? pendingApproval(taskEvents) : null;
   const approverName = approval ? agents.find((agent) => agent.key === approval.agent)?.displayName || approval.agent : "";
-  return <div className="conversation-scroll" key={selected || "empty"}>
+  const userEvents = taskEvents.filter((event) => ["task_created", "task_reused"].includes(event.type || ""));
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selected, scrollToBottomRequest, userEvents.length]);
+  const approvalGroupKey = approval
+    ? groups.find((group) => group.agentKey === approval.agent && group.events.some((event) => event.type === "approval_required" && (!approval.taskId || event.task_id === approval.taskId)))?.key || null
+    : null;
+  return <div className="conversation-scroll" key={selected || "empty"} ref={scrollRef}>
     {!selectedTask ? (
       <div className="welcome-state">
         <span className="welcome-mark">A</span>
         <h2>接下来要完成什么？</h2>
         <p>描述目标和约束，项目经理会规划任务并分配给合适的 Agent。</p>
-        <div className="welcome-chips"><span>按项目隔离上下文</span><span>并行执行独立任务</span><span>随时观察与控制</span></div>
+        <div className="welcome-chips"><span>按项目隔离上下文</span><span>并行执行独立任务</span><span>随时暂停与继续</span></div>
       </div>
     ) : (
       <div className="conversation-content">
-        {approval && <div className="approval-banner" role="status">
-          <div><strong>{approverName} 的方案等待你确认</strong><span>{approval.next || approval.summary.slice(0, 160) || "确认后开始执行"}</span></div>
-          <button type="button" disabled={approving} onClick={() => onApprove?.(approval.taskId)}>{approving ? "确认中…" : "确认执行"}</button>
-        </div>}
         <div className="conversation-task-overview"><strong>{selectedTask.title || "当前任务"}</strong><span>{selectedTask.project_name || project} · {taskStatus(selectedTask)}{taskStartedAt ? ` · 开始 ${formatTime(taskStartedAt)} · 总耗时 ${formatDuration(taskDuration)}` : ""}</span></div>
         {taskEvents.length === 0 && (taskEventsLoading
           ? <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>
           : <div className="conversation-empty">暂无任务记录</div>)}
-        {taskEvents.filter((event) => ["task_created", "task_reused"].includes(event.type || "")).map((event, index) => <article className="message user-message" key={event.event_id || `request-${index}`}><div className="message-avatar user-avatar" title={userName} aria-label={userName}>{userInitial}</div><div className="message-body"><div className="message-author"><time>{formatTime(event.timestamp)}</time></div><p>{event.type === "task_reused" ? event.text || "继续当前任务" : selectedTask.description || event.text || selectedTask.title}</p></div></article>)}
-        {groups.map((group) => <ExecutionGroup key={group.key} group={group} agents={agents} focused={selectedAgent === group.key} sectionRef={(element) => { sectionRefs.current[group.key] = element; }} onOpenFile={onOpenFile} />)}
+        {userEvents.map((event, turn) => <React.Fragment key={event.event_id || `request-${turn}`}>
+          <UserMessage event={event} task={selectedTask} userName={userName} userInitial={userInitial} />
+          {groups.filter((group) => group.turn === turn).map((group) => <ExecutionGroup key={group.key} group={group} agents={agents} approval={group.key === approvalGroupKey ? approval : null} approverName={approverName} approving={approving} onApprove={onApprove} onOpenFile={onOpenFile} />)}
+        </React.Fragment>)}
+        {groups.filter((group) => group.turn >= userEvents.length).map((group) => <ExecutionGroup key={group.key} group={group} agents={agents} approval={group.key === approvalGroupKey ? approval : null} approverName={approverName} approving={approving} onApprove={onApprove} onOpenFile={onOpenFile} />)}
+        {approval && !approvalGroupKey && <ApprovalCard approval={approval} approverName={approverName} approving={approving} onApprove={onApprove} />}
         {["running", "in_progress"].includes(snapshotStatus(selectedTask)) && <div className="running-indicator"><span className="pulse-dot" />Agent 正在执行</div>}
       </div>
     )}
@@ -207,20 +237,37 @@ type ComposerProps = {
   onLoadProvider: (provider: string) => Promise<RuntimeConfig>;
   onRuntimeChange: (input: { provider: string; model: string; thinking: string }) => void;
   onThinkingChange: (thinking: string) => void;
+  executionState: "idle" | "running" | "paused";
+  controlBusy: boolean;
+  onControl: (command: "pause" | "resume") => void;
   modes: TaskModes;
   modeAgents: Agent[];
   lockTarget?: string | null;
   onModesChange: (modes: TaskModes) => void;
 };
 
-export function Composer({ value, onChange, onSubmit, hasTask, canSubmit, runtimeConnected, runtimeConfig, runtimeBusy, onLoadProvider, onRuntimeChange, onThinkingChange, modes, modeAgents, lockTarget = null, onModesChange }: ComposerProps) {
+export function Composer({ value, onChange, onSubmit, hasTask, canSubmit, runtimeConnected, runtimeConfig, runtimeBusy, onLoadProvider, onRuntimeChange, onThinkingChange, executionState, controlBusy, onControl, modes, modeAgents, lockTarget = null, onModesChange }: ComposerProps) {
+  const controlsTask = executionState !== "idle";
+  const actionLabel = executionState === "running" ? "暂停当前任务" : executionState === "paused" ? "继续当前任务" : hasTask ? "发送后续消息" : "提交任务";
+  const tooltip = executionState === "running" ? "点击暂停当前任务。" : executionState === "paused" ? "点击继续当前任务。" : hasTask ? "发送到当前任务；保留同一任务和对话记忆。" : "创建一个新任务并开始执行。";
   return <div className="composer-wrap">
     <form className="composer" onSubmit={onSubmit}>
       <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={hasTask ? "继续当前任务…" : "描述你想完成的任务…"} rows={3} aria-label="任务描述" />
       <div className="composer-send-row">
         <ModeBar value={modes} agents={modeAgents} lockTarget={lockTarget} disabled={!runtimeConnected} onChange={onModesChange} />
         <RuntimeModelPicker config={runtimeConfig} connected={runtimeConnected} busy={runtimeBusy} onLoadProvider={onLoadProvider} onSelect={onRuntimeChange} onThinking={onThinkingChange} />
-        <button className="send-button" type="submit" disabled={!canSubmit} aria-label={hasTask ? "发送后续消息" : "提交任务"} data-tooltip={hasTask ? "发送到当前任务；保留同一任务和对话记忆。" : "创建一个新任务并开始执行。"}>↑</button>
+        <button
+          className={`send-button ${executionState === "running" ? "send-button-running" : executionState === "paused" ? "send-button-paused" : ""}`}
+          type={controlsTask ? "button" : "submit"}
+          disabled={controlsTask ? !runtimeConnected || controlBusy : !canSubmit}
+          aria-label={actionLabel}
+          data-tooltip={tooltip}
+          onClick={controlsTask ? () => onControl(executionState === "running" ? "pause" : "resume") : undefined}
+        >
+          {executionState === "running"
+            ? <><span className="send-progress-ring" aria-hidden="true" /><span className="send-pause-icon" aria-hidden="true"><i /><i /></span></>
+            : executionState === "paused" ? <span className="send-play-icon" aria-hidden="true">▶</span> : "↑"}
+        </button>
       </div>
     </form>
   </div>;

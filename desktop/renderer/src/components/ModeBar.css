@@ -18,3 +18,4 @@
 .approval-banner span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .approval-banner button { min-height: 30px; padding: 0 14px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-size: 13px; cursor: pointer; }
 .approval-banner button:disabled { opacity: 0.6; cursor: default; }
+.agent-execution-group > .approval-banner { margin: 12px 0 0; }

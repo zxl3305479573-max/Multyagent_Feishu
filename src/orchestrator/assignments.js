@@ -161,3 +161,11 @@ export function sliceInfoFor(plan, assignment) {
     others: peers.filter((item) => item.id !== assignment.id).map((item) => `${item.id}：${String(item.task || "").slice(0, 80)}`),
   };
 }
+
+// 同一角色拆成多个子机器人时，用稳定的中文序号区分实例；单实例保持原角色名。
+export function agentInstanceLabel(displayName, slice) {
+  const index = Number(slice?.index);
+  const total = Number(slice?.total);
+  if (!Number.isInteger(index) || !Number.isInteger(total) || index < 1 || total < 2) return displayName;
+  return `${index}号${displayName}`;
+}

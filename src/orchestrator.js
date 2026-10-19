@@ -7,7 +7,7 @@ import { artifactsDirFor, describeDeliveryArtifacts } from "./artifacts.js";
 import { abortActiveSessions } from "./session-control.js";
 import { readyPlanAssignments } from "./plan-scheduler.js";
 import { createPendingStores } from "./orchestrator/pending-store.js";
-import { ensureAssignmentIds, permissionsOf, scheduleByRole, sequenceAssignments, sliceInfoFor, withAssignments, withoutAssignments } from "./orchestrator/assignments.js";
+import { agentInstanceLabel, ensureAssignmentIds, permissionsOf, scheduleByRole, sequenceAssignments, sliceInfoFor, withAssignments, withoutAssignments } from "./orchestrator/assignments.js";
 import { isTerminalNext, matchRoutes, MAX_DISPATCH_ROUNDS, routesConfig } from "./orchestrator/routes.js";
 import { ACCEPTANCE_MISSING_NOTE, acceptanceFailureNote, detectVerbalDispatch, dispatchCorrectionNote, failedChecks, inferDispatchTargets } from "./orchestrator/guards.js";
 
@@ -747,6 +747,8 @@ export function createOrchestrator({
       return;
     }
     const { agent, client } = role;
+    // 多个同角色切片拥有独立身份，派发卡片、系统提示和交付署名使用同一编号。
+    const instanceAgent = { ...agent, displayName: agentInstanceLabel(agent.displayName, slice) };
     // 切片子任务形如 <父任务>:frontend_developer.fe-login；分隔符必须落在 RPC 任务 ID 允许的字符集内。
     const subTaskId = slice ? `${parentTaskId}:${targetKey}.${slice.id}` : `${parentTaskId}:${targetKey}`;
     // 项目名必须与写入白名单同源：上游交付包里的 projectName 是最新事实，
@@ -828,6 +830,7 @@ export function createOrchestrator({
       parent_task_id: rootTaskId,
       project_name: projectName,
       agent: targetKey,
+      agent_name: instanceAgent.displayName,
       assignment_id: assignment.id,
       status,
       duration_ms: Date.now() - startedAt,
@@ -837,11 +840,11 @@ export function createOrchestrator({
       parallel_peers: slice ? slice.total : 1,
     }) : undefined);
     try {
-      log.info(`[dispatch] ${fromAgent} -> ${agent.displayName} (subtask ${String(subTaskId).slice(0, 8)})`);
-      await onEvent({ type: "dispatch_started", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, assigned_task: assignedTask || null, assignment_id: assignment?.id || null });
-      if (!isDesktopContext(context)) await sendCard(client, context.chatId, buildTaskReceivedCard(agent, subTaskId, assignedTask || parentDelivery.summary));
+      log.info(`[dispatch] ${fromAgent} -> ${instanceAgent.displayName} (subtask ${String(subTaskId).slice(0, 8)})`);
+      await onEvent({ type: "dispatch_started", from: fromAgent, target: targetKey, agent_name: instanceAgent.displayName, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, assigned_task: assignedTask || null, assignment_id: assignment?.id || null });
+      if (!isDesktopContext(context)) await sendCard(client, context.chatId, buildTaskReceivedCard(instanceAgent, subTaskId, assignedTask || parentDelivery.summary));
       const projectSummary = await loadProjectSummaryFor(targetKey, projectName, { root: process.cwd() });
-      const result = await runAgent(agent, prompt, {
+      const result = await runAgent(instanceAgent, prompt, {
         taskId: subTaskId,
         parentTaskId,
         agentKey: agent.key,
@@ -856,16 +859,16 @@ export function createOrchestrator({
         onEvent,
       });
       if (result.cancelled || await isTerminated(rootTaskId)) {
-        await onEvent({ type: "dispatch_cancelled", from: fromAgent, target: targetKey, task_id: subTaskId, parent_task_id: rootTaskId });
+        await onEvent({ type: "dispatch_cancelled", from: fromAgent, target: targetKey, agent_name: instanceAgent.displayName, task_id: subTaskId, parent_task_id: rootTaskId });
         await recordSlice("cancelled");
         return;
       }
       await recordSlice("completed");
       if (!isDesktopContext(context)) await sendResultCard(client, context.chatId, result, { log, taskId: subTaskId });
       log.info(JSON.stringify({ type: "dispatch", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, status: "completed" }));
-      await onEvent({ type: "dispatch_completed", agent: targetKey, from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, has_delivery: Boolean(result.delivery), artifact_count: result.delivery?.artifactPaths?.length || 0 });
+      await onEvent({ type: "dispatch_completed", agent: targetKey, agent_name: instanceAgent.displayName, from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, has_delivery: Boolean(result.delivery), artifact_count: result.delivery?.artifactPaths?.length || 0 });
       await onTaskCompleted(agent.key, subTaskId, {
-        delivery: result.delivery || { agentKey: agent.key, agentName: agent.displayName, summary: result.text || "已完成交付", artifactPaths: [], final: false },
+        delivery: result.delivery || { agentKey: agent.key, agentName: instanceAgent.displayName, summary: result.text || "已完成交付", artifactPaths: [], final: false },
         resultText: result.text,
         context,
         parentTaskId,
@@ -874,7 +877,7 @@ export function createOrchestrator({
       });
     } catch (error) {
       if (await isTerminated(rootTaskId)) {
-        await onEvent({ type: "dispatch_cancelled", agent: targetKey, task_id: subTaskId, parent_task_id: rootTaskId });
+        await onEvent({ type: "dispatch_cancelled", agent: targetKey, agent_name: instanceAgent.displayName, task_id: subTaskId, parent_task_id: rootTaskId });
         return;
       }
       log.error(JSON.stringify({ type: "dispatch", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, status: "failed", error: error.message }));
@@ -890,7 +893,7 @@ export function createOrchestrator({
       const recoverable = targetKey !== "project_manager" && roles.has("project_manager")
         && (failureRecoveries.get(rootTaskId) || 0) < maxFailureRecoveries
         && await projectManagerOwnsRoot(rootTaskId);
-      await onEvent({ type: "dispatch_failed", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, error: error.message, recoverable });
+      await onEvent({ type: "dispatch_failed", from: fromAgent, target: targetKey, agent_name: instanceAgent.displayName, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, error: error.message, recoverable });
       if (!isDesktopContext(context)) {
         try {
           await sendText(client, context.chatId, `Task failed: ${error.message}`);

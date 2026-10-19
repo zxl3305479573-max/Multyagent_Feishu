@@ -15,7 +15,11 @@ export type EventRecord = {
   event_id?: string;
   type?: string;
   task_id?: string;
+  sub_task_id?: string;
+  parent_task_id?: string;
+  assignment_id?: string;
   agent?: string;
+  agent_name?: string;
   target?: string;
   from?: string;
   project_name?: string;
@@ -67,7 +71,7 @@ export type DesktopSocket = {
   subscribe: (listener: (message: DesktopMessage) => void) => () => void;
   close: () => void;
 };
-export type WorkspaceView = "conversation" | "agent" | "project" | "settings" | "tickets" | "capabilities";
+export type WorkspaceView = "conversation" | "project" | "settings" | "tickets" | "capabilities";
 export type TicketSource = {
   id: string;
   repo: string;
@@ -101,6 +105,9 @@ export type AgentExecutionItem =
   | { kind: "tool"; execution: ToolExecution };
 export type AgentExecutionGroup = {
   key: string;
+  agentKey: string;
+  executionId: string;
+  turn: number;
   displayName: string;
   events: EventRecord[];
   items: AgentExecutionItem[];
@@ -115,7 +122,6 @@ export type AgentExecutionGroup = {
   testFailed: boolean;
   finalResult?: EventRecord;
 };
-export type AgentCard = { agent: Agent; status: string; latest?: EventRecord; taskCount: number; durationMs: number | null };
 export type RuntimeModelChoice = { id: string; name: string; reasoning: boolean; contextWindow?: number | null };
 export type RuntimeProviderChoice = { id: string; name: string; modelCount: number };
 export type RuntimeThinkingChoice = { value: string; label: string };
