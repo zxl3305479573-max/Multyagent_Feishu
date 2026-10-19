@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = readFileSync(new URL("../desktop/renderer/src/execution-view.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { groupToolExecutions, toolExecutionStatus, collectArtifacts, executionOwner, agentStatus, executionTiming } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { groupToolExecutions, toolExecutionStatus, collectArtifacts, executionOwner, agentStatus, executionTiming, latestPlanProgress } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 test("overlapping identical tools pair by call ID across intervening lifecycle events", () => {
   const events = [
@@ -45,4 +45,21 @@ test("duration sums agent rounds without counting idle coordination time", () =>
   ], 100000);
   assert.equal(result.durationMs, 5000);
   assert.equal(executionTiming([{ type: "agent_started", timestamp: at(1) }], 100000, at(4)).durationMs, 3000);
+});
+
+test("切片进度取最新快照；计划放弃或只有一项时不显示，快照不进对话时间线", () => {
+  const slices = (statuses) => statuses.map((status, index) => ({ id: `s${index}`, agent: "frontend_developer", title: `切片 ${index}`, status }));
+  const events = [
+    { type: "plan_progress", task_id: "T", slices: slices(["running", "pending", "pending"]) },
+    { type: "dispatch_started", task_id: "T:frontend_developer.s0", target: "frontend_developer" },
+    { type: "plan_progress", task_id: "T", slices: slices(["completed", "running", "failed"]) },
+  ];
+  assert.deepEqual(
+    (({ total, completed, running, failed }) => ({ total, completed, running, failed }))(latestPlanProgress(events)),
+    { total: 3, completed: 1, running: 1, failed: 1 },
+  );
+  assert.equal(latestPlanProgress([...events, { type: "plan_progress", task_id: "T", cleared: true, slices: [] }]), null);
+  assert.equal(latestPlanProgress([{ type: "plan_progress", task_id: "T", slices: slices(["running"]) }]), null);
+  assert.equal(latestPlanProgress([]), null);
+  assert.deepEqual(groupToolExecutions(events).map((item) => item.event.type), ["dispatch_started"]);
 });

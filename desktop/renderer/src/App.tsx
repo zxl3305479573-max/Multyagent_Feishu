@@ -493,7 +493,7 @@ export function App() {
             {workspaceView !== "conversation" && <button className="workspace-back-button" onClick={() => { setWorkspaceView("conversation"); setSelectedAgent(""); }} aria-label="返回对话" title="返回对话">‹ <span>返回对话</span></button>}
             <div className="conversation-heading-copy"><h1>{headerTitle}</h1><span className="header-project">{headerSubtitle}</span></div>
           </div>
-          {workspaceView === "conversation" && <AgentStatusStrip cards={agentCards} selectedAgent={selectedAgent} onSelect={scrollToAgent} />}
+          {workspaceView === "conversation" && <AgentStatusStrip cards={agentCards} selectedAgent={selectedAgent} onSelect={scrollToAgent} events={taskEvents} />}
           {workspaceView === "conversation" && selectedTask && <span className={`task-state state-${snapshotStatus(selectedTask)}`}><i />{taskStatus(selectedTask)}</span>}
         </header>
 

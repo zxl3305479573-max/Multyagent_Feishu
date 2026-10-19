@@ -24,6 +24,9 @@ export function sanitizeLoggedEvent(event = {}) {
       // 验收检查与证据里可能出现命令和输出摘要，逐字段脱敏截断。
       safe[key] = value.slice(0, 30).map((item) => Object.fromEntries(Object.entries(item && typeof item === "object" ? item : {})
         .map(([field, text]) => [field, typeof text === "string" ? redactTraceText(text, 1000).slice(0, 1000) : text])));
+    } else if (key === "slices" && Array.isArray(value)) {
+      // 计划进度快照：切片标题来自任务描述，同样脱敏截断。
+      safe[key] = value.slice(0, 50).map((item) => ({ ...item, title: redactTraceText(String(item?.title || ""), 200).slice(0, 200) }));
     } else if (Array.isArray(value) && ["artifact_paths", "assignments", "choices", "blockers", "risks"].includes(key)) {
       safe[key] = value.map((item) => typeof item === "string" ? redactTraceText(item).slice(0, 1000) : item);
     } else {

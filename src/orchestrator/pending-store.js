@@ -80,7 +80,7 @@ export function createPendingStores({ approvalsFile = null, checkpointFile = nul
   const now = Date.now();
   const restoredPlans = readPending(planRunsFile, log)
     .filter(([, item]) => item?.plan?.stages?.length && now - (item.savedAt || 0) < planRunTtlMs)
-    .map(([key, item]) => [key, restorePlanRun(item)]);
+    .map(([key, item]) => /** @type {[string, ReturnType<typeof restorePlanRun>]} */ ([key, restorePlanRun(item)]));
   if (restoredPlans.length) log.info?.(`[orchestrator] restored ${restoredPlans.length} plan run(s) from ${planRunsFile}`);
   const planRuns = new Map(restoredPlans);
   return {

@@ -254,3 +254,77 @@ test("RPC 模式的策略闸门执行任务级写入白名单，交付工具拿�
   assert.match(outside.reason, /任务文件写入白名单/);
   assert.equal(deliverOptions.taskId, "T-rpc:frontend_developer.fe-login");
 });
+
+test("切片状态变化时广播 plan_progress 快照，计划被放弃时广播 cleared", async () => {
+  const events = [];
+  const orch = createOrchestrator({
+    log: quiet,
+    onEvent: async (event) => events.push(event),
+    runAgent: async (agent) => ({ text: "done", delivery: { summary: `${agent.key} done`, artifactPaths: [], artifactsDir: "d", final: true } }),
+  });
+  for (const key of ["project_manager", "frontend_developer"]) orch.registerRole({ key, displayName: key, appId: "x" }, client);
+  await orch.onTaskCompleted("project_manager", "T-progress", {
+    delivery: { summary: "拆分", artifactPaths: [], artifactsDir: "d", assignments: [
+      { id: "a", agentKey: "frontend_developer", task: "切片 A" },
+      { id: "b", agentKey: "frontend_developer", task: "切片 B" },
+    ] },
+    context: { chatId: "c1", channel: "desktop" },
+  });
+  await orch.whenIdle();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const snapshots = events.filter((event) => event.type === "plan_progress" && event.task_id === "T-progress");
+  assert.deepEqual(snapshots[0].slices.map((slice) => slice.status), ["running", "pending"]);
+  assert.deepEqual(snapshots.at(-1).slices.map((slice) => slice.status), ["completed", "completed"]);
+  assert.equal(snapshots.at(-1).completed, 2);
+  assert.equal(snapshots[0].slices[0].title, "切片 A");
+
+  await orch.onTaskCompleted("project_manager", "T-progress-2", {
+    delivery: { summary: "拆分", artifactPaths: [], artifactsDir: "d", assignments: [
+      { id: "a", agentKey: "frontend_developer", task: "A" },
+      { id: "b", agentKey: "frontend_developer", task: "B" },
+    ] },
+    context: { chatId: "c1", channel: "desktop", requireHumanApproval: true },
+  });
+  await orch.terminateTask("T-progress-2").catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(events.filter((event) => event.type === "plan_progress" && event.task_id === "T-progress-2").at(-1).cleared, true);
+});
+
+test("切片结束时记录 slice_finished；summarizeSliceStats 按角色、规模与门禁汇总", async () => {
+  const { summarizeSliceStats } = await import("../src/slice-stats.js");
+  const events = [];
+  let failed = false;
+  const orch = createOrchestrator({
+    log: quiet,
+    onEvent: async (event) => events.push(event),
+    runAgent: async (agent, prompt) => {
+      if (agent.key === "frontend_developer" && prompt.includes("分配任务：B") && !failed) { failed = true; throw new Error("boom"); }
+      return { text: "done", delivery: { summary: "done", artifactPaths: [], artifactsDir: "d", final: true } };
+    },
+  });
+  for (const key of ["project_manager", "frontend_developer"]) orch.registerRole({ key, displayName: key, appId: "x" }, client);
+  await orch.onTaskCompleted("project_manager", "T-stats", {
+    delivery: { summary: "拆分", artifactPaths: [], artifactsDir: "d", assignments: [
+      { id: "a", agentKey: "frontend_developer", task: "A", acceptanceCriteria: ["1", "2", "3", "4"], fileWriteAllowlist: ["x/a"] },
+      { id: "b", agentKey: "frontend_developer", task: "B" },
+    ] },
+    context: { chatId: "c1", channel: "desktop" },
+  });
+  await orch.whenIdle();
+  const finished = events.filter((event) => event.type === "slice_finished");
+  assert.deepEqual(finished.map((event) => [event.assignment_id, event.status, event.criteria_count, event.write_scope_count]), [["a", "completed", 4, 1], ["b", "failed", 0, 0]]);
+  assert.ok(finished.every((event) => Number.isFinite(event.duration_ms) && event.parent_task_id === "T-stats"));
+
+  const stats = summarizeSliceStats([
+    ...finished,
+    { type: "delivery_received", agent: "project_manager", slice_gate_rejected: true, granularity_warnings: 1 },
+    { type: "delivery_received", agent: "project_manager", slice_gate_rejected: false, granularity_warnings: 0 },
+    { type: "delivery_received", agent: "frontend_developer" },
+  ]);
+  assert.equal(stats.total.count, 2);
+  assert.equal(stats.by_role.frontend_developer.failure_rate, 0.5);
+  assert.equal(stats.by_criteria_count["4-5 条"].completed, 1);
+  assert.equal(stats.by_criteria_count["0-1 条"].failed, 1);
+  assert.equal(stats.parallel.parallel.count, 1);
+  assert.deepEqual(stats.slice_gate, { pm_deliveries: 2, rejected: 1, rejection_rate: 0.5, passed_with_warnings: 1 });
+});

@@ -50,8 +50,9 @@ test("计划进度落盘；重启后重试从被中断的切片续跑，而不�
     });
     register(before, ["project_manager", "frontend_developer"]);
     before.onTaskCompleted("project_manager", "RP1", { delivery: slicedPlan, context: { chatId: "desktop-local", channel: "desktop", projectName: "demo" } });
-    await tick();
-    const saved = JSON.parse(readFileSync(planRunsFile, "utf8")).pending.RP1;
+    const readSaved = () => { try { return JSON.parse(readFileSync(planRunsFile, "utf8")).pending.RP1; } catch { return null; } };
+    for (let waited = 0; !readSaved()?.started?.length && waited < 3000; waited += 20) await tick();
+    const saved = readSaved();
     assert.deepEqual(saved.started, ["a"]);
     assert.equal(saved.dispatchTaskId, "RP1");
     assert.equal(saved.context.channel, "desktop");

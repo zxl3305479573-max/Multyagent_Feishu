@@ -13,6 +13,7 @@ import { roleConfig } from "../role-config.cjs";
 import { getCapabilityRegistry } from "../capabilities/index.js";
 import { overlappingSlices, oversizedAssignments, sliceCorrectionNote, validateAcceptance } from "../orchestrator/guards.js";
 import { SLICEABLE_ROLES } from "../orchestrator/assignments.js";
+import { acquireProjectLock } from "../runtime/project-lock.js";
 import { resolveProjectFile } from "../project-file.cjs";
 
 const loadedRoleConfig = roleConfig();
@@ -179,6 +180,8 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         assignments: normalizeAssignments(rawAssignments, { selfAgentKey: agentKey, allowDispatch: agentKey === "project_manager" }),
         droppedAssignments: agentKey === "project_manager" ? droppedAssignments(rawAssignments, { selfAgentKey: agentKey }) : [],
         granularityWarnings,
+        // 本次运行是否被粒度门禁打回过（切片统计用）。
+        sliceGateRejected: sliceGateTriggered,
         acceptance,
         plan,
         diagram: params.diagram || null,
@@ -311,7 +314,7 @@ function resolveTaskFile(root) {
   return isAbsolute(configured) ? configured : join(root, configured);
 }
 
-export function createAgentCliTool({ taskId, projectName, getProjectName, chatId, agentKey, root = process.cwd(), execute = executeAgentCli }) {
+export function createAgentCliTool({ taskId, projectName, getProjectName, chatId, agentKey, root = process.cwd(), execute = executeAgentCli, acquireLock = acquireProjectLock }) {
   return defineTool({
     name: "agent_cli",
     label: "受控 CLI",
@@ -353,7 +356,12 @@ export function createAgentCliTool({ taskId, projectName, getProjectName, chatId
           return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
         }
       }
-      const result = await execute(action, input);
+      // 测试与并行切片的构建、安装共用项目级锁，避免同时跑互相干扰（见 runtime/project-lock.js）。
+      const lock = action === "test" && process.env.PI_PROJECT_LOCK !== "false"
+        ? await acquireLock({ root, project: effectiveProject, owner: agentKey || "" })
+        : null;
+      let result;
+      try { result = await execute(action, input); } finally { await lock?.release(); }
       return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
     },
   });

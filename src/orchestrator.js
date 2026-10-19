@@ -209,6 +209,7 @@ export function createOrchestrator({
       artifact_items: await describeDeliveryArtifacts(delivery, { projectName: context.projectName || delivery.projectName }),
       artifact_count: delivery.artifactPaths?.length || 0,
       blockers: delivery.blockers || [],
+      ...(agentKey === "project_manager" ? { slice_gate_rejected: delivery.sliceGateRejected === true, granularity_warnings: (delivery.granularityWarnings || []).length } : {}),
       risks: delivery.risks || [],
       next: String(delivery.next || delivery.next_action || "").slice(0, 1000),
       choices: (delivery.choices || []).map((item) => item.id),
@@ -268,7 +269,7 @@ export function createOrchestrator({
         dispatchTaskId: taskId,
         context: planRunContext(context),
       });
-      persistPlanRuns();
+      savePlanRun(rootTaskId);
       return;
     }
     const run = planRuns.get(rootTaskId);
@@ -282,7 +283,7 @@ export function createOrchestrator({
       run.started.delete(finished);
       run.interrupted.delete(finished);
       run.completed.add(finished);
-      persistPlanRuns();
+      savePlanRun(rootTaskId);
     }
   }
 
@@ -292,8 +293,34 @@ export function createOrchestrator({
     return Object.fromEntries(keep.filter((key) => context[key] !== undefined).map((key) => [key, context[key]]));
   }
 
-  function deletePlanRun(rootTaskId) {
-    if (planRuns.delete(rootTaskId)) persistPlanRuns();
+  // 计划被放弃（终止、重开、交回项目经理重新规划）时广播 cleared，桌面端据此收起切片进度；
+  // 正常完成时最后一片交付已广播过全部完成的快照，不再重复。
+  function deletePlanRun(rootTaskId, { announce = true } = {}) {
+    if (!planRuns.delete(rootTaskId)) return;
+    persistPlanRuns();
+    if (announce) emitPlanProgress({ type: "plan_progress", task_id: rootTaskId, cleared: true, total: 0, completed: 0, slices: [] });
+  }
+
+  // 计划状态变化：落盘，并广播切片进度快照（桌面端只取每个任务最新的一条）。
+  function savePlanRun(rootTaskId) {
+    persistPlanRuns();
+    const run = planRuns.get(rootTaskId);
+    if (!run) return;
+    const slices = planAssignments(run.plan).map((item) => ({
+      id: item.id,
+      agent: item.agentKey,
+      title: clipLine(item.task || "", 60),
+      status: run.completed.has(item.id) ? "completed"
+        : run.started.has(item.id) ? "running"
+          : run.failed.has(item.id) ? "failed"
+            : run.interrupted.has(item.id) ? "interrupted" : "pending",
+    }));
+    emitPlanProgress({ type: "plan_progress", task_id: rootTaskId, total: slices.length, completed: slices.filter((item) => item.status === "completed").length, slices });
+  }
+
+  // 进度只是展示用的快照，不能因写事件失败或变慢而阻塞派发。
+  function emitPlanProgress(event) {
+    Promise.resolve().then(() => onEvent(event)).catch((error) => log.warn?.(`[orchestrator] plan progress event failed: ${error.message}`));
   }
 
   // 计划中已占位、不能再被调度的切片：执行中、失败待项目经理处理、重启时被中断。
@@ -320,14 +347,14 @@ export function createOrchestrator({
     const ready = scheduleByRole(readyPlanAssignments(planRun.plan, [...planRun.completed], occupiedIds(planRun)), running);
     if (ready.length) {
       ready.forEach((assignment) => planRun.started.add(assignment.id));
-      persistPlanRuns();
+      savePlanRun(rootTaskId);
       const nextContext = withAssignments(context, ready);
       await Promise.all(ready.map((assignment) => dispatchAssignment(assignment, taskId, { context: nextContext, parentDelivery: delivery, fromAgent: "project_manager", plan: planRun.plan })));
       return true;
     }
     const remaining = planAssignments(planRun.plan).some((assignment) => !planRun.completed.has(assignment.id));
     if (remaining) return true;
-    deletePlanRun(rootTaskId);
+    deletePlanRun(rootTaskId, { announce: false });
     await onEvent({ type: "task_plan_completed", task_id: rootTaskId, plan_project: planRun.plan.project || null });
     if (roles.has("project_manager") && !pmConsolidations.has(rootTaskId)) {
       pmConsolidations.add(rootTaskId);
@@ -751,6 +778,21 @@ export function createOrchestrator({
     ].filter(Boolean).join("\n");
 
     const endDispatch = beginDispatch(rootTaskId);
+    // 切片统计（见 src/slice-stats.js）：耗时、结果与规模信号，用来校准粒度门禁的阈值。
+    const startedAt = Date.now();
+    const recordSlice = (status) => (assignment?.id ? onEvent({
+      type: "slice_finished",
+      task_id: subTaskId,
+      parent_task_id: rootTaskId,
+      agent: targetKey,
+      assignment_id: assignment.id,
+      status,
+      duration_ms: Date.now() - startedAt,
+      task_chars: String(assignment.task || "").length,
+      criteria_count: criteria.length,
+      write_scope_count: writeScope.length,
+      parallel_peers: slice ? slice.total : 1,
+    }) : undefined);
     try {
       log.info(`[dispatch] ${fromAgent} -> ${agent.displayName} (subtask ${String(subTaskId).slice(0, 8)})`);
       await onEvent({ type: "dispatch_started", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, assigned_task: assignedTask || null, assignment_id: assignment?.id || null });
@@ -771,8 +813,10 @@ export function createOrchestrator({
       });
       if (result.cancelled || await isTerminated(rootTaskId)) {
         await onEvent({ type: "dispatch_cancelled", from: fromAgent, target: targetKey, task_id: subTaskId, parent_task_id: rootTaskId });
+        await recordSlice("cancelled");
         return;
       }
+      await recordSlice("completed");
       if (!isDesktopContext(context)) await sendResultCard(client, context.chatId, result, { log, taskId: subTaskId });
       log.info(JSON.stringify({ type: "dispatch", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, status: "completed" }));
       await onEvent({ type: "dispatch_completed", agent: targetKey, from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, has_delivery: Boolean(result.delivery), artifact_count: result.delivery?.artifactPaths?.length || 0 });
@@ -795,8 +839,9 @@ export function createOrchestrator({
       if (failedRun?.started.has(assignment.id)) {
         failedRun.started.delete(assignment.id);
         failedRun.failed.add(assignment.id);
-        persistPlanRuns();
+        savePlanRun(rootTaskId);
       }
+      await recordSlice("failed");
       // 项目经理发起的任务链里，执行角色失败不直接判死根任务，而是交回项目经理重新决策（有次数上限）。
       const recoverable = targetKey !== "project_manager" && roles.has("project_manager")
         && (failureRecoveries.get(rootTaskId) || 0) < maxFailureRecoveries
@@ -871,7 +916,7 @@ export function createOrchestrator({
     }));
     run.plan = { ...run.plan, stages };
     run.failed.delete(sliceId);
-    persistPlanRuns();
+    savePlanRun(rootTaskId);
     return { ...delivery, assignments: replacements, plan: run.plan, planPatch: true };
   }
 
@@ -939,7 +984,7 @@ export function createOrchestrator({
   async function resumePlan(rootTaskId, run, { task, attempt, lastError }) {
     const resumedSlices = [...run.interrupted];
     run.interrupted.clear();
-    persistPlanRuns();
+    savePlanRun(rootTaskId);
     const context = { ...run.context, requireHumanApproval: false, approvalBypass: false, pmCoordination: false, resumedSlices };
     await onEvent({ type: "task_retried", task_id: rootTaskId, agent: "project_manager", project_name: task.project_name || null, chat_id: task.source_chat_id || null, attempt, error: lastError || undefined, channel: context.channel, resumed_slices: resumedSlices });
     trackContinuation(

@@ -3,6 +3,7 @@ export const eventLabels: Record<string, string> = {
   task_started: "开始规划任务",
   task_plan_created: "制定了执行计划",
   task_plan_completed: "任务计划已完成",
+  plan_progress: "切片进度更新",
   final_deferred: "已交回项目经理汇总",
   task_completed: "完成当前阶段",
   task_settle: "任务阶段已结束",

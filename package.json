@@ -8,6 +8,7 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
+    "slice-stats": "node scripts/slice-stats.mjs",
     "desktop:dev": "vite --config desktop/vite.config.ts",
     "desktop:build": "vite build --config desktop/vite.config.ts",
     "desktop": "electron desktop/electron/main.cjs",

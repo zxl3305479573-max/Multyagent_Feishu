@@ -26,6 +26,8 @@ export function groupToolExecutions<E extends ExecutionEvent>(events: E[]): Exec
   const lastCompleted = new Map<string, { tool: string; events: E[] }>();
   const relatedTypes = new Set(["tool_result", "test_started", "test_result", "file_change", "error"]);
   for (const event of events) {
+    // 切片进度快照由标题栏的“切片”状态展示，不进对话时间线。
+    if (event.type === "plan_progress") continue;
     const scope = `${event.run_id || ""}:${event.task_id || ""}:${event.tool || ""}`;
     const id = event.tool_call_id ? `${scope}:${event.tool_call_id}` : "";
     if (event.type === "tool_call") {
@@ -125,4 +127,15 @@ export function executionTiming(events: ExecutionEvent[], now: number, settledAt
     if (Number.isFinite(settled)) endedAt = settledAt;
   }
   return { startedAt, endedAt, durationMs: startedAt ? total : null };
+}
+
+export type PlanSlice = { id: string; agent: string; title: string; status: "pending" | "running" | "completed" | "failed" | "interrupted" };
+export type PlanProgress = { total: number; completed: number; running: number; failed: number; slices: PlanSlice[] };
+
+/** 编排层每次切片状态变化都会发一条 plan_progress 快照；取最新一条，计划被放弃（cleared）时不显示。 */
+export function latestPlanProgress(events: Array<ExecutionEvent & { slices?: PlanSlice[]; cleared?: boolean }>): PlanProgress | null {
+  const latest = [...events].reverse().find((event) => event.type === "plan_progress");
+  if (!latest || latest.cleared || !Array.isArray(latest.slices) || latest.slices.length < 2) return null;
+  const count = (status: PlanSlice["status"]) => latest.slices!.filter((slice) => slice.status === status).length;
+  return { total: latest.slices.length, completed: count("completed"), running: count("running"), failed: count("failed"), slices: latest.slices };
 }

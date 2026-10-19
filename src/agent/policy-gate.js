@@ -4,6 +4,7 @@ import { checkNetworkAllowed, checkShellCommand, checkWriteAllowed, isDeleteComm
 import { isAbsolute, relative, resolve } from "node:path";
 import { roleConfig } from "../role-config.cjs";
 import { getCapabilityRegistry } from "../capabilities/index.js";
+import { acquireProjectLock, isBuildCommand, PROJECT_LOCK_STALE_MS } from "../runtime/project-lock.js";
 
 // 分配给该角色的 Skill 目录始终可读：任务级读取白名单只约束项目文件，不能让 Agent 读不到自己的 Skill。
 function insideAssignedSkill(agentKey, cwd, requested) {
@@ -28,7 +29,7 @@ export const SENSITIVE_PATTERNS = [
 ];
 
 // 每个角色一个策略工厂：闭包捕获该角色的写路径白名单/黑名单。
-export function createPolicyFactory(agent, projectNameOrGetter, taskPermissionsGetter = null) {
+export function createPolicyFactory(agent, projectNameOrGetter, taskPermissionsGetter = null, { acquireLock = acquireProjectLock } = {}) {
   const cfg = policy.agents?.[agent.key] ?? {};
   const getProjectName = typeof projectNameOrGetter === "function"
     ? projectNameOrGetter
@@ -36,6 +37,14 @@ export function createPolicyFactory(agent, projectNameOrGetter, taskPermissionsG
   // denyPaths 同样可以包含 {project} 占位符（例如禁止前端角色写 workspace/{project}/backend）。
   const denyPathsFor = (project) => resolveWritePaths(cfg.denyPaths || [], project);
   return (pi) => {
+    // 项目级构建锁（PI_PROJECT_LOCK=false 关闭）：toolCallId -> 已持有的锁。
+    const buildLocks = process.env.PI_PROJECT_LOCK === "false" ? null : new Map();
+    const releaseBuildLock = (toolCallId) => {
+      const lock = buildLocks?.get(toolCallId);
+      if (!lock) return;
+      buildLocks.delete(toolCallId);
+      return lock.release();
+    };
     pi.on("tool_call", async (event, ctx) => {
       const taskPermissions = typeof taskPermissionsGetter === "function" ? (taskPermissionsGetter() || {}) : {};
       if (Array.isArray(taskPermissions.toolAllowlist) && taskPermissions.toolAllowlist.length && !taskPermissions.toolAllowlist.includes(event.toolName)) {
@@ -74,6 +83,15 @@ export function createPolicyFactory(agent, projectNameOrGetter, taskPermissionsG
           const taskShell = checkShellCommand(ctx.cwd, event.input?.command, { ...shellOptions, writePaths: taskPermissions.fileWriteAllowlist });
           if (!taskShell.allowed) return { block: true, reason: `当前任务文件写入白名单拒绝：${taskShell.reason}` };
         }
+        // 所有检查通过后才排队：安装/构建/测试命令按项目串行，工具结束时释放（见 releaseBuildLock）。
+        if (buildLocks && isBuildCommand(event.input?.command)) {
+          const lock = await acquireLock({ root: ctx?.cwd || process.cwd(), project: currentProject, owner: agent.key });
+          if (lock) {
+            buildLocks.set(event.toolCallId, lock);
+            // 兜底：钩子没有回调时，到期自动释放，不让锁一直挂着。
+            setTimeout(() => releaseBuildLock(event.toolCallId), PROJECT_LOCK_STALE_MS).unref?.();
+          }
+        }
       }
       if (event.toolName === "write" || event.toolName === "edit") {
         const currentProject = getProjectName();
@@ -102,5 +120,9 @@ export function createPolicyFactory(agent, projectNameOrGetter, taskPermissionsG
         if (!allowed) return { block: true, reason: "当前任务文件读取白名单拒绝该路径" };
       }
     });
+    if (buildLocks) {
+      pi.on("tool_result", async (event) => { await releaseBuildLock(event.toolCallId); });
+      pi.on("tool_execution_end", async (event) => { await releaseBuildLock(event.toolCallId); });
+    }
   };
 }

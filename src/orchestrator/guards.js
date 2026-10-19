@@ -112,6 +112,7 @@ export function oversizedAssignments(assignments = [], limits = SLICE_LIMITS) {
 export function overlappingSlices(assignments = []) {
   const items = (Array.isArray(assignments) ? assignments : []).filter((item) => item && writeScopeOf(item).length);
   const dependsOn = (a, b) => (Array.isArray(a.dependsOn) ? a.dependsOn : []).includes(b.id);
+  /** @type {Array<{ agentKey: string, ids: [string, string] }>} */
   const pairs = [];
   for (let i = 0; i < items.length; i += 1) {
     for (let j = i + 1; j < items.length; j += 1) {
