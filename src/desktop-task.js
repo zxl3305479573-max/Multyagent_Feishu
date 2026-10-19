@@ -3,6 +3,7 @@ import { buildValidatedHandoff } from "./domain/delivery.js";
 import { loadProjectSummaryFor } from "./gateway.js";
 import { isTerminated } from "./tasks.js";
 import { ASK_TOOL_ALLOWLIST, applyModeToDelivery, modeInstruction, normalizeModes } from "./desktop-modes.js";
+import { createQualityGates, qualityPolicyForTask, requestsQualitySkip, withQualitySkip } from "./quality-gates.js";
 
 const DESKTOP_CHAT_ID = "desktop-local";
 
@@ -71,6 +72,15 @@ export function createDesktopTaskSubmitter({
     const storedTask = followUp && typeof taskStore.getRoot === "function" ? await taskStore.getRoot(task.task_id) : task;
     const sessionFile = storedTask?.session_file || null;
     const memory = formatMemory(storedTask?.conversation_memory);
+    const storedPolicy = storedTask?.quality_policy || qualityPolicyForTask({
+      team: !singleRole,
+      singleRole,
+      mode: modes.mode,
+      description: input.description,
+    });
+    const qualityPolicy = followUp && requestsQualitySkip(input.description)
+      ? withQualitySkip(storedPolicy)
+      : storedPolicy;
     const onEvent = (event) => recordEvent({
       ...event,
       task_id: event.task_id || task.task_id,
@@ -79,6 +89,18 @@ export function createDesktopTaskSubmitter({
       channel: "desktop",
     });
     try {
+      if (followUp && qualityPolicy.skipTestingAndAudit && !storedPolicy.skipTestingAndAudit) {
+        const skippedGates = createQualityGates(qualityPolicy);
+        await taskStore.update?.(task.task_id, {
+          quality_policy: qualityPolicy,
+          quality_gates: skippedGates,
+          status_snapshot: {
+            ...(storedTask?.status_snapshot || {}),
+            quality_gates: skippedGates,
+          },
+        });
+        await onEvent({ type: "quality_gates_skipped", task_id: task.task_id, agent: "project_manager", reason: "explicit_user_request" });
+      }
       if (followUp) {
         await onEvent({
           type: "task_reused",
@@ -154,8 +176,13 @@ export function createDesktopTaskSubmitter({
           messageId,
           correlationId: messageId,
           channel: "desktop",
-          // 规划模式：项目经理的派发、单个机器人的执行，都要先在桌面端确认。
-          requireHumanApproval: modes.mode === "plan",
+          // 团队任务统一在项目经理产出计划后等待确认；单个机器人仅在规划模式下等待确认。
+          requireHumanApproval: modes.mode !== "ask" && (!singleRole || modes.mode === "plan"),
+          qualityPolicy,
+          requireIndependentAcceptance: qualityPolicy.independentAcceptance === true,
+          requireAcceptanceMatrix: qualityPolicy.acceptanceMatrix === true,
+          requireE2E: qualityPolicy.e2e === true,
+          requireAudit: qualityPolicy.audit === true,
           projectName,
           ...(modes.runtime ? { runtime: modes.runtime } : {}),
           ...(singleRole ? { singleRole: true } : {}),
@@ -200,6 +227,12 @@ export function createDesktopTaskSubmitter({
       title: normalized.title,
       description: normalized.description,
       conversation_memory: withMemory([], "user", normalized.description),
+      quality_policy: qualityPolicyForTask({
+        team: owner === "project_manager",
+        singleRole: owner !== "project_manager",
+        mode: modes.mode,
+        description: normalized.description,
+      }),
     });
     await recordEvent({
       type: "task_created",

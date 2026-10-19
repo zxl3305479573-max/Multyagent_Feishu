@@ -96,6 +96,19 @@ test("a task can go straight to one bot on the chosen runtime, and the choice is
   } finally { await h.cleanup(); }
 });
 
+test("auto mode still waits for confirmation before a team plan is dispatched", async () => {
+  const h = await submitterHarness({ assignments: [{ agentKey: "backend_developer", task: "实现注册接口" }], final: false });
+  try {
+    await h.submit({ projectName: "demo", description: "加个注册页", mode: "auto", target: "team" });
+    await h.submit.whenIdle();
+    const { agentKey, payload } = h.completed[0];
+    assert.equal(agentKey, "project_manager");
+    assert.equal(payload.context.requireHumanApproval, true);
+    assert.equal(payload.approvalRequired, false, "the gate is triggered by the PM assignments");
+    assert.deepEqual(payload.delivery.assignments.map((item) => item.agentKey), ["backend_developer"]);
+  } finally { await h.cleanup(); }
+});
+
 test("plan mode asks for confirmation before the team or a single bot executes", async () => {
   const h = await submitterHarness({ final: false });
   try {

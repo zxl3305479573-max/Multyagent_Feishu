@@ -7,9 +7,12 @@ import { artifactsDirFor, describeDeliveryArtifacts } from "./artifacts.js";
 import { abortActiveSessions } from "./session-control.js";
 import { readyPlanAssignments } from "./plan-scheduler.js";
 import { createPendingStores } from "./orchestrator/pending-store.js";
-import { ensureAssignmentIds, permissionsOf, scheduleByRole, sequenceAssignments, sliceInfoFor, withAssignments, withoutAssignments } from "./orchestrator/assignments.js";
+import { agentInstanceLabel, ensureAssignmentIds, permissionsOf, scheduleByRole, sequenceAssignments, sliceInfoFor, withAssignments, withoutAssignments } from "./orchestrator/assignments.js";
 import { isTerminalNext, matchRoutes, MAX_DISPATCH_ROUNDS, routesConfig } from "./orchestrator/routes.js";
 import { ACCEPTANCE_MISSING_NOTE, acceptanceFailureNote, detectVerbalDispatch, dispatchCorrectionNote, failedChecks, inferDispatchTargets } from "./orchestrator/guards.js";
+import { aggregateChildDeliveries, finalizeProjectManagerDelivery, formatChildDeliverySummary } from "./orchestrator/final-summary.js";
+import { evaluateAcceptanceMatrix, missingAcceptanceEvidence, validateAcceptanceMatrix, validateIntegrationSlice } from "./quality-gates.js";
+import { buildQualityReport, formatQualityReportSummary, generateQualityReport } from "./quality-report.js";
 
 export { matchRoutes };
 
@@ -49,8 +52,12 @@ export function createOrchestrator({
   const failureRecoveries = new Map();
   const maxFailureRecoveries = Number(process.env.PI_MAX_FAILURE_RECOVERIES) || 2;
   const pendingSettlements = new Map();
+  // 项目经理最终交付先暂存，等根任务真正结算后单独输出一次最终总结。
+  const finalSummaries = new Map();
   // 协作守卫已纠正过的次数（派发守卫按根任务、验收纠正按子任务），每类只纠正一次，避免纠正本身陷入循环。
   const corrections = new Map();
+  const independentAcceptanceDispatches = new Set();
+  const auditDispatches = new Set();
 
   async function emitStageSettlement(event) {
     const rootTaskId = rootOf(event.task_id);
@@ -78,6 +85,8 @@ export function createOrchestrator({
     if (!rootTaskId || settledRoots.has(rootTaskId)) return;
     if (activeDispatches.has(rootTaskId)) return;
     if (planRuns.has(rootTaskId)) return;
+    const rootTask = await getRootTask(rootTaskId);
+    if (["failed", "cancelled", "completed"].includes(rootTask?.status_snapshot?.status || "")) return;
     if (await isPaused(rootTaskId) || await isTerminated(rootTaskId)) return;
     if ([...checkpoints.keys()].some((taskId) => rootOf(taskId) === rootTaskId)) return;
     if ([...approvals.values()].some((item) => rootOf(item.taskId) === rootTaskId)) return;
@@ -87,6 +96,45 @@ export function createOrchestrator({
     const settlement = pendingSettlements.get(rootTaskId) || { type: "task_settle", task_id: rootTaskId, reason: "all_dispatches_done" };
     pendingSettlements.delete(rootTaskId);
     await onEvent(settlement);
+    try {
+      const task = await getRootTask(rootTaskId);
+      if (task) {
+        const generated = await generateQualityReport({ root: process.cwd(), task });
+        await onEvent({
+          type: "quality_report_generated",
+          task_id: rootTaskId,
+          project_name: task.project_name || null,
+          product_ready: generated.report.productReady,
+          report_file: generated.markdownFile,
+          report_json: generated.jsonFile,
+          acceptance_verdict: generated.report.acceptance.verdict,
+          acceptance_checks: generated.report.acceptance.checks,
+          failed_checks: generated.report.acceptance.failedChecks,
+        });
+      }
+    } catch (error) {
+      log.warn?.(`[quality-report] generation failed: ${error.message}`);
+    }
+    const finalSummary = finalSummaries.get(rootTaskId);
+    if (finalSummary) {
+      finalSummaries.delete(rootTaskId);
+      await onEvent({
+        type: "final_summary",
+        task_id: rootTaskId,
+        agent: "project_manager",
+        project_name: finalSummary.projectName || null,
+        summary: finalSummary.summary,
+        artifact_paths: finalSummary.artifactPaths || [],
+        artifact_items: finalSummary.artifactItems || [],
+        artifact_count: finalSummary.artifactPaths?.length || 0,
+        aggregate_delivery_count: finalSummary.aggregate?.deliveryCount || 0,
+        aggregate_agent_count: finalSummary.aggregate?.agentCount || 0,
+        aggregate_acceptance_count: finalSummary.aggregate?.acceptanceCount || 0,
+        aggregate_acceptance_passed: finalSummary.aggregate?.acceptancePassed || 0,
+        blockers: finalSummary.blockers || [],
+        risks: finalSummary.risks || [],
+      });
+    }
   }
 
   function rootOf(taskId) {
@@ -101,6 +149,9 @@ export function createOrchestrator({
     for (const [key, item] of approvals) if (rootOf(item.taskId) === rootTaskId) approvals.delete(key);
     for (const [key] of checkpoints) if (rootOf(key) === rootTaskId) checkpoints.delete(key);
     pmConsolidations.delete(rootTaskId);
+    finalSummaries.delete(rootTaskId);
+    independentAcceptanceDispatches.delete(rootTaskId);
+    auditDispatches.delete(rootTaskId);
     deletePlanRun(rootTaskId);
     persistApprovals();
     persistCheckpoints();
@@ -142,6 +193,9 @@ export function createOrchestrator({
     deliveryHistory.delete(rootTaskId);
     deletePlanRun(rootTaskId);
     pmConsolidations.delete(rootTaskId);
+    finalSummaries.delete(rootTaskId);
+    independentAcceptanceDispatches.delete(rootTaskId);
+    auditDispatches.delete(rootTaskId);
     settledRoots.delete(rootTaskId);
     pendingSettlements.delete(rootTaskId);
     for (const key of [...corrections.keys()]) if (rootOf(key.split("#")[0]) === rootTaskId) corrections.delete(key);
@@ -225,7 +279,7 @@ export function createOrchestrator({
   }
 
   // 交付落地：写事件日志（看板/Trace/桌面端都从这里取数据）并追加项目摘要。
-  async function recordDelivery({ agentKey, taskId, parentTaskId, delivery, context, resultText }) {
+  async function recordDelivery({ agentKey, taskId, parentTaskId, delivery, context, resultText, aggregate = null }) {
     await onEvent({
       type: "delivery_received",
       agent: agentKey,
@@ -238,6 +292,12 @@ export function createOrchestrator({
       artifact_paths: delivery.artifactPaths || [],
       artifact_items: await describeDeliveryArtifacts(delivery, { projectName: context.projectName || delivery.projectName }),
       artifact_count: delivery.artifactPaths?.length || 0,
+      ...(aggregate ? {
+        aggregate_delivery_count: aggregate.deliveryCount,
+        aggregate_agent_count: aggregate.agentCount,
+        aggregate_acceptance_count: aggregate.acceptanceCount,
+        aggregate_acceptance_passed: aggregate.acceptancePassed,
+      } : {}),
       blockers: delivery.blockers || [],
       ...(agentKey === "project_manager" ? { slice_gate_rejected: delivery.sliceGateRejected === true, granularity_warnings: (delivery.granularityWarnings || []).length } : {}),
       risks: delivery.risks || [],
@@ -319,7 +379,10 @@ export function createOrchestrator({
 
   // 只落盘续跑需要的上下文字段；派发清单、纠正提示等一次性信息不跨重启。
   function planRunContext(context = {}) {
-    const keep = ["chatId", "messageId", "correlationId", "channel", "projectName", "requireHumanApproval"];
+    const keep = [
+      "chatId", "messageId", "correlationId", "channel", "projectName", "requireHumanApproval",
+      "qualityPolicy", "requireIndependentAcceptance", "requireAcceptanceMatrix", "requireE2E", "requireAudit",
+    ];
     return Object.fromEntries(keep.filter((key) => context[key] !== undefined).map((key) => [key, context[key]]));
   }
 
@@ -483,6 +546,8 @@ export function createOrchestrator({
   function clearRootPlan(rootTaskId) {
     deletePlanRun(rootTaskId);
     pmConsolidations.delete(rootTaskId);
+    independentAcceptanceDispatches.delete(rootTaskId);
+    auditDispatches.delete(rootTaskId);
     for (const key of [...dispatchGroups.keys()]) if (rootOf(key.split("->")[0]) === rootTaskId) dispatchGroups.delete(key);
   }
 
@@ -492,8 +557,98 @@ export function createOrchestrator({
   // 返回 { handled: true } 表示本次交付已由守卫接管；返回 { delivery, context } 表示改写后继续正常流程。
   async function applyCollaborationGuards({ agentKey, taskId, parentTaskId, rootTaskId, delivery, resultText, context }) {
     if (agentKey === "project_manager") {
+      const planAssignments = Array.isArray(delivery.plan?.stages)
+        ? delivery.plan.stages.flatMap((stage) => (Array.isArray(stage?.assignments) ? stage.assignments : []))
+        : [];
+      const plannedAssignments = planAssignments.length
+        ? planAssignments
+        : (Array.isArray(delivery.assignments) ? delivery.assignments : []);
+      if (plannedAssignments.length > 1 && (context.requireAcceptanceMatrix || context.qualityPolicy?.acceptanceMatrix)) {
+        const integrationCheck = validateIntegrationSlice(plannedAssignments);
+        const integrationKey = `${rootTaskId}#integration-slice`;
+        if (!integrationCheck.valid) {
+          if (!corrections.has(integrationKey)) {
+            corrections.set(integrationKey, 1);
+            await onEvent({
+              type: "integration_slice_rejected",
+              task_id: taskId,
+              agent: agentKey,
+              project_name: context.projectName || null,
+              errors: integrationCheck.errors,
+            });
+            await dispatchTo("project_manager", taskId, {
+              context: {
+                ...withoutAssignments(context),
+                pmCoordination: true,
+                planCompleted: false,
+                approvalBypass: false,
+                correctionNote: [
+                  "【集成验证切片缺失】多切片计划必须包含一个独立的最终集成验证切片。",
+                  `问题：${integrationCheck.errors.join("；")}`,
+                  "请添加一个 agentKey=tester、integration=true 的切片，并在 dependsOn 中列出全部工作切片 id，然后重新交付计划。",
+                ].join("\n"),
+              },
+              parentDelivery: delivery,
+              fromAgent: "quality_gate",
+            });
+            return { handled: true };
+          }
+          await onEvent({
+            type: "task_failed",
+            task_id: rootTaskId,
+            agent: agentKey,
+            project_name: context.projectName || null,
+            error: `集成验证切片仍不合法：${integrationCheck.errors.join("；")}`,
+          });
+          return { handled: true };
+        }
+        corrections.delete(integrationKey);
+      }
+      if (plannedAssignments.length && context.requireAcceptanceMatrix) {
+        const matrix = delivery.plan?.acceptanceMatrix || context.acceptanceMatrix || [];
+        const matrixCheck = validateAcceptanceMatrix(matrix, plannedAssignments);
+        const matrixKey = `${rootTaskId}#acceptance-matrix`;
+        if (!matrixCheck.valid) {
+          if (!corrections.has(matrixKey)) {
+            corrections.set(matrixKey, 1);
+            await onEvent({
+              type: "acceptance_matrix_rejected",
+              task_id: taskId,
+              agent: agentKey,
+              project_name: context.projectName || null,
+              errors: matrixCheck.errors,
+            });
+            await dispatchTo("project_manager", taskId, {
+              context: {
+                ...withoutAssignments(context),
+                pmCoordination: true,
+                planCompleted: false,
+                approvalBypass: false,
+                correctionNote: [
+                  "【验收矩阵缺失】开发开始前必须提交 plan.acceptanceMatrix。",
+                  `问题：${matrixCheck.errors.join("；")}`,
+                  "每项填写 id、criterion、verifier、method(automated/manual)、evidence、returnTo，然后重新交付计划。",
+                ].join("\n"),
+              },
+              parentDelivery: delivery,
+              fromAgent: "quality_gate",
+            });
+            return { handled: true };
+          }
+          await onEvent({
+            type: "task_failed",
+            task_id: rootTaskId,
+            agent: agentKey,
+            project_name: context.projectName || null,
+            error: `验收矩阵仍不合法：${matrixCheck.errors.join("；")}`,
+          });
+          return { handled: true };
+        }
+        corrections.delete(matrixKey);
+        if (delivery.plan) delivery = { ...delivery, plan: { ...delivery.plan, acceptanceMatrix: matrixCheck.matrix } };
+      }
       const dispatchKey = `${rootTaskId}#dispatch`;
-      if (delivery.assignments?.length) { corrections.delete(dispatchKey); return {}; }
+      if (delivery.assignments?.length) { corrections.delete(dispatchKey); return { delivery, context }; }
       const detection = detectVerbalDispatch({ delivery, resultText });
       if (!detection) return {};
       const available = [...roles.keys()];
@@ -522,6 +677,10 @@ export function createOrchestrator({
       return { delivery: { ...delivery, assignments }, context: { ...withAssignments(context, assignments), approvalBypass: true } };
     }
     if (agentKey !== "tester") return {};
+    const storedAcceptanceMatrix = (await getRootTask(rootTaskId))?.quality_gates?.acceptance_matrix || [];
+    const acceptanceMatrix = Array.isArray(context.acceptanceMatrix) && context.acceptanceMatrix.length
+      ? context.acceptanceMatrix
+      : storedAcceptanceMatrix;
     const acceptance = delivery.acceptance;
     const pmOwned = roles.has("project_manager") && await projectManagerOwnsRoot(rootTaskId);
     if (!acceptance) {
@@ -542,8 +701,136 @@ export function createOrchestrator({
       if (!pmOwned) return {};
       return handAcceptanceToProjectManager({ taskId, rootTaskId, delivery, context, note: "【验收缺失】测试两次都没有提交结构化验收结果，本轮实现视为未经验证。请决定重新派发测试（写明验收标准），或说明不需要验收的理由。" });
     }
+    const missingEvidence = acceptance.verdict === "pass"
+      ? missingAcceptanceEvidence(acceptance, context.qualityPolicy?.requiredEvidence || [])
+      : [];
+    const matrixCoverage = acceptance.verdict === "pass"
+      ? evaluateAcceptanceMatrix(acceptanceMatrix, acceptance)
+      : { uncovered: [], failedIds: [], valid: true };
+    const evidenceIssues = [
+      ...missingEvidence.map((kind) => `缺少带 exitCode=0 的 ${kind} 命令证据`),
+      ...matrixCoverage.uncovered.map((id) => `${id} 未覆盖`),
+      ...matrixCoverage.failedIds.map((id) => `${id} 未通过`),
+    ];
+    if (evidenceIssues.length && pmOwned && parentTaskId) {
+      const evidenceKey = `${taskId}#acceptance-evidence`;
+      if (!corrections.has(evidenceKey)) {
+        corrections.set(evidenceKey, 1);
+        await onEvent({
+          type: "acceptance_evidence_correction",
+          agent: agentKey,
+          task_id: taskId,
+          parent_task_id: parentTaskId,
+          project_name: context.projectName || null,
+          missing_evidence: missingEvidence,
+          evidence_issues: evidenceIssues,
+        });
+        await dispatchTo("tester", parentTaskId, {
+          context: {
+            ...context,
+            approvalBypass: false,
+            pmCoordination: false,
+            correctionNote: [
+              "【验收证据不足】独立验收不能只凭单测或 jsdom 结论。",
+              `待补问题：${evidenceIssues.join("；")}。`,
+              "每项 acceptance check 必须按 id 一一对应当前验收矩阵。",
+              "每条命令证据必须填写真实 command、status 和 exitCode；通过命令的退出码必须为 0。",
+              "请补跑 typecheck、test、build；UI 任务必须在真实浏览器完成用户旅程并保存截图或浏览器测试记录，再重新提交 acceptance。",
+            ].join("\n"),
+          },
+          parentDelivery: delivery,
+          fromAgent: "quality_gate",
+        });
+        return { handled: true };
+      }
+      await onEvent({
+        type: "task_failed",
+        task_id: rootTaskId,
+        agent: agentKey,
+        project_name: context.projectName || null,
+        error: `独立验收证据二次仍不合格：${evidenceIssues.join("；")}`,
+      });
+      return { handled: true };
+    }
+    corrections.delete(`${taskId}#acceptance-evidence`);
     if (acceptance.verdict !== "fail" || !pmOwned) return {};
-    return handAcceptanceToProjectManager({ taskId, rootTaskId, delivery, context, note: acceptanceFailureNote(acceptance) });
+    return handAcceptanceToProjectManager({ taskId, rootTaskId, delivery, context, note: acceptanceFailureNote(acceptance, acceptanceMatrix) });
+  }
+
+  /**
+   * The PM may only settle after independent quality stages pass.
+   * The orchestrator itself schedules missing tester/auditor work; PM self-test never satisfies acceptance.
+   */
+  async function enforceFinalQualityGates({ agentKey, taskId, parentTaskId, rootTaskId, delivery, context }) {
+    if (agentKey !== "project_manager" || delivery.final !== true) return false;
+    const task = await getRootTask(rootTaskId);
+    const gates = task?.quality_gates || {};
+    const policy = gates.policy || task?.quality_policy || {};
+
+    if (policy.independentAcceptance && gates.independent_acceptance !== "passed") {
+      if (!roles.has("tester")) {
+        await onEvent({ type: "quality_gate_failed", task_id: rootTaskId, gate: "independent_acceptance", error: "测试角色未启用，不能完成独立验收" });
+        return true;
+      }
+      if (!independentAcceptanceDispatches.has(rootTaskId)) {
+        independentAcceptanceDispatches.add(rootTaskId);
+        const matrix = Array.isArray(gates.acceptance_matrix) ? gates.acceptance_matrix : [];
+        const assignment = {
+          id: "independent-acceptance",
+          agentKey: "tester",
+          task: "独立验收当前任务：按验收矩阵逐项检查，必须执行真实 API/浏览器流程并提交结构化 acceptance。开发角色与项目经理的自测、测试说明不能替代本步骤。",
+          acceptanceCriteria: matrix.map((item) => `${item.id} ${item.criterion}；证据要求：${item.evidence}`),
+        };
+        await onEvent({ type: "quality_gate_blocked", task_id: rootTaskId, gate: "independent_acceptance", agent: "project_manager", project_name: context.projectName || null });
+        await dispatchTo("tester", taskId, {
+          context: {
+            ...withoutAssignments(context),
+            requireHumanApproval: false,
+            approvalBypass: true,
+            pmCoordination: false,
+            acceptanceMatrix: matrix,
+          },
+          parentDelivery: { ...delivery, projectName: context.projectName || delivery.projectName || null },
+          fromAgent: "quality_gate",
+          assignment,
+        });
+        return true;
+      }
+      await onEvent({ type: "task_failed", task_id: rootTaskId, agent: "project_manager", gate: "independent_acceptance", error: "独立测试未通过或未提交 acceptance_submitted" });
+      return true;
+    }
+
+    if (policy.audit && gates.audit !== "passed") {
+      if (!roles.has("auditor")) {
+        await onEvent({ type: "quality_gate_failed", task_id: rootTaskId, gate: "audit", error: "审计角色未启用，任务不能完成" });
+        return true;
+      }
+      if (!auditDispatches.has(rootTaskId)) {
+        auditDispatches.add(rootTaskId);
+        const assignment = {
+          id: "independent-audit",
+          agentKey: "auditor",
+          task: "独立审计完整交付：核对需求覆盖、实现完整性、测试证据、交付文件一致性、回归风险和遗留问题，并复核认证、授权、Cookie/Session、CSRF、输入校验、并发一致性、敏感信息日志与响应泄漏。开发角色或项目经理自己的测试与自审不能作为审计依据。",
+          acceptanceCriteria: ["独立审计结论明确且无阻塞项", "关键问题有证据并回派给对应角色"],
+        };
+        await onEvent({ type: "quality_gate_blocked", task_id: rootTaskId, gate: "audit", agent: "project_manager", project_name: context.projectName || null });
+        await dispatchTo("auditor", taskId, {
+          context: {
+            ...withoutAssignments(context),
+            requireHumanApproval: false,
+            approvalBypass: true,
+            pmCoordination: false,
+          },
+          parentDelivery: { ...delivery, projectName: context.projectName || delivery.projectName || null },
+          fromAgent: "quality_gate",
+          assignment,
+        });
+        return true;
+      }
+      await onEvent({ type: "task_failed", task_id: rootTaskId, agent: "project_manager", gate: "audit", error: "独立审计未通过" });
+      return true;
+    }
+    return false;
   }
 
   // 验收未通过或缺失：不再按计划/路由推进到审计或收尾，清掉残留后交回项目经理决定由谁修复。
@@ -581,19 +868,42 @@ export function createOrchestrator({
       dispatchContext = withoutAssignments(dispatchContext);
     }
     const history = deliveryHistory.get(rootTaskId) || [];
-    if (!history.some((item) => item.taskId === taskId && item.agentKey === agentKey)) {
-      // 切片的任务与验收标准随交付记录保存：计划结束后测试仍能据此逐条验收。
-      const planned = assignmentId ? planAssignments(planRuns.get(rootTaskId)?.plan).find((item) => item.id === assignmentId) : null;
-      history.push({
-        taskId,
-        agentKey,
-        summary: String(delivery.summary || resultText || "").trim(),
-        artifactPaths: delivery.artifactPaths || [],
-        ...(assignmentId ? { assignmentId } : {}),
-        ...(planned ? { task: planned.task, acceptanceCriteria: planned.acceptanceCriteria || [] } : {}),
-      });
-      deliveryHistory.set(rootTaskId, history);
+    let aggregate = null;
+    if (agentKey === "project_manager" && delivery.final === true) {
+      const qualityTask = await getRootTask(rootTaskId);
+      const qualityReport = qualityTask
+        ? buildQualityReport({ task: qualityTask, settlementPending: true })
+        : null;
+      const qualitySummary = qualityReport ? formatQualityReportSummary(qualityReport) : "";
+      const qualityArtifacts = qualityReport?.applicable
+        ? [
+          { path: qualityReport.reportFiles.markdownFile, description: "系统生成的质量门禁报告" },
+          { path: qualityReport.reportFiles.jsonFile, description: "系统生成的质量门禁结构化数据" },
+        ]
+        : [];
+      const finalized = finalizeProjectManagerDelivery(delivery, history, { qualitySummary, qualityArtifacts });
+      delivery = finalized.delivery;
+      aggregate = finalized.aggregate;
     }
+    // 同一角色可能先提交计划、再提交最终汇总；保留最新一次交付，避免历史一直停留在初始计划。
+    const planned = assignmentId ? planAssignments(planRuns.get(rootTaskId)?.plan).find((item) => item.id === assignmentId) : null;
+    const historyEntry = {
+      taskId,
+      agentKey,
+      agentName: delivery.agentName || roles.get(agentKey)?.agent?.displayName || agentKey,
+      summary: String(delivery.summary || resultText || "").trim(),
+      artifactPaths: delivery.artifactPaths || [],
+      artifactItems: delivery.artifactItems || [],
+      acceptance: delivery.acceptance || null,
+      blockers: delivery.blockers || [],
+      risks: delivery.risks || [],
+      ...(assignmentId ? { assignmentId } : {}),
+      ...(planned ? { task: planned.task, acceptanceCriteria: planned.acceptanceCriteria || [] } : {}),
+    };
+    const historyIndex = history.findIndex((item) => item.taskId === taskId && item.agentKey === agentKey);
+    if (historyIndex === -1) history.push(historyEntry);
+    else history[historyIndex] = historyEntry;
+    deliveryHistory.set(rootTaskId, history);
     // The delivery is the latest project decision from the completed agent.
     // Replace any stale project carried by the previous execution context.
     if (delivery.projectName || dispatchContext.projectName) {
@@ -602,7 +912,7 @@ export function createOrchestrator({
         projectName: delivery.projectName || dispatchContext.projectName,
       };
     }
-    await recordDelivery({ agentKey, taskId, parentTaskId, delivery, context: dispatchContext, resultText });
+    await recordDelivery({ agentKey, taskId, parentTaskId, delivery, context: dispatchContext, resultText, aggregate });
     // 项目经理已交付（汇总或新一轮派发），后续收尾交付可以再次交回它决策。
     if (agentKey === "project_manager") pmConsolidations.delete(rootTaskId);
     trackPlanProgress(agentKey, rootTaskId, delivery, { assignmentId, taskId, context: dispatchContext });
@@ -617,6 +927,7 @@ export function createOrchestrator({
         plan_project: delivery.plan?.project || dispatchContext.projectName || delivery.projectName || null,
         plan_stage_count: Array.isArray(delivery.plan?.stages) ? delivery.plan.stages.length : null,
         plan_assignment_ids: Array.isArray(delivery.plan?.stages) ? delivery.plan.stages.flatMap((stage) => (stage.assignments || []).map((item) => item.id)).filter(Boolean) : [],
+        acceptance_matrix: Array.isArray(delivery.plan?.acceptanceMatrix) ? delivery.plan.acceptanceMatrix : [],
         chat_id: dispatchContext.chatId || null,
       });
       if (assignments.length) {
@@ -638,6 +949,7 @@ export function createOrchestrator({
       dispatchContext = guarded.context;
       settleEmptyAssignments = false;
     }
+    if (await enforceFinalQualityGates({ agentKey, taskId, parentTaskId, rootTaskId, delivery, context: dispatchContext })) return;
     if (dispatchContext.singleRole && agentKey !== "project_manager" && !needsHumanDecision({ agentKey, delivery, context: dispatchContext, approvalRequired })) {
       await emitStageSettlement({ type: "task_settle", task_id: taskId, reason: "single_role" });
       log.info(JSON.stringify({ type: "settle", task_id: taskId, reason: "single_role" }));
@@ -647,6 +959,17 @@ export function createOrchestrator({
       // 只有项目经理的 final 才代表整条任务链结束。其他角色声明 final 只说明
       // 它这一阶段无需下游协作，仍要回到项目经理做最终汇总。
       if (agentKey === "project_manager" || !(await projectManagerOwnsRoot(rootTaskId)) || delivery.choices?.length) {
+        if (agentKey === "project_manager") {
+          finalSummaries.set(rootTaskId, {
+            summary: String(delivery.summary || resultText || "").trim(),
+            artifactPaths: delivery.artifactPaths || [],
+            artifactItems: delivery.artifactItems || [],
+            projectName: dispatchContext.projectName || delivery.projectName || null,
+            aggregate,
+            blockers: delivery.blockers || [],
+            risks: delivery.risks || [],
+          });
+        }
         await emitStageSettlement({ type: "task_settle", task_id: taskId, reason: "final" });
         log.info(JSON.stringify({ type: "settle", task_id: taskId, reason: "final" }));
         return;
@@ -747,6 +1070,8 @@ export function createOrchestrator({
       return;
     }
     const { agent, client } = role;
+    // 多个同角色切片拥有独立身份，派发卡片、系统提示和交付署名使用同一编号。
+    const instanceAgent = { ...agent, displayName: agentInstanceLabel(agent.displayName, slice) };
     // 切片子任务形如 <父任务>:frontend_developer.fe-login；分隔符必须落在 RPC 任务 ID 允许的字符集内。
     const subTaskId = slice ? `${parentTaskId}:${targetKey}.${slice.id}` : `${parentTaskId}:${targetKey}`;
     // 项目名必须与写入白名单同源：上游交付包里的 projectName 是最新事实，
@@ -767,6 +1092,8 @@ export function createOrchestrator({
       ].filter(Boolean).join("\n")
       : "";
     const history = (deliveryHistory.get(rootTaskId) || []).filter((item) => item.taskId !== subTaskId);
+    const childDeliveryAggregate = targetKey === "project_manager" ? aggregateChildDeliveries(history) : null;
+    const childDeliverySummary = childDeliveryAggregate ? formatChildDeliverySummary(childDeliveryAggregate) : "";
     const describe = (item) => `- ${item.agentKey}${item.assignmentId ? `（${item.assignmentId}）` : ""}: ${item.summary || "已完成交付"}${item.artifactPaths?.length ? `（产物 ${item.artifactPaths.join(", ")}）` : ""}`;
     // 执行角色只需要它依赖的交付全文，其余前序交付压成一行，避免切片越多提示词越长；
     // 项目经理、测试、审计要看全局，仍拿全部交付。
@@ -804,6 +1131,10 @@ export function createOrchestrator({
       parentDelivery.next ? `上游建议的下一步：${parentDelivery.next}` : "",
       refs ? `上游产物：\n${refs}` : "",
       priorDeliveries ? `前序机器人交付记录：\n${priorDeliveries}` : "",
+      childDeliverySummary,
+      targetKey === "project_manager" && childDeliveryAggregate?.artifactCount
+        ? "最终交付时必须基于系统统计覆盖全部子机器人结论与全部交付文件；不要只统计最后一个子任务。"
+        : "",
       sliceCriteria ? `按切片验收标准逐条验收：acceptance.checks 每项对应下面一条，check id 用给出的编号（如 fe-login-AC1），不要合并或省略：\n${sliceCriteria}` : "",
       targetKey === "project_manager" ? pmInstruction : "",
       context.correctionNote || "",
@@ -828,6 +1159,7 @@ export function createOrchestrator({
       parent_task_id: rootTaskId,
       project_name: projectName,
       agent: targetKey,
+      agent_name: instanceAgent.displayName,
       assignment_id: assignment.id,
       status,
       duration_ms: Date.now() - startedAt,
@@ -837,11 +1169,11 @@ export function createOrchestrator({
       parallel_peers: slice ? slice.total : 1,
     }) : undefined);
     try {
-      log.info(`[dispatch] ${fromAgent} -> ${agent.displayName} (subtask ${String(subTaskId).slice(0, 8)})`);
-      await onEvent({ type: "dispatch_started", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, assigned_task: assignedTask || null, assignment_id: assignment?.id || null });
-      if (!isDesktopContext(context)) await sendCard(client, context.chatId, buildTaskReceivedCard(agent, subTaskId, assignedTask || parentDelivery.summary));
+      log.info(`[dispatch] ${fromAgent} -> ${instanceAgent.displayName} (subtask ${String(subTaskId).slice(0, 8)})`);
+      await onEvent({ type: "dispatch_started", from: fromAgent, target: targetKey, agent_name: instanceAgent.displayName, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, assigned_task: assignedTask || null, assignment_id: assignment?.id || null });
+      if (!isDesktopContext(context)) await sendCard(client, context.chatId, buildTaskReceivedCard(instanceAgent, subTaskId, assignedTask || parentDelivery.summary));
       const projectSummary = await loadProjectSummaryFor(targetKey, projectName, { root: process.cwd() });
-      const result = await runAgent(agent, prompt, {
+      const result = await runAgent(instanceAgent, prompt, {
         taskId: subTaskId,
         parentTaskId,
         agentKey: agent.key,
@@ -856,16 +1188,16 @@ export function createOrchestrator({
         onEvent,
       });
       if (result.cancelled || await isTerminated(rootTaskId)) {
-        await onEvent({ type: "dispatch_cancelled", from: fromAgent, target: targetKey, task_id: subTaskId, parent_task_id: rootTaskId });
+        await onEvent({ type: "dispatch_cancelled", from: fromAgent, target: targetKey, agent_name: instanceAgent.displayName, task_id: subTaskId, parent_task_id: rootTaskId });
         await recordSlice("cancelled");
         return;
       }
       await recordSlice("completed");
       if (!isDesktopContext(context)) await sendResultCard(client, context.chatId, result, { log, taskId: subTaskId });
       log.info(JSON.stringify({ type: "dispatch", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, status: "completed" }));
-      await onEvent({ type: "dispatch_completed", agent: targetKey, from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, has_delivery: Boolean(result.delivery), artifact_count: result.delivery?.artifactPaths?.length || 0 });
+      await onEvent({ type: "dispatch_completed", agent: targetKey, agent_name: instanceAgent.displayName, from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, has_delivery: Boolean(result.delivery), artifact_count: result.delivery?.artifactPaths?.length || 0 });
       await onTaskCompleted(agent.key, subTaskId, {
-        delivery: result.delivery || { agentKey: agent.key, agentName: agent.displayName, summary: result.text || "已完成交付", artifactPaths: [], final: false },
+        delivery: result.delivery || { agentKey: agent.key, agentName: instanceAgent.displayName, summary: result.text || "已完成交付", artifactPaths: [], final: false },
         resultText: result.text,
         context,
         parentTaskId,
@@ -874,7 +1206,7 @@ export function createOrchestrator({
       });
     } catch (error) {
       if (await isTerminated(rootTaskId)) {
-        await onEvent({ type: "dispatch_cancelled", agent: targetKey, task_id: subTaskId, parent_task_id: rootTaskId });
+        await onEvent({ type: "dispatch_cancelled", agent: targetKey, agent_name: instanceAgent.displayName, task_id: subTaskId, parent_task_id: rootTaskId });
         return;
       }
       log.error(JSON.stringify({ type: "dispatch", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, status: "failed", error: error.message }));
@@ -890,7 +1222,7 @@ export function createOrchestrator({
       const recoverable = targetKey !== "project_manager" && roles.has("project_manager")
         && (failureRecoveries.get(rootTaskId) || 0) < maxFailureRecoveries
         && await projectManagerOwnsRoot(rootTaskId);
-      await onEvent({ type: "dispatch_failed", from: fromAgent, target: targetKey, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, error: error.message, recoverable });
+      await onEvent({ type: "dispatch_failed", from: fromAgent, target: targetKey, agent_name: instanceAgent.displayName, parent_task_id: parentTaskId, sub_task_id: subTaskId, task_id: subTaskId, chat_id: context?.chatId || null, project_name: projectName, correlation_id: context?.correlationId || null, error: error.message, recoverable });
       if (!isDesktopContext(context)) {
         try {
           await sendText(client, context.chatId, `Task failed: ${error.message}`);
@@ -1009,6 +1341,11 @@ export function createOrchestrator({
       ...(task.runtime ? { runtime: task.runtime } : {}),
       requireHumanApproval: false,
       projectName: task.project_name || null,
+      qualityPolicy: task.quality_policy || {},
+      requireIndependentAcceptance: task.quality_policy?.independentAcceptance === true,
+      requireAcceptanceMatrix: task.quality_policy?.acceptanceMatrix === true,
+      requireE2E: task.quality_policy?.e2e === true,
+      requireAudit: task.quality_policy?.audit === true,
       manualRetry: { error: lastError },
       pmCoordination: true,
       approvalBypass: false,

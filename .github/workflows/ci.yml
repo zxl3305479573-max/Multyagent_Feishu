@@ -14,10 +14,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install
-        run: npm ci --ignore-scripts
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Install (clean)
+        run: npm ci
       - name: Lint
         run: npm run lint
       - name: Typecheck
@@ -26,3 +24,12 @@ jobs:
         run: npm test
       - name: Build desktop renderer
         run: npm run desktop:build
+      - name: Desktop E2E
+        run: npm run test:e2e
+      - name: Upload desktop E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e
+          path: test-results/desktop-e2e
+          if-no-files-found: warn

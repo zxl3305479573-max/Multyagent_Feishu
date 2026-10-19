@@ -10,8 +10,10 @@ const { roleConfig } = require("../../src/role-config.cjs");
 const { activeLock, describeLock, globalLockFile } = require("../../src/gateway-lock.cjs");
 
 const root = join(__dirname, "..", "..");
+const e2eMode = process.env.PI_DESKTOP_E2E === "1";
+if (e2eMode && process.env.PI_DESKTOP_E2E_USER_DATA) app.setPath("userData", process.env.PI_DESKTOP_E2E_USER_DATA);
 let win = null; let tray = null; let quitting = false; let gateway = null; let credentials = null; let settings = null; let gatewayStopping = false;
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const hasSingleInstanceLock = e2eMode || app.requestSingleInstanceLock();
 // 运行设置页展示的全部环境配置（分组、类型、默认值、是否密钥）。
 const envCatalog = buildEnvCatalog();
 const roleKeys = roleConfig().roles.map((role) => role.key);
@@ -79,6 +81,9 @@ function trayIcon() {
 async function createWindow() {
   win = new BrowserWindow({
     width: 1320, height: 900, minWidth: 720, minHeight: 560,
+    // Chromium only paints the captured surface while the native window is
+    // shown; E2E uses an isolated profile and closes immediately after capture.
+    show: true,
     icon: join(__dirname, "assets", "icon.png"),
     // 无边框：隐藏系统标题栏，由页面顶栏充当拖拽区，Windows/Linux 保留系统窗口按钮叠加在右上角。
     backgroundColor: "#ffffff",
@@ -196,19 +201,22 @@ async function start() {
     return settingsSnapshot(paths);
   });
 
-  const initialEnv = await gatewayEnv(paths);
-  gateway = createGatewayProcess({ entry: join(root, "src", "index.js"), cwd: runtimeRoot, env: initialEnv });
-  let gatewayError = foreignGatewayError(initialEnv);
-  if (gatewayError) console.error(`[desktop] ${gatewayError}`);
-  else gateway.start();
-  // The renderer reads the session token immediately on load. Wait until the
-  // gateway has published its token and health endpoint so first launch does
-  // not look disconnected and force a manual service restart.
-  try {
-    if (!gatewayError) await waitForGateway();
-  } catch (error) {
-    // 网关没起来时仍然打开窗口：界面会显示“连接失败”，用户可以去运行设置里修正配置后重启服务。
-    console.error(`[desktop] ${error.message}`);
+  let gatewayError = e2eMode ? "E2E 模式不启动本地网关" : "";
+  if (!e2eMode) {
+    const initialEnv = await gatewayEnv(paths);
+    gateway = createGatewayProcess({ entry: join(root, "src", "index.js"), cwd: runtimeRoot, env: initialEnv });
+    gatewayError = foreignGatewayError(initialEnv);
+    if (gatewayError) console.error(`[desktop] ${gatewayError}`);
+    else gateway.start();
+    // The renderer reads the session token immediately on load. Wait until the
+    // gateway has published its token and health endpoint so first launch does
+    // not look disconnected and force a manual service restart.
+    try {
+      if (!gatewayError) await waitForGateway();
+    } catch (error) {
+      // 网关没起来时仍然打开窗口：界面会显示“连接失败”，用户可以去运行设置里修正配置后重启服务。
+      console.error(`[desktop] ${error.message}`);
+    }
   }
   // 渲染进程运行在沙箱里，不能自己读令牌文件，由主进程读取后返回。
   handle("desktop:session", async () => {
@@ -239,8 +247,10 @@ async function start() {
   handle("desktop:window:show", () => showWindow());
   handle("desktop:app:quit", () => { quitting = true; app.quit(); });
   await createWindow();
-  tray = new Tray(trayIcon()); tray.setToolTip("MultyAgent Agent 工作台");
-  tray.setContextMenu(Menu.buildFromTemplate([{ label: "显示工作台", click: showWindow }, { type: "separator" }, { label: "退出", click: () => { quitting = true; app.quit(); } }])); tray.on("click", showWindow);
+  if (!e2eMode) {
+    tray = new Tray(trayIcon()); tray.setToolTip("MultyAgent Agent 工作台");
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: "显示工作台", click: showWindow }, { type: "separator" }, { label: "退出", click: () => { quitting = true; app.quit(); } }])); tray.on("click", showWindow);
+  }
 }
 if (!hasSingleInstanceLock) {
   app.quit();

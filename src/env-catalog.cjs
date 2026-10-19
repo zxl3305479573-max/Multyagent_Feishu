@@ -105,6 +105,14 @@ function buildEnvCatalog({ roles = roleConfig().roles } = {}) {
       ],
     },
     {
+      id: "profile",
+      title: "个人",
+      description: "只影响桌面工作台中的个人显示，不会发送给模型或飞书。",
+      fields: [
+        { key: "PI_USER_DISPLAY_NAME", label: "个人称呼", type: "text", default: "我", placeholder: "例如：小林", description: "用于对话头像的首字和悬停提示；留空时显示“我”。" },
+      ],
+    },
+    {
       id: "agent",
       title: "Agent 运行",
       description: "Agent 的运行方式、协作流程与超时。",
@@ -118,8 +126,8 @@ function buildEnvCatalog({ roles = roleConfig().roles } = {}) {
         { key: "PI_ARCHITECT_DIAGRAM_SKILL_PATH", label: "diagram-design 技能目录（旧名）", type: "path", advanced: true, description: "旧版本使用的变量名，优先级低于上一项。" },
         { key: "PI_MAX_DISPATCH_ROUNDS", label: "单任务最大派发轮次", type: "number", default: "8", min: 1, description: "防止角色之间无限来回派发。" },
         { key: "PI_MAX_FAILURE_RECOVERIES", label: "失败后交回项目经理的最大次数", type: "number", default: "2", min: 0, description: "执行角色失败时，最多让项目经理重新决策几次，超过后任务才判为失败。" },
-        { key: "PI_MAX_ASSIGNMENTS", label: "单次派发最大切片数", type: "number", default: "8", min: 1, advanced: true, description: "项目经理一次交付里最多派发几条任务（前端/后端可拆成多个切片，同角色依次执行）。" },
-        { key: "PI_MAX_PLAN_ASSIGNMENTS", label: "单份计划最大切片数", type: "number", default: "12", min: 1, advanced: true, description: "结构化阶段计划里所有阶段的任务总数上限。" },
+        { key: "PI_MAX_ASSIGNMENTS", label: "单次派发最大切片数", type: "number", default: "6", min: 1, advanced: true, description: "项目经理一次交付里最多派发几条任务；建议 3–6 条，复杂任务由独立验收切片兜底。" },
+        { key: "PI_MAX_PLAN_ASSIGNMENTS", label: "单份计划最大切片数", type: "number", default: "6", min: 1, advanced: true, description: "结构化阶段计划里所有阶段的任务总数上限，默认限制为 6 个可独立验收切片。" },
         { key: "PI_MAX_PARALLEL_SLICES", label: "同角色最大并行切片数", type: "number", default: "2", min: 1, advanced: true, description: "同一角色的切片声明了互不重叠的写入范围时，最多同时执行几个；设为 1 即始终串行。" },
         { key: "PI_PROJECT_LOCK", label: "构建命令项目级排队", type: "boolean", trueValue: "true", falseValue: "false", default: "true", advanced: true, description: "同一项目的依赖安装、构建、测试命令依次执行，避免并行切片互相干扰。" },
         { key: "PI_PROJECT_LOCK_TIMEOUT_MS", label: "构建排队最长等待（毫秒）", type: "number", default: "600000", min: 1000, advanced: true, description: "等待超过该时长仍拿不到锁时不再排队，直接执行命令。" },

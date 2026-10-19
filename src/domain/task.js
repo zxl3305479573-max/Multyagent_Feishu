@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createQualityGates } from "../quality-gates.js";
 
 function readableTaskId(date = new Date()) {
   const stamp = date.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
@@ -10,6 +11,7 @@ function readableTaskId(date = new Date()) {
 
 export function createTaskRecord(input = {}) {
   const now = new Date().toISOString();
+  const qualityPolicy = input.quality_policy || input.qualityPolicy || {};
   return {
     task_id: input.task_id || readableTaskId(new Date(now)),
     project_id: input.project_id || null,
@@ -25,6 +27,17 @@ export function createTaskRecord(input = {}) {
     title: input.title || "",
     description: input.description || "",
     conversation_memory: Array.isArray(input.conversation_memory) ? input.conversation_memory : [],
+    quality_policy: {
+      implementationRequired: qualityPolicy.implementationRequired === true,
+      independentAcceptance: qualityPolicy.independentAcceptance === true,
+      acceptanceMatrix: qualityPolicy.acceptanceMatrix === true,
+      e2e: qualityPolicy.e2e === true,
+      audit: qualityPolicy.audit === true,
+      selfTestReference: false,
+      skipTestingAndAudit: qualityPolicy.skipTestingAndAudit === true,
+      requiredEvidence: Array.isArray(qualityPolicy.requiredEvidence) ? qualityPolicy.requiredEvidence : [],
+    },
+    quality_gates: createQualityGates(qualityPolicy),
     status: input.status || "received",
     paused: input.paused === true,
     terminated: input.terminated === true,

@@ -1,10 +1,49 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import type { Agent, AgentExecutionGroup, AgentExecutionItem, EventRecord, Task } from "../types";
 import { eventLabels, statusLabels, verdictLabels } from "../labels";
 import { formatDuration, formatFileSize, formatTime, snapshotStatus, taskStatus } from "../format";
-import { collectArtifacts, toolExecutionStatus } from "../execution-view";
+import { collectArtifacts, groupExecutionInstancesByAgent, toolExecutionStatus, type AgentExecutionBundle } from "../execution-view";
 import { RuntimeModelPicker } from "./RuntimeModelPicker";
-import type { RuntimeConfig } from "../types";
+import { ModeBar } from "./ModeBar";
+import type { RuntimeConfig, TaskModes } from "../types";
+
+// 规划模式下等待确认的内容：最近一条 approval_required 之后还没有派发、结算或失败等后续事件。
+const SETTLING_AFTER_APPROVAL = new Set(["dispatch_started", "task_settle", "task_failed", "task_terminated", "task_cancelled", "selection_failed", "control_applied"]);
+export function pendingApproval(taskEvents: EventRecord[]) {
+  let index = -1;
+  taskEvents.forEach((event, position) => { if (event.type === "approval_required") index = position; });
+  if (index < 0) return null;
+  if (taskEvents.slice(index + 1).some((event) => SETTLING_AFTER_APPROVAL.has(event.type || ""))) return null;
+  const approval = taskEvents[index];
+  const delivery = [...taskEvents.slice(0, index + 1)].reverse().find((event) => event.type === "delivery_received" && event.task_id === approval.task_id);
+  return { taskId: approval.task_id || "", agent: approval.agent || "", summary: delivery?.summary || "", next: delivery?.next || "" };
+}
+
+const QUALITY_STAGE_LABELS: Array<[string, string]> = [
+  ["implementation", "已实现"],
+  ["self_test", "开发自测"],
+  ["independent_acceptance", "独立验收"],
+  ["audit", "独立审计"],
+  ["product", "产品闭环"],
+];
+const QUALITY_STATUS_LABELS: Record<string, string> = {
+  pending: "待完成",
+  in_progress: "进行中",
+  passed: "通过",
+  failed: "未通过",
+  not_required: "不适用",
+  incomplete: "未完成",
+};
+
+function QualityGateStrip({ gates }: { gates: NonNullable<Task["status_snapshot"]>["quality_gates"] }) {
+  if (!gates) return null;
+  return <div className="quality-gate-strip" aria-label="任务质量门禁">
+    {QUALITY_STAGE_LABELS.map(([key, label]) => {
+      const status = gates[key as keyof typeof gates] || "pending";
+      return <span key={key} className={`quality-gate quality-${status}`}><strong>{label}</strong><small>{QUALITY_STATUS_LABELS[status] || status}</small></span>;
+    })}
+  </div>;
+}
 
 type OpenFile = (event: EventRecord) => void;
 
@@ -64,6 +103,14 @@ function FinalResult({ group, onOpenFile }: { group: AgentExecutionGroup; onOpen
   }
   return <div className="agent-final-result">
     <div className="agent-final-result-heading"><strong>最终执行结果</strong><time>{formatTime(result.timestamp)}</time></div>
+    {typeof result.aggregate_delivery_count === "number" ? <div className="agent-final-summary-stats">
+      <span><strong>{result.aggregate_delivery_count}</strong><small>子机器人交付</small></span>
+      <span><strong>{result.aggregate_agent_count}</strong><small>覆盖角色</small></span>
+      <span><strong>{result.artifact_count || 0}</strong><small>交付文件</small></span>
+      {typeof result.aggregate_acceptance_count === "number" && result.aggregate_acceptance_count > 0
+        ? <span><strong>{result.aggregate_acceptance_passed || 0}/{result.aggregate_acceptance_count}</strong><small>验收通过</small></span>
+        : null}
+    </div> : null}
     <p>{result.summary || "已完成本轮工作"}</p>
     {(result.blockers?.length || result.risks?.length || result.next) ? <div className="agent-final-fields">
       {result.next && <div><strong>下一步</strong><span>{result.next}</span></div>}
@@ -71,6 +118,88 @@ function FinalResult({ group, onOpenFile }: { group: AgentExecutionGroup; onOpen
       {result.risks?.length ? <div><strong>风险</strong><span>{result.risks.join("；")}</span></div> : null}
     </div> : null}
     {collectArtifacts(result).length ? <Artifacts event={result} onOpenFile={onOpenFile} /> : null}
+  </div>;
+}
+
+function RoleFinalResult({ bundle, onOpenFile }: { bundle: ExecutionBundle; onOpenFile: OpenFile }) {
+  const completed = bundle.instances
+    .map((group) => ({ group, result: group.finalResult }))
+    .filter((item): item is { group: AgentExecutionGroup; result: EventRecord } => Boolean(item.result));
+  if (!completed.length) {
+    return <div className="agent-final-pending">等待该主机器人及其子机器人提交最终结果。</div>;
+  }
+  const artifactMap = new Map<string, { path: string; description: string; type?: string; size?: number }>();
+  for (const { result } of completed) {
+    for (const artifact of collectArtifacts(result)) {
+      const key = artifact.path.replaceAll("\\", "/");
+      const previous = artifactMap.get(key);
+      artifactMap.set(key, {
+        ...(previous || artifact),
+        ...artifact,
+        description: artifact.description || previous?.description || "",
+      });
+    }
+  }
+  const artifacts = [...artifactMap.values()];
+  const blockers = [...new Set(completed.flatMap(({ result }) => result.blockers || []))];
+  const risks = [...new Set(completed.flatMap(({ result }) => result.risks || []))];
+  const latest = completed.at(-1)!.result;
+  const artifactEvent: EventRecord = {
+    ...latest,
+    artifact_paths: artifacts.map((item) => item.path),
+    artifact_items: artifacts,
+    artifact_count: artifacts.length,
+  };
+  return <div className="agent-final-result role-final-result">
+    <div className="agent-final-result-heading"><strong>主机器人最终汇总</strong><time>{formatTime(latest.timestamp)}</time></div>
+    <div className="agent-final-summary-stats">
+      <span><strong>{bundle.instances.length}</strong><small>执行实例</small></span>
+      <span><strong>{artifacts.length}</strong><small>交付文件</small></span>
+      <span><strong>{bundle.instances.reduce((sum, group) => sum + group.toolCount, 0)}</strong><small>工具调用</small></span>
+      <span><strong>{formatDuration(bundle.instances.reduce((sum, group) => sum + (group.durationMs || 0), 0))}</strong><small>累计耗时</small></span>
+    </div>
+    <div className="role-final-contributions">{completed.map(({ group, result }) => <div className="role-final-contribution" key={group.key}>
+      <strong>{group.displayName}</strong>
+      <p>{result.summary || "已完成本轮工作"}</p>
+    </div>)}</div>
+    {(blockers.length || risks.length) ? <div className="agent-final-fields">
+      {blockers.length ? <div><strong>阻塞</strong><span>{blockers.join("；")}</span></div> : null}
+      {risks.length ? <div><strong>风险</strong><span>{risks.join("；")}</span></div> : null}
+    </div> : null}
+    {artifacts.length ? <Artifacts event={artifactEvent} onOpenFile={onOpenFile} /> : null}
+  </div>;
+}
+
+function FinalSummary({ event }: { event: EventRecord }) {
+  return <section className="final-summary-output" aria-label="项目经理最终总结">
+    <header>
+      <span className="message-avatar agent-avatar">总</span>
+      <div>
+        <strong>项目经理 · 最终总结</strong>
+        <time>{formatTime(event.timestamp)}</time>
+      </div>
+      <span className="final-summary-complete">全部任务已完成</span>
+    </header>
+    <div className="final-summary-output-body">{event.summary || "全部任务已完成。"}</div>
+  </section>;
+}
+
+function UserMessage({ event, task, userName, userInitial }: { event: EventRecord; task: Task; userName: string; userInitial: string }) {
+  return <article className="message user-message">
+    <div className="message-avatar user-avatar" title={userName} aria-label={userName}>{userInitial}</div>
+    <div className="message-body">
+      <div className="message-author"><time>{formatTime(event.timestamp)}</time></div>
+      <p>{event.type === "task_reused" ? event.text || "继续当前任务" : task.description || event.text || task.title}</p>
+    </div>
+  </article>;
+}
+
+type PendingApproval = NonNullable<ReturnType<typeof pendingApproval>>;
+
+function ApprovalCard({ approval, approverName, approving = false, onApprove }: { approval: PendingApproval; approverName: string; approving?: boolean; onApprove?: (taskId: string) => void }) {
+  return <div className="approval-banner" role="status">
+    <div><strong>{approverName} 的方案等待你确认</strong><span>{approval.next || approval.summary.slice(0, 160) || "确认后开始执行"}</span></div>
+    <button type="button" disabled={approving} onClick={() => onApprove?.(approval.taskId)}>{approving ? "确认中…" : "确认执行"}</button>
   </div>;
 }
 
@@ -98,38 +227,83 @@ function ToolRun({ executions, agents, onOpenFile }: { executions: ToolExecution
     <summary><span className="tool-run-chevron">›</span><span className="tool-run-title">工具调用 · {executions.length} 次</span><span className="tool-run-names">{names.join("、")}</span><span className="tool-run-status">{runStatus === "failed" ? `${failedCount} 次失败` : statusLabels[runStatus] || runStatus}</span></summary>
     <div className="tool-run-content">{executions.map((execution, index) => {
       const status = toolExecutionStatus(execution.events);
+      const description = execution.events.find((event) => event.type === "tool_call")?.summary || "调用工具";
       return <details className={`tool-execution tool-${status}`} key={`tool-${execution.events[0]?.event_id || index}`}>
-        <summary><span className="tool-execution-chevron">›</span><span className="tool-execution-title">{execution.tool}</span><span className="tool-execution-status">{statusLabels[status] || status}</span><span className="tool-execution-count">{execution.events.length} 个步骤</span></summary>
+        <summary><span className="tool-execution-chevron">›</span><span className="tool-execution-title">{execution.tool}</span><span className="tool-execution-description">{description}</span><span className="tool-execution-status">{statusLabels[status] || status}</span><span className="tool-execution-count">{execution.events.length} 个步骤</span></summary>
         <div className="tool-execution-content">{execution.events.map((event, eventIndex) => <ExecutionEvent key={event.event_id || `${event.type}-${eventIndex}`} event={event} agents={agents} onOpenFile={onOpenFile} />)}</div>
       </details>;
     })}</div>
   </details>;
 }
 
-function ExecutionGroup({ group, agents, focused, sectionRef, onOpenFile }: { group: AgentExecutionGroup; agents: Agent[]; focused: boolean; sectionRef: (element: HTMLElement | null) => void; onOpenFile: OpenFile }) {
-  return <section className={`agent-execution-group ${focused ? "is-focused" : ""}`} ref={sectionRef}>
+function ExecutionProcess({ group, agents, onOpenFile }: { group: AgentExecutionGroup; agents: Agent[]; onOpenFile: OpenFile }) {
+  return <details className="agent-execution-process">
+    <summary><span className="agent-execution-chevron">›</span><span>执行过程 · {group.items.length} 项</span></summary>
+    <div className="agent-execution-events">{groupExecutionItems(group.items).map((block, index) => block.kind === "event"
+      ? <ExecutionEvent key={block.event.event_id || `${block.event.type}-${index}`} event={block.event} agents={agents} onOpenFile={onOpenFile} />
+      : <ToolRun key={`run-${block.executions[0]?.events[0]?.event_id || index}`} executions={block.executions} agents={agents} onOpenFile={onOpenFile} />)}</div>
+  </details>;
+}
+
+type ExecutionBundle = AgentExecutionBundle<AgentExecutionGroup>;
+
+function SubagentExecution({ group, agents, approval, approverName, approving, onApprove, onOpenFile }: { group: AgentExecutionGroup; agents: Agent[]; approval: PendingApproval | null; approverName: string; approving?: boolean; onApprove?: (taskId: string) => void; onOpenFile: OpenFile }) {
+  return <details className={`subagent-execution subagent-${group.status}`}>
+    <summary>
+      <span className="message-avatar subagent-avatar">{group.displayName.slice(1, 2)}</span>
+      <span className="subagent-summary-main">
+        <span className="subagent-summary-title"><strong>{group.displayName}</strong><span className={`agent-execution-status status-${group.status}`}>{statusLabels[group.status] || group.status}</span></span>
+        {group.assignedTask && <small>{group.assignedTask}</small>}
+      </span>
+      <span className="subagent-summary-meta">{group.toolCount} 次工具 · {group.fileCount} 个文件 · {formatDuration(group.durationMs)}</span>
+      <span className="subagent-chevron">›</span>
+    </summary>
+    <div className="subagent-execution-body">
+      <ExecutionProcess group={group} agents={agents} onOpenFile={onOpenFile} />
+      <FinalResult group={group} onOpenFile={onOpenFile} />
+      {approval && <ApprovalCard approval={approval} approverName={approverName} approving={approving} onApprove={onApprove} />}
+    </div>
+  </details>;
+}
+
+function ExecutionGroup({ bundle, agents, approval, approvalGroupKey, approverName, approving, onApprove, onOpenFile }: { bundle: ExecutionBundle; agents: Agent[]; approval: PendingApproval | null; approvalGroupKey: string | null; approverName: string; approving?: boolean; onApprove?: (taskId: string) => void; onOpenFile: OpenFile }) {
+  const instances = bundle.instances;
+  const statuses = instances.map((group) => group.status);
+  const status = statuses.includes("failed") ? "failed"
+    : statuses.includes("cancelled") ? "cancelled"
+      : statuses.includes("running") ? "running"
+        : statuses.includes("paused") ? "paused"
+          : statuses.every((item) => item === "completed") ? "completed" : "waiting";
+  const toolCount = instances.reduce((sum, group) => sum + group.toolCount, 0);
+  const fileCount = instances.reduce((sum, group) => sum + group.fileCount, 0);
+  const duration = instances.reduce((sum, group) => sum + (group.durationMs || 0), 0);
+  const tasks = [...new Set(instances.map((group) => group.assignedTask).filter(Boolean))];
+  const singleInstance = instances.length === 1 ? instances[0] : null;
+  return <section className="agent-execution-group">
     <header className="agent-execution-overview">
-      <span className="message-avatar agent-avatar">{group.displayName.slice(0, 1)}</span>
+      <span className="message-avatar agent-avatar">{bundle.displayName.slice(0, 1)}</span>
       <div className="agent-execution-overview-copy">
-        <div className="agent-execution-overview-title"><strong>{group.displayName}</strong><span className={`agent-execution-status status-${group.status}`}>{statusLabels[group.status] || group.status}</span></div>
-        {group.assignedTask && <p>{group.assignedTask}</p>}
+        <div className="agent-execution-overview-title"><strong>{bundle.displayName}</strong><span className={`agent-execution-status status-${status}`}>{statusLabels[status] || status}</span></div>
+        <p>{tasks.join("；") || `${instances.length} 个执行实例`}</p>
         <div className="agent-execution-meta">
-          <span>{group.startedAt ? `开始 ${formatTime(group.startedAt, "time")}` : "未记录开始时间"}</span>
-          <span>{group.endedAt ? `结束 ${formatTime(group.endedAt, "time")}` : group.status === "running" ? "执行中" : "无结束记录"}</span>
-          <span>耗时 {formatDuration(group.durationMs)}</span>
-          <span>{group.toolCount} 次工具</span>
-          <span>{group.fileCount} 个文件</span>
-          <span className={group.testFailed ? "meta-failed" : ""}>{group.testCount ? `${group.testCount} 次测试${group.testFailed ? " · 有失败" : ""}` : "无测试事件"}</span>
+          <span>{instances.length} 个执行实例</span>
+          <span>耗时 {formatDuration(duration)}</span>
+          <span>{toolCount} 次工具</span>
+          <span>{fileCount} 个文件</span>
         </div>
       </div>
     </header>
-    <details className="agent-execution-process">
-      <summary><span className="agent-execution-chevron">›</span><span>执行过程 · {group.items.length} 项</span></summary>
-      <div className="agent-execution-events">{groupExecutionItems(group.items).map((block, index) => block.kind === "event"
-        ? <ExecutionEvent key={block.event.event_id || `${block.event.type}-${index}`} event={block.event} agents={agents} onOpenFile={onOpenFile} />
-        : <ToolRun key={`run-${block.executions[0]?.events[0]?.event_id || index}`} executions={block.executions} agents={agents} onOpenFile={onOpenFile} />)}</div>
-    </details>
-    <FinalResult group={group} onOpenFile={onOpenFile} />
+    {singleInstance ? <>
+      <ExecutionProcess group={singleInstance} agents={agents} onOpenFile={onOpenFile} />
+      <FinalResult group={singleInstance} onOpenFile={onOpenFile} />
+      {singleInstance.key === approvalGroupKey && approval && <ApprovalCard approval={approval} approverName={approverName} approving={approving} onApprove={onApprove} />}
+    </> : <>
+      <div className="subagent-executions">
+        <div className="subagent-list-heading"><strong>任务分块 · 子机器人</strong><span>{instances.length} 个 · 默认收起</span></div>
+        {instances.map((instance) => <SubagentExecution key={instance.key} group={instance} agents={agents} approval={instance.key === approvalGroupKey ? approval : null} approverName={approverName} approving={approving} onApprove={onApprove} onOpenFile={onOpenFile} />)}
+      </div>
+      <RoleFinalResult bundle={bundle} onOpenFile={onOpenFile} />
+    </>}
   </section>;
 }
 
@@ -138,33 +312,71 @@ type ConversationProps = {
   selectedTask?: Task;
   project: string;
   agents: Agent[];
-  selectedAgent: string;
+  userDisplayName: string;
   taskEvents: EventRecord[];
   taskEventsLoading: boolean;
   groups: AgentExecutionGroup[];
   taskStartedAt?: string;
   taskDuration: number | null;
-  sectionRefs: React.MutableRefObject<Record<string, HTMLElement | null>>;
+  scrollToBottomRequest?: number;
   onOpenFile: OpenFile;
+  approving?: boolean;
+  onApprove?: (taskId: string) => void;
 };
 
-export function ConversationView({ selected, selectedTask, project, agents, selectedAgent, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, sectionRefs, onOpenFile }: ConversationProps) {
-  return <div className="conversation-scroll" key={selected || "empty"}>
+export function ConversationView({ selected, selectedTask, project, agents, userDisplayName, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, scrollToBottomRequest = 0, onOpenFile, approving = false, onApprove }: ConversationProps) {
+  const userName = userDisplayName.trim() || "我";
+  const userInitial = Array.from(userName)[0] || "我";
+  const approval = selectedTask && onApprove ? pendingApproval(taskEvents) : null;
+  const approverName = approval ? agents.find((agent) => agent.key === approval.agent)?.displayName || approval.agent : "";
+  const userEvents = taskEvents.filter((event) => ["task_created", "task_reused"].includes(event.type || ""));
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selected, scrollToBottomRequest, userEvents.length]);
+  const approvalGroupKey = approval
+    ? groups.find((group) => group.agentKey === approval.agent && group.events.some((event) => event.type === "approval_required" && (!approval.taskId || event.task_id === approval.taskId)))?.key || null
+    : null;
+  const renderExecutionTurn = (turn: number) => {
+    return groupExecutionInstancesByAgent(groups.filter((group) => group.turn === turn)).map((bundle) => <ExecutionGroup
+      key={`${turn}:${bundle.agentKey}`}
+      bundle={bundle}
+      agents={agents}
+      approval={approval}
+      approvalGroupKey={approvalGroupKey}
+      approverName={approverName}
+      approving={approving}
+      onApprove={onApprove}
+      onOpenFile={onOpenFile}
+    />);
+  };
+  const lastUserInputIndex = taskEvents.reduce((last, event, index) => ["task_created", "task_reused"].includes(event.type || "") ? index : last, -1);
+  const finalSummary = taskEvents.slice(lastUserInputIndex + 1).reverse().find((event) => event.type === "final_summary");
+  return <div className="conversation-scroll" key={selected || "empty"} ref={scrollRef}>
     {!selectedTask ? (
       <div className="welcome-state">
         <span className="welcome-mark">A</span>
         <h2>接下来要完成什么？</h2>
         <p>描述目标和约束，项目经理会规划任务并分配给合适的 Agent。</p>
-        <div className="welcome-chips"><span>按项目隔离上下文</span><span>并行执行独立任务</span><span>随时观察与控制</span></div>
+        <div className="welcome-chips"><span>按项目隔离上下文</span><span>并行执行独立任务</span><span>随时暂停与继续</span></div>
       </div>
     ) : (
       <div className="conversation-content">
         <div className="conversation-task-overview"><strong>{selectedTask.title || "当前任务"}</strong><span>{selectedTask.project_name || project} · {taskStatus(selectedTask)}{taskStartedAt ? ` · 开始 ${formatTime(taskStartedAt)} · 总耗时 ${formatDuration(taskDuration)}` : ""}</span></div>
+        <QualityGateStrip gates={selectedTask.status_snapshot?.quality_gates} />
         {taskEvents.length === 0 && (taskEventsLoading
           ? <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>
           : <div className="conversation-empty">暂无任务记录</div>)}
-        {taskEvents.filter((event) => ["task_created", "task_reused"].includes(event.type || "")).map((event, index) => <article className="message user-message" key={event.event_id || `request-${index}`}><div className="message-avatar user-avatar">你</div><div className="message-body"><div className="message-author">你 <time>{formatTime(event.timestamp)}</time></div><p>{event.type === "task_reused" ? event.text || "继续当前任务" : selectedTask.description || event.text || selectedTask.title}</p></div></article>)}
-        {groups.map((group) => <ExecutionGroup key={group.key} group={group} agents={agents} focused={selectedAgent === group.key} sectionRef={(element) => { sectionRefs.current[group.key] = element; }} onOpenFile={onOpenFile} />)}
+        {userEvents.map((event, turn) => <React.Fragment key={event.event_id || `request-${turn}`}>
+          <UserMessage event={event} task={selectedTask} userName={userName} userInitial={userInitial} />
+          {renderExecutionTurn(turn)}
+        </React.Fragment>)}
+        {[...new Set(groups.filter((group) => group.turn >= userEvents.length).map((group) => group.turn))].map((turn) => <React.Fragment key={`turn-${turn}`}>{renderExecutionTurn(turn)}</React.Fragment>)}
+        {approval && !approvalGroupKey && <ApprovalCard approval={approval} approverName={approverName} approving={approving} onApprove={onApprove} />}
+        {finalSummary && <FinalSummary event={finalSummary} />}
         {["running", "in_progress"].includes(snapshotStatus(selectedTask)) && <div className="running-indicator"><span className="pulse-dot" />Agent 正在执行</div>}
       </div>
     )}
@@ -183,15 +395,37 @@ type ComposerProps = {
   onLoadProvider: (provider: string) => Promise<RuntimeConfig>;
   onRuntimeChange: (input: { provider: string; model: string; thinking: string }) => void;
   onThinkingChange: (thinking: string) => void;
+  executionState: "idle" | "running" | "paused";
+  controlBusy: boolean;
+  onControl: (command: "pause" | "resume") => void;
+  modes: TaskModes;
+  modeAgents: Agent[];
+  lockTarget?: string | null;
+  onModesChange: (modes: TaskModes) => void;
 };
 
-export function Composer({ value, onChange, onSubmit, hasTask, canSubmit, runtimeConnected, runtimeConfig, runtimeBusy, onLoadProvider, onRuntimeChange, onThinkingChange }: ComposerProps) {
+export function Composer({ value, onChange, onSubmit, hasTask, canSubmit, runtimeConnected, runtimeConfig, runtimeBusy, onLoadProvider, onRuntimeChange, onThinkingChange, executionState, controlBusy, onControl, modes, modeAgents, lockTarget = null, onModesChange }: ComposerProps) {
+  const controlsTask = executionState !== "idle";
+  const actionLabel = executionState === "running" ? "暂停当前任务" : executionState === "paused" ? "继续当前任务" : hasTask ? "发送后续消息" : "提交任务";
+  const tooltip = executionState === "running" ? "点击暂停当前任务。" : executionState === "paused" ? "点击继续当前任务。" : hasTask ? "发送到当前任务；保留同一任务和对话记忆。" : "创建一个新任务并开始执行。";
   return <div className="composer-wrap">
     <form className="composer" onSubmit={onSubmit}>
       <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={hasTask ? "继续当前任务…" : "描述你想完成的任务…"} rows={3} aria-label="任务描述" />
       <div className="composer-send-row">
+        <ModeBar value={modes} agents={modeAgents} lockTarget={lockTarget} disabled={!runtimeConnected} onChange={onModesChange} />
         <RuntimeModelPicker config={runtimeConfig} connected={runtimeConnected} busy={runtimeBusy} onLoadProvider={onLoadProvider} onSelect={onRuntimeChange} onThinking={onThinkingChange} />
-        <button className="send-button" type="submit" disabled={!canSubmit} aria-label="提交任务" title="提交新任务">↑</button>
+        <button
+          className={`send-button ${executionState === "running" ? "send-button-running" : executionState === "paused" ? "send-button-paused" : ""}`}
+          type={controlsTask ? "button" : "submit"}
+          disabled={controlsTask ? !runtimeConnected || controlBusy : !canSubmit}
+          aria-label={actionLabel}
+          data-tooltip={tooltip}
+          onClick={controlsTask ? () => onControl(executionState === "running" ? "pause" : "resume") : undefined}
+        >
+          {executionState === "running"
+            ? <><span className="send-progress-ring" aria-hidden="true" /><span className="send-pause-icon" aria-hidden="true"><i /><i /></span></>
+            : executionState === "paused" ? <span className="send-play-icon" aria-hidden="true">▶</span> : "↑"}
+        </button>
       </div>
     </form>
   </div>;

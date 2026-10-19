@@ -93,6 +93,7 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         agentKey: Type.String(),
         task: Type.String({ description: "一个可独立验收的切片：一个接口、一个页面或一个组件" }),
         reason: Type.Optional(Type.String()),
+        integration: Type.Optional(Type.Boolean({ description: "是否为最终集成验证切片；多切片计划必须且只能有一个，由 tester 依赖全部工作切片执行" })),
         acceptanceCriteria: Type.Optional(Type.Array(Type.String(), { description: "该切片的 1–3 条验收标准" })),
         dependsOn: Type.Optional(Type.Array(Type.String(), { description: "必须先完成的切片 id" })),
         fileWriteAllowlist: Type.Optional(Type.Array(Type.String(), { description: "该切片允许写入的路径（目录或文件，例如 workspace/<项目>/frontend/src/pages/login）；同角色切片互不重叠时才会并行" })),
@@ -109,6 +110,9 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         }), { description: "逐项检查结果" }),
         evidence: Type.Optional(Type.Array(Type.Object({
           kind: Type.String({ description: "command | file | screenshot | url | note" }),
+          command: Type.Optional(Type.String({ description: "实际执行的完整命令，例如 npm test" })),
+          status: Type.Optional(Type.String({ description: "命令或检查结果：pass | fail" })),
+          exitCode: Type.Optional(Type.Integer({ description: "命令真实退出码；通过必须为 0" })),
           path: Type.Optional(Type.String({ description: "file/screenshot 的项目内路径" })),
           text: Type.Optional(Type.String({ description: "command/note：执行的命令与结果摘要" })),
           url: Type.Optional(Type.String()),
@@ -204,7 +208,7 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
 // 被 normalizeAssignments 过滤掉的派发项及原因；编排层据此识别“给了派发却全部无效”的情况。
 // 单次派发上限：最多 maxRoles 个不同角色；前端/后端可拆成多个切片，切片总数不超过 maxAssignments。
 export const MAX_DISPATCH_ROLES = 3;
-export const MAX_DISPATCH_ASSIGNMENTS = Number(process.env.PI_MAX_ASSIGNMENTS) || 8;
+export const MAX_DISPATCH_ASSIGNMENTS = Number(process.env.PI_MAX_ASSIGNMENTS) || 6;
 
 // 同一角色重复出现时，只有前端/后端的不同切片（不同 id 或不同任务）才算有效。
 function assignmentKey(item) {
@@ -246,6 +250,7 @@ export function normalizeAssignments(value, { selfAgentKey = null, maxRoles = MA
       agentKey: item.agentKey,
       task: item.task.trim(),
       reason: typeof item.reason === "string" ? item.reason.trim() : "",
+      ...(item.integration === true ? { integration: true } : {}),
       ...(Array.isArray(item.dependsOn) ? { dependsOn: item.dependsOn.filter((dependency) => typeof dependency === "string") } : {}),
       ...(Array.isArray(item.acceptanceCriteria) ? { acceptanceCriteria: item.acceptanceCriteria.filter((criterion) => typeof criterion === "string" && criterion.trim()).map((criterion) => criterion.trim()) } : {}),
       ...(Array.isArray(item.toolAllowlist) ? { toolAllowlist: item.toolAllowlist.filter((tool) => typeof tool === "string") } : {}),

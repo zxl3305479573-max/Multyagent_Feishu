@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, createProjectTool, diagramSkillPaths, extractText, mapPiToolEvent, normalizeAssignments, sanitizeAgentReply } from "../src/pi-agent.js";
 import { appendProjectSummary } from "../src/project-summary.js";
+import { describeToolCall } from "../src/agent/tool-events.js";
 
 test("diagram-design skill 对架构设计师和项目经理启用", async () => {
   const skill = await mkdtemp(join(tmpdir(), "diagram-skill-"));
@@ -209,16 +210,27 @@ test("Pi 工具事件映射为命令、文件变化和测试状态，不包含�
     type: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: { command: "npm test" },
   }, context);
   assert.ok(start.every((event) => event.tool_call_id === "c1"));
-  assert.ok(start.some((event) => event.type === "tool_call" && event.command === "npm test"));
+  assert.ok(start.some((event) => event.type === "tool_call" && event.command === "npm test" && event.summary === "运行测试：npm test"));
   assert.ok(start.some((event) => event.type === "test_started"));
   const result = mapPiToolEvent({
     type: "tool_execution_end", toolCallId: "c2", toolName: "write", isError: false,
     result: { content: [{ type: "text", text: "file content must not be logged" }] },
   }, context, { path: "src/auth.js", content: "secret file contents" });
   assert.deepEqual(result.map((event) => event.type), ["tool_result", "file_change"]);
+  assert.equal(result[0].summary, "写入文件：src/auth.js（完成）");
   assert.equal(result[1].file_path, "src/auth.js");
   assert.equal(JSON.stringify(result).includes("secret file contents"), false);
   assert.equal(JSON.stringify(result).includes("file content must not be logged"), false);
+});
+
+test("每次工具调用都有简短说明且不泄露参数中的密钥", () => {
+  assert.equal(describeToolCall("read", { path: "src/auth.js" }), "读取文件：src/auth.js");
+  assert.equal(describeToolCall("edit", { path: "src/login.tsx" }), "编辑文件：src/login.tsx");
+  assert.equal(describeToolCall("grep", { pattern: "TODO" }), "搜索内容：TODO");
+  assert.equal(describeToolCall("agent_cli", { action: "test" }), "执行受控命令：test");
+  assert.equal(describeToolCall("deliver_artifact", { summary: "完成登录接口" }), "提交交付：完成登录接口");
+  assert.match(describeToolCall("bash", { command: "TOKEN=secret-value npm run build" }), /TOKEN=\[REDACTED\]/);
+  assert.equal(describeToolCall("bash", { command: "TOKEN=secret-value npm run build" }).includes("secret-value"), false);
 });
 
 test("Pi test result and errors are concise structured events", () => {

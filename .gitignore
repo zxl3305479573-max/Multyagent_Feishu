@@ -8,6 +8,7 @@ logs/
 .pi/tasks/
 electron-smoke-*.log
 .electron-smoke-user*/
+test-results/
 npm-debug.log*
 /workspace/
 /runtime/

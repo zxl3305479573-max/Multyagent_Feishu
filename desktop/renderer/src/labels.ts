@@ -12,6 +12,7 @@ export const eventLabels: Record<string, string> = {
   task_terminated: "任务已终止",
   task_cancelled: "任务已取消",
   task_failed: "执行遇到问题",
+  final_summary: "最终总结",
   dispatch_started: "开始执行分配任务",
   dispatch_completed: "完成分配任务",
   dispatch_failed: "分配任务失败",
@@ -30,6 +31,12 @@ export const eventLabels: Record<string, string> = {
   acceptance_correction: "未提交验收结果，已要求测试补交",
   acceptance_missing: "测试未提交验收结果",
   acceptance_failed_handed_to_pm: "验收未通过，已交回项目经理",
+  acceptance_matrix_rejected: "验收矩阵不完整，已退回项目经理",
+  acceptance_evidence_correction: "验收证据不足，已要求补做",
+  quality_gate_blocked: "质量门禁尚未通过",
+  quality_gate_failed: "质量门禁未通过",
+  quality_gates_skipped: "用户明确跳过测试与审计",
+  quality_report_generated: "已生成质量门禁报告",
 };
 
 export const verdictLabels: Record<string, string> = { pass: "通过", fail: "未通过", skip: "跳过" };

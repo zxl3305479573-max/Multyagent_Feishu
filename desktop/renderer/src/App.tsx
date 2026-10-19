@@ -1,17 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Agent, AgentCard, AgentExecutionGroup, ControlCommand, CredentialStatus, DesktopSocket, EventRecord, PendingSubmission, RuntimeConfig, Task, WorkspaceView } from "./types";
+import type { Agent, AgentExecutionGroup, ControlCommand, CredentialStatus, DesktopSocket, EventRecord, PendingSubmission, RuntimeConfig, Task, WorkspaceView } from "./types";
 import { eventTime, finalResultOf, formatProjectCommandFeedback, mergeTasks, rootTaskId, snapshotStatus, taskStatus } from "./format";
-import { agentStatus, collectArtifacts, executionOwner, executionTiming, groupToolExecutions } from "./execution-view";
+import { agentStatus, collectArtifacts, executionTiming, groupAgentExecutionInstances, groupToolExecutions, splitConversationTurns } from "./execution-view";
 import { Sidebar } from "./components/Sidebar";
 import { SettingsView } from "./components/SettingsView";
 import { ProjectView } from "./components/ProjectView";
-import { AgentTraceView } from "./components/AgentTraceView";
-import { AgentStatusStrip } from "./components/AgentStatusStrip";
 import { Composer, ConversationView } from "./components/ConversationView";
 import { NewProjectModal } from "./components/NewProjectModal";
 import { TicketsView } from "./components/TicketsView";
 import { CapabilitiesView } from "./components/CapabilitiesView";
-import { ConfirmDialog } from "./components/ConfirmDialog";
+import type { TaskModes } from "./types";
+
+// 输入框下方模式切换的选择记在本机，下次打开沿用；读写失败（如隐私模式）时用默认值。
+const MODES_KEY = "desktop.taskModes";
+const DEFAULT_MODES: TaskModes = { mode: "auto", target: "team", runtime: "" };
+function loadModes(): TaskModes {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(MODES_KEY) || "null");
+    return saved && typeof saved === "object" ? { ...DEFAULT_MODES, ...saved } : DEFAULT_MODES;
+  } catch { return DEFAULT_MODES; }
+}
 
 let activeSocket: DesktopSocket | null = null;
 
@@ -86,7 +94,6 @@ export function App() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [selected, setSelected] = useState("");
-  const [selectedAgent, setSelectedAgent] = useState("");
   const [connection, setConnection] = useState("连接中");
   const [notice, setNotice] = useState("");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("conversation");
@@ -96,20 +103,41 @@ export function App() {
   const [configuredCredentials, setConfiguredCredentials] = useState<string[]>([]);
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus | null>(null);
   const [feishuEnabled, setFeishuEnabled] = useState(true);
+  const [userDisplayName, setUserDisplayName] = useState("我");
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [runtimeConfigBusy, setRuntimeConfigBusy] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectNameInput, setProjectNameInput] = useState("");
   const [projectPathInput, setProjectPathInput] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
-  const [confirmingTerminate, setConfirmingTerminate] = useState(false);
   const [pendingCommand, setPendingCommand] = useState<ControlCommand | null>(null);
   const [pendingProjectCommand, setPendingProjectCommand] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [taskHistory, setTaskHistory] = useState<Record<string, EventRecord[]>>({});
+  const [scrollToBottomRequest, setScrollToBottomRequest] = useState(0);
   const historyRequests = useRef(new Map<string, string>());
   const [now, setNow] = useState(Date.now());
   const pendingSubmission = useRef<PendingSubmission | null>(null);
+  const [modes, setModes] = useState<TaskModes>(loadModes);
+  const [approving, setApproving] = useState(false);
+  // 规划模式：确认后由编排层继续派发或执行；结果通过事件流回到对话里。
+  const approveTask = async (taskId: string) => {
+    setApproving(true);
+    try {
+      await request("approve_task", { taskId });
+      setNotice("已确认，正在执行…");
+    } catch (error) {
+      setNotice(`确认失败：${(error as Error).message}`);
+    } finally {
+      setApproving(false);
+    }
+  };
+  const updateModes = (next: TaskModes) => {
+    setModes(next);
+    try { window.localStorage.setItem(MODES_KEY, JSON.stringify(next)); } catch {}
+  };
+  // 提交时带上模式；runtime 为空表示沿用运行设置，不发送。
+  const modePayload = (forContinue = false) => ({ mode: modes.mode, ...(forContinue ? {} : { target: modes.target }), ...(modes.runtime ? { runtime: modes.runtime } : {}) });
   // 需要等结果的命令（工单页）：按 requestId 对应 command_result，不走通用的提示文案。
   const pendingRequests = useRef(new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>());
   const request = useCallback(<T,>(command: string, payload: Record<string, unknown> = {}) => new Promise<T>((resolve, reject) => {
@@ -118,7 +146,6 @@ export function App() {
     pendingRequests.current.set(requestId, { resolve: resolve as (value: unknown) => void, reject });
     activeSocket.send({ type: "command", command, ...payload, requestId });
   }), []);
-  const agentSectionRefs = useRef<Record<string, HTMLElement | null>>({});
   const selectedTask = useMemo(() => tasks.find((task) => task.task_id === selected), [tasks, selected]);
   const currentStatus = selectedTask?.status_snapshot?.status || selectedTask?.status;
   const isTaskActive = ["running", "in_progress"].includes(currentStatus || "");
@@ -149,51 +176,33 @@ export function App() {
   const taskStartedAt = taskEvents.find((event) => event.type === "task_started")?.timestamp || selectedTask?.created_at;
   const taskDuration = taskStartedAt ? Math.max(0, (settledAt ? Date.parse(settledAt) : now) - Date.parse(taskStartedAt)) : null;
   const agentExecutionGroups = useMemo<AgentExecutionGroup[]>(() => {
-    const groups = new Map<string, EventRecord[]>();
-    for (const event of taskEvents) {
-      if (event.type === "task_created") continue;
-      const key = executionOwner(event);
-      groups.set(key, [...(groups.get(key) || []), event]);
-    }
-    return [...groups.entries()].map(([key, groupEvents]) => {
-      const sortedEvents = groupEvents.sort((a, b) => eventTime(a) - eventTime(b));
-      const finalResult = finalResultOf(sortedEvents);
-      const timing = executionTiming(sortedEvents, now, settledAt);
-      const paths = new Set(sortedEvents.flatMap((event) => [event.file_path, ...collectArtifacts(event).map((item) => item.path)]).filter(Boolean).map((path) => path!.replaceAll("\\", "/")));
-      return {
-        key,
-        displayName: agents.find((agent) => agent.key === key)?.displayName || key,
-        events: sortedEvents,
-        items: groupToolExecutions(sortedEvents.filter((event) => event.type !== "delivery_received")),
-        status: agentStatus(sortedEvents, currentStatus),
-        assignedTask: [...sortedEvents].reverse().find((event) => event.assigned_task)?.assigned_task || (key === "project_manager" ? selectedTask?.description || selectedTask?.title || "" : ""),
-        ...timing,
-        toolCount: sortedEvents.filter((event) => event.type === "tool_call").length,
-        fileCount: paths.size,
-        testCount: sortedEvents.filter((event) => event.type === "test_started").length,
-        testFailed: sortedEvents.some((event) => event.type === "test_result" && event.status === "failed"),
-        finalResult,
-      };
+    const groups = splitConversationTurns(taskEvents).flatMap((turn) => {
+      return groupAgentExecutionInstances(turn.events.filter((event) => event.type !== "final_summary")).map(({ agentKey, executionId, events: groupEvents }) => {
+        const sortedEvents = groupEvents.sort((a, b) => eventTime(a) - eventTime(b));
+        const finalResult = finalResultOf(sortedEvents);
+        const timing = executionTiming(sortedEvents, now, settledAt);
+        const paths = new Set(sortedEvents.flatMap((event) => [event.file_path, ...collectArtifacts(event).map((item) => item.path)]).filter(Boolean).map((path) => path!.replaceAll("\\", "/")));
+        return {
+          key: `${turn.turn}:${agentKey}:${executionId}`,
+          agentKey,
+          executionId,
+          turn: turn.turn,
+          displayName: agents.find((agent) => agent.key === agentKey)?.displayName || agentKey,
+          events: sortedEvents,
+          items: groupToolExecutions(sortedEvents.filter((event) => event.type !== "delivery_received")),
+          status: agentStatus(sortedEvents, currentStatus),
+          assignedTask: [...sortedEvents].reverse().find((event) => event.assigned_task)?.assigned_task || (agentKey === "project_manager" ? selectedTask?.description || selectedTask?.title || "" : ""),
+          ...timing,
+          toolCount: sortedEvents.filter((event) => event.type === "tool_call").length,
+          fileCount: paths.size,
+          testCount: sortedEvents.filter((event) => event.type === "test_started").length,
+          testFailed: sortedEvents.some((event) => event.type === "test_result" && event.status === "failed"),
+          finalResult,
+        };
+      });
     });
+    return groups;
   }, [agents, taskEvents, selectedTask, currentStatus, now, settledAt]);
-  const inspectorEvents = useMemo(() => {
-    const matchesAgent = (event: EventRecord) => !selectedAgent || event.agent === selectedAgent || event.target === selectedAgent;
-    if (selected) return workspaceView === "agent" ? taskEvents.filter(matchesAgent) : taskEvents;
-    return events
-      .filter((event) => (!project || event.project_name === project) && matchesAgent(event))
-      .sort((a, b) => eventTime(a) - eventTime(b));
-  }, [events, project, selected, selectedAgent, taskEvents, workspaceView]);
-  const agentCards = useMemo<AgentCard[]>(() => agents
-    .filter((agent) => agent.enabled !== false)
-    .map((agent) => {
-      const matchingEvents = (selected ? taskEvents : events.filter((event) => !project || event.project_name === project))
-        .filter((event) => executionOwner(event) === agent.key)
-        .sort((a, b) => eventTime(a) - eventTime(b));
-      const latest = matchingEvents[matchingEvents.length - 1];
-      const taskIds = new Set(matchingEvents.map((event) => rootTaskId(event.task_id)).filter(Boolean));
-      const timing = executionTiming(matchingEvents, now, selected ? settledAt : undefined);
-      return { agent, status: agentStatus(matchingEvents, selected ? currentStatus : undefined), latest, taskCount: taskIds.size, durationMs: timing.durationMs };
-    }), [agents, events, project, selected, taskEvents, now, settledAt, currentStatus]);
   const projectStats = useMemo(() => ({
     taskCount: tasks.filter((task) => !project || task.project_name === project).length,
     eventCount: events.filter((event) => !project || event.project_name === project).length,
@@ -232,6 +241,7 @@ export function App() {
             const pending = pendingSubmission.current;
             pendingSubmission.current = null;
             currentSocket.send({ type: "command", command: "submit_task", ...pending, requestId: crypto.randomUUID() });
+            setScrollToBottomRequest((version) => version + 1);
             setNotice("已连接目标项目，正在创建任务…");
           }
         } else if (message.type === "command_result" && message.requestId && pendingRequests.current.has(message.requestId)) {
@@ -265,7 +275,6 @@ export function App() {
             };
             setTasks((current) => mergeTasks(current, [task]));
             setSelected(task.task_id || "");
-            setSelectedAgent("");
           }
           if (["pause", "resume", "terminate", "retry"].includes(message.command || "")) setPendingCommand(null);
           if (["export_project", "cleanup_history", "restore_history"].includes(message.command || "")) {
@@ -309,12 +318,15 @@ export function App() {
     };
   }, [project, refreshVersion]);
 
-  useEffect(() => setMobileNavOpen(false), [selected, selectedAgent, workspaceView, project, projectModalOpen]);
+  useEffect(() => setMobileNavOpen(false), [selected, workspaceView, project, projectModalOpen]);
 
   const refreshCredentials = () => {
     window.desktop?.credentials?.list?.().then(setConfiguredCredentials).catch(() => {});
     window.desktop?.credentials?.status?.().then(setCredentialStatus).catch(() => {});
-    window.desktop?.settings?.get?.().then((snapshot) => setFeishuEnabled(snapshot.entries.FEISHU_ENABLED?.effective !== "false")).catch(() => {});
+    window.desktop?.settings?.get?.().then((snapshot) => {
+      setFeishuEnabled(snapshot.entries.FEISHU_ENABLED?.effective !== "false");
+      setUserDisplayName(snapshot.entries.PI_USER_DISPLAY_NAME?.effective?.trim() || "我");
+    }).catch(() => {});
   };
   useEffect(refreshCredentials, []);
 
@@ -350,18 +362,10 @@ export function App() {
     activeSocket.send({ type: "command", command, taskId: selected, ...values, requestId: crypto.randomUUID() });
   };
 
-  const runControl = (command: ControlCommand) => {
+  const sendControl = (command: ControlCommand) => {
     if (!selected || !activeSocket || pendingCommand) return;
     setPendingCommand(command);
     send(command, command === "retry" ? { error: selectedTask?.status_snapshot?.latest_event || "manual retry" } : {});
-  };
-  const sendControl = (command: ControlCommand) => {
-    if (command === "terminate") {
-      if (!selected || !activeSocket || pendingCommand) return;
-      setConfirmingTerminate(true);
-      return;
-    }
-    runControl(command);
   };
 
   const projectCommand = (command: string) => {
@@ -397,7 +401,6 @@ export function App() {
       return;
     }
     setSelected("");
-    setSelectedAgent("");
     setWorkspaceView("conversation");
     setTaskProject(selectedProject);
     setTitle("");
@@ -441,8 +444,10 @@ export function App() {
         command: "continue_task",
         taskId: selectedTask.task_id,
         message: description.trim(),
+        ...modePayload(true),
         requestId: crypto.randomUUID(),
       });
+      setScrollToBottomRequest((version) => version + 1);
       setDescription("");
       setNotice("正在发送到当前任务…");
       return;
@@ -452,7 +457,7 @@ export function App() {
       return;
     }
     if (taskProject.trim() !== project && project) {
-      pendingSubmission.current = { projectName: taskProject.trim(), title: title.trim(), description: description.trim() };
+      pendingSubmission.current = { projectName: taskProject.trim(), title: title.trim(), description: description.trim(), ...modePayload() };
       setConnection("连接中");
       setProject(taskProject.trim());
       setDescription("");
@@ -469,21 +474,14 @@ export function App() {
       projectName: taskProject.trim(),
       title: title.trim(),
       description: description.trim(),
+      ...modePayload(),
       requestId: crypto.randomUUID(),
     });
+    setScrollToBottomRequest((version) => version + 1);
     setDescription("");
     setNotice("正在创建任务…");
   };
 
-  const scrollToAgent = (agentKey: string) => {
-    setSelectedAgent(agentKey);
-    setWorkspaceView("conversation");
-    requestAnimationFrame(() => {
-      const section = agentSectionRefs.current[agentKey];
-      if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
-      else setNotice("当前任务尚未产生该 Agent 的执行记录");
-    });
-  };
   const openEventFile = async (event: EventRecord) => {
     if (!event.file_path) return;
     if (!window.desktop?.openFile) { setNotice("请在桌面应用中打开交付文件"); return; }
@@ -523,13 +521,11 @@ export function App() {
   const showSettings = () => {
     setWorkspaceView("settings");
     setSelected("");
-    setSelectedAgent("");
     refreshCredentials();
   };
   const selectProject = (value: string) => {
     setProject(value);
     setSelected("");
-    setSelectedAgent("");
     setTaskProject(value);
     setWorkspaceView("conversation");
   };
@@ -538,8 +534,7 @@ export function App() {
     : workspaceView === "tickets" ? "GitHub 工单"
     : workspaceView === "capabilities" ? "机器人能力"
     : workspaceView === "project" ? "项目上下文"
-      : workspaceView === "agent" ? `${agents.find((agent) => agent.key === selectedAgent)?.displayName || selectedAgent || "全部 Agent"} · 执行观察`
-        : selectedTask?.title || (selected ? selected : "新建任务");
+      : selectedTask?.title || (selected ? selected : "新建任务");
   const headerSubtitle = workspaceView === "settings" ? "管理全部运行配置"
     : workspaceView === "tickets" ? project || "全部项目"
     : workspaceView === "capabilities" ? "为各个角色添加 Skill 与插件"
@@ -558,20 +553,13 @@ export function App() {
         onRefresh={() => setRefreshVersion((version) => version + 1)}
         tasks={visibleTasks}
         selected={selected}
-        selectedTask={selectedTask}
-        onSelectTask={(taskId) => { setSelected(taskId); setSelectedAgent(""); setWorkspaceView("conversation"); }}
-        pendingCommand={pendingCommand}
-        onControl={sendControl}
-        onObserve={() => { setSelectedAgent(""); setWorkspaceView("agent"); }}
+        onSelectTask={(taskId) => { setSelected(taskId); setWorkspaceView("conversation"); }}
         connection={connection}
         projectStats={projectStats}
-        onOpenProject={() => { setWorkspaceView("project"); setSelected(""); setSelectedAgent(""); }}
-        agents={agents}
-        selectedAgent={selectedAgent}
-        onObserveAgent={(agentKey) => { setSelectedAgent(agentKey); setWorkspaceView("agent"); }}
+        onOpenProject={() => { setWorkspaceView("project"); setSelected(""); }}
         onOpenSettings={showSettings}
-        onOpenTickets={() => { setWorkspaceView("tickets"); setSelectedAgent(""); }}
-        onOpenCapabilities={() => { setWorkspaceView("capabilities"); setSelectedAgent(""); }}
+        onOpenTickets={() => setWorkspaceView("tickets")}
+        onOpenCapabilities={() => setWorkspaceView("capabilities")}
         onNewProject={openNewProject}
         onNewConversation={openNewProjectConversation}
       />
@@ -580,10 +568,9 @@ export function App() {
         <header className="workspace-header">
           <div className="conversation-heading">
             <button className="icon-button mobile-nav-toggle" aria-label="打开导航" title="打开导航" onClick={() => setMobileNavOpen(true)}>☰</button>
-            {workspaceView !== "conversation" && <button className="workspace-back-button" onClick={() => { setWorkspaceView("conversation"); setSelectedAgent(""); }} aria-label="返回对话" title="返回对话">‹ <span>返回对话</span></button>}
+            {workspaceView !== "conversation" && <button className="workspace-back-button" onClick={() => setWorkspaceView("conversation")} aria-label="返回对话" title="返回对话">‹ <span>返回对话</span></button>}
             <div className="conversation-heading-copy"><h1>{headerTitle}</h1><span className="header-project">{headerSubtitle}</span></div>
           </div>
-          {workspaceView === "conversation" && <AgentStatusStrip cards={agentCards} selectedAgent={selectedAgent} onSelect={scrollToAgent} events={taskEvents} />}
           {workspaceView === "conversation" && selectedTask && <span className={`task-state state-${snapshotStatus(selectedTask)}`}><i />{taskStatus(selectedTask)}</span>}
         </header>
 
@@ -594,30 +581,31 @@ export function App() {
 
         {workspaceView === "settings" && <SettingsView onSaved={refreshCredentials} onNotice={setNotice} />}
         {workspaceView === "capabilities" && <CapabilitiesView agents={agents} connected={connection === "已连接"} request={request} onNotice={setNotice} />}
-        {workspaceView === "tickets" && <TicketsView project={project} projects={projects} connected={connection === "已连接"} request={request} onNotice={setNotice} onOpenTask={(taskId) => { setSelected(taskId); setSelectedAgent(""); setWorkspaceView("conversation"); }} />}
+        {workspaceView === "tickets" && <TicketsView project={project} projects={projects} connected={connection === "已连接"} request={request} onNotice={setNotice} onOpenTask={(taskId) => { setSelected(taskId); setWorkspaceView("conversation"); }} />}
         {workspaceView === "project" && <ProjectView
           project={project}
           projects={projects}
           connected={connection === "已连接"}
           stats={projectStats}
           pendingCommand={pendingProjectCommand}
-          onSelectProject={(value) => { setProject(value); setSelected(""); setSelectedAgent(""); }}
+          onSelectProject={(value) => { setProject(value); setSelected(""); }}
           onCommand={projectCommand}
         />}
-        {workspaceView === "agent" && <AgentTraceView agents={agents} selectedAgent={selectedAgent} taskTitle={selected ? selectedTask?.title || selected : ""} events={inspectorEvents} onOpenFile={(event) => void openEventFile(event)} />}
         {workspaceView === "conversation" && <ConversationView
           selected={selected}
           selectedTask={selectedTask}
           project={project}
           agents={agents}
-          selectedAgent={selectedAgent}
+          userDisplayName={userDisplayName}
           taskEvents={taskEvents}
           taskEventsLoading={taskEventsLoading}
           groups={agentExecutionGroups}
           taskStartedAt={taskStartedAt}
           taskDuration={taskDuration}
-          sectionRefs={agentSectionRefs}
+          scrollToBottomRequest={scrollToBottomRequest}
           onOpenFile={(event) => void openEventFile(event)}
+          approving={approving}
+          onApprove={(taskId) => void approveTask(taskId)}
         />}
 
         {workspaceView === "conversation" && <Composer
@@ -632,6 +620,13 @@ export function App() {
           onLoadProvider={loadRuntimeModels}
           onRuntimeChange={(input) => void changeRuntimeConfig(input)}
           onThinkingChange={changeThinking}
+          executionState={currentStatus === "paused" ? "paused" : isTaskActive ? "running" : "idle"}
+          controlBusy={pendingCommand !== null}
+          onControl={(command) => sendControl(command)}
+          modes={modes}
+          modeAgents={agents}
+          lockTarget={selectedTask ? (selectedTask.agent && selectedTask.agent !== "project_manager" ? selectedTask.agent : "team") : null}
+          onModesChange={updateModes}
         />}
       </section>
 
@@ -644,17 +639,6 @@ export function App() {
         onChooseDirectory={() => void chooseProjectDirectory()}
         onSubmit={createProject}
         onClose={() => setProjectModalOpen(false)}
-      />}
-      {confirmingTerminate && <ConfirmDialog
-        title="终止当前任务？"
-        description="终止后仍会保留历史记录，但该任务不能继续执行。"
-        confirmLabel="终止任务"
-        tone="danger"
-        onConfirm={() => {
-          setConfirmingTerminate(false);
-          runControl("terminate");
-        }}
-        onCancel={() => setConfirmingTerminate(false)}
       />}
     </main>
   );

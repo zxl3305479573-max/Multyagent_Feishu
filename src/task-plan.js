@@ -1,6 +1,8 @@
+import { validateAcceptanceMatrix, validateIntegrationSlice } from "./quality-gates.js";
+
 const PROJECT_SLUG = /^[a-z][a-z0-9-]*$/;
 // 一份计划的切片总数上限：拆得过细会让派发轮次和汇总成本失控。
-export const MAX_PLAN_ASSIGNMENTS = Number(process.env.PI_MAX_PLAN_ASSIGNMENTS) || 12;
+export const MAX_PLAN_ASSIGNMENTS = Number(process.env.PI_MAX_PLAN_ASSIGNMENTS) || 6;
 
 function stringList(value) {
   return Array.isArray(value) ? value.filter((item) => typeof item === "string").map((item) => item.trim()) : [];
@@ -96,12 +98,21 @@ export function validateTaskPlan(input, { projectName, roleLimits = {} } = {}) {
         networkPolicy: { enabled: networkPolicy.enabled === true, domains },
         acceptanceCriteria: stringList(assignment.acceptanceCriteria),
         approvalRequired: assignment.approvalRequired !== false,
+        integration: assignment.integration === true,
       };
       if (id) assignments.set(id, { stageIndex, assignment: normalized });
       resultAssignments.push(normalized);
     }
     resultStages.push({ id: stageId, assignments: resultAssignments });
   }
+
+  const assignmentList = [...assignments.values()].map((item) => item.assignment);
+  const integrationCheck = validateIntegrationSlice(assignmentList);
+  errors.push(...integrationCheck.errors);
+  const matrixCheck = input.acceptanceMatrix === undefined
+    ? { valid: true, errors: [], matrix: [] }
+    : validateAcceptanceMatrix(input.acceptanceMatrix, assignmentList);
+  errors.push(...matrixCheck.errors);
 
   return {
     valid: errors.length === 0,
@@ -111,6 +122,7 @@ export function validateTaskPlan(input, { projectName, roleLimits = {} } = {}) {
       goal: input.goal.trim(),
       stages: resultStages,
       acceptanceCriteria: stringList(input.acceptanceCriteria),
+      ...(matrixCheck.matrix.length ? { acceptanceMatrix: matrixCheck.matrix } : {}),
     } : null,
   };
 }

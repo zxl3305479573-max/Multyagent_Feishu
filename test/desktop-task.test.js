@@ -143,6 +143,14 @@ test("desktop follow-ups reuse the same root task and resume its persisted Pi se
     const finalTask = await store.get(created.taskId);
     assert.equal(finalTask.session_file, "runtime/sessions/student/project_manager/session-2.jsonl");
     assert.deepEqual(finalTask.conversation_memory.map((item) => item.role), ["user", "assistant", "user", "assistant"]);
+
+    await submit.continueTask({ taskId: created.taskId, message: "这次明确跳过测试和审计", requestId: "follow-up-skip" });
+    await submit.whenIdle();
+    const skippedTask = await store.get(created.taskId);
+    assert.equal(skippedTask.quality_policy.skipTestingAndAudit, true);
+    assert.equal(skippedTask.quality_gates.audit, "not_required");
+    assert.equal(skippedTask.quality_gates.independent_acceptance, "not_required");
+    assert.ok(events.some((event) => event.type === "quality_gates_skipped" && event.task_id === created.taskId));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

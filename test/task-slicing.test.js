@@ -4,7 +4,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator } from "../src/orchestrator.js";
-import { ensureAssignmentIds, scheduleByRole, sequenceAssignments, sliceInfoFor, writeScopesOverlap } from "../src/orchestrator/assignments.js";
+import { agentInstanceLabel, ensureAssignmentIds, scheduleByRole, sequenceAssignments, sliceInfoFor, writeScopesOverlap } from "../src/orchestrator/assignments.js";
 import { overlappingSlices, oversizedAssignments } from "../src/orchestrator/guards.js";
 import { deliveryNameFor } from "../src/artifacts.js";
 import { createPolicyFactory } from "../src/pi-agent.js";
@@ -18,25 +18,28 @@ const client = { im: { message: { create: async () => ({ code: 0 }) } } };
 // 记录每次派发的角色、子任务 ID、提示词与任务权限，并统计每个角色同时运行的切片峰值。
 function setup() {
   const runs = [];
+  const events = [];
   const active = new Map();
   const peak = new Map();
   const orch = createOrchestrator({
     log: quiet,
+    onEvent: async (event) => events.push(event),
     runAgent: async (agent, prompt, options) => {
       active.set(agent.key, (active.get(agent.key) || 0) + 1);
       peak.set(agent.key, Math.max(peak.get(agent.key) || 0, active.get(agent.key)));
-      runs.push({ agentKey: agent.key, taskId: options.taskId, prompt, taskPermissions: options.taskPermissions });
+      runs.push({ agentKey: agent.key, displayName: agent.displayName, taskId: options.taskId, prompt, taskPermissions: options.taskPermissions });
       await new Promise((resolve) => setTimeout(resolve, 5));
       active.set(agent.key, active.get(agent.key) - 1);
-      return { text: "done", delivery: { summary: `${agent.key} done`, artifactPaths: [], artifactsDir: "d", final: true } };
+      const artifactPath = agent.key === "project_manager" ? null : `workspace/default/artifacts/${agent.key}.${options.taskId.split(":").at(-1)}.md`;
+      return { text: "done", delivery: { summary: `${agent.key} done`, artifactPaths: artifactPath ? [artifactPath] : [], artifactItems: artifactPath ? [{ path: artifactPath, description: `${agent.displayName} 交付` }] : [], artifactsDir: "d", final: true } };
     },
   });
   for (const key of ["project_manager", "frontend_developer", "backend_developer"]) orch.registerRole({ key, displayName: key, appId: "x" }, client);
-  return { orch, runs, overlapped: () => [...peak.values()].some((count) => count > 1), peakOf: (key) => peak.get(key) || 0 };
+  return { orch, runs, events, overlapped: () => [...peak.values()].some((count) => count > 1), peakOf: (key) => peak.get(key) || 0 };
 }
 
 test("未声明写入范围时同一角色的多个切片依次执行，其他角色并行推进，全部完成后交回项目经理", async () => {
-  const { orch, runs, overlapped } = setup();
+  const { orch, runs, events, overlapped } = setup();
   await orch.onTaskCompleted("project_manager", "T-slice", {
     delivery: {
       summary: "拆分",
@@ -54,6 +57,8 @@ test("未声明写入范围时同一角色的多个切片依次执行，其他�
   assert.equal(overlapped(), false, "同角色切片不能并行");
   const frontend = runs.filter((run) => run.agentKey === "frontend_developer");
   assert.equal(frontend.length, 2);
+  assert.deepEqual(frontend.map((run) => run.displayName), ["1号frontend_developer", "2号frontend_developer"]);
+  assert.deepEqual(events.filter((event) => event.type === "dispatch_started" && event.target === "frontend_developer").map((event) => event.agent_name), ["1号frontend_developer", "2号frontend_developer"]);
   assert.match(frontend[0].taskId, /:frontend_developer\.fe-login$/);
   assert.match(frontend[1].taskId, /:frontend_developer\.fe-list$/);
   assert.doesNotMatch(frontend[0].prompt, /你只能修改这些路径/);
@@ -66,6 +71,23 @@ test("未声明写入范围时同一角色的多个切片依次执行，其他�
   assert.doesNotMatch(runs.find((run) => run.agentKey === "backend_developer").taskId, /backend_developer\./, "单条 assignment 的子任务 ID 保持原格式");
   assert.equal(runs.at(-1).agentKey, "project_manager");
   assert.equal(runs.filter((run) => run.agentKey === "project_manager").length, 1, "只汇总一次");
+  const finalRun = runs.at(-1);
+  assert.match(finalRun.prompt, /执行汇总（系统统计）：/);
+  assert.match(finalRun.prompt, /子机器人交付：3 项/);
+  assert.match(finalRun.prompt, /交付文件：3 个/);
+  const finalDelivery = events.filter((event) => event.type === "delivery_received" && event.agent === "project_manager").at(-1);
+  assert.equal(finalDelivery.aggregate_delivery_count, 3);
+  assert.equal(finalDelivery.aggregate_agent_count, 2);
+  assert.equal(finalDelivery.artifact_count, 3);
+  assert.equal(finalDelivery.artifact_paths.length, 3);
+  assert.match(finalDelivery.summary, /执行汇总（系统统计）/);
+  const finalSummaries = events.filter((event) => event.type === "final_summary");
+  assert.equal(finalSummaries.length, 1, "全部任务结束后只单独输出一次最终总结");
+  assert.equal(finalSummaries[0].agent, "project_manager");
+  assert.equal(finalSummaries[0].artifact_count, 3);
+  assert.match(finalSummaries[0].summary, /子任务结论/);
+  const types = events.map((event) => event.type);
+  assert.ok(types.lastIndexOf("final_summary") > types.lastIndexOf("task_settle"), "最终总结必须晚于任务结算");
 });
 
 test("显式计划里同一阶段的同角色切片也串行，dependsOn 照常生效", async () => {
@@ -97,6 +119,9 @@ test("sequenceAssignments 把两条及以上的派发转成计划并补齐 id，
   const withArchitect = sequenceAssignments({ summary: "s", assignments: [{ agentKey: "architect", task: "d" }, ...flat.assignments] });
   assert.deepEqual(withArchitect.plan.stages[1].assignments.map((item) => item.id), ["frontend_developer-1", "frontend_developer-2"]);
   assert.deepEqual(ensureAssignmentIds([{ id: "x", agentKey: "a" }, { id: "x", agentKey: "a" }]).map((item) => item.id), ["x", "x-2"]);
+  assert.equal(agentInstanceLabel("前端开发", { index: 1, total: 3 }), "1号前端开发");
+  assert.equal(agentInstanceLabel("前端开发", { index: 2, total: 3 }), "2号前端开发");
+  assert.equal(agentInstanceLabel("前端开发", { index: 1, total: 1 }), "前端开发");
 });
 
 test("scheduleByRole 只让写入范围互不重叠的同角色切片并行，并受并发上限约束", () => {
@@ -133,7 +158,7 @@ test("normalizeAssignments 允许前端/后端多切片，其他角色仍按角�
   assert.deepEqual(result[0].acceptanceCriteria, ["可见"]);
   assert.deepEqual(droppedAssignments(input, { selfAgentKey: "project_manager" }).map((item) => item.reason), ["重复派发", "重复派发"]);
   const many = Array.from({ length: 10 }, (_, index) => ({ id: `s${index}`, agentKey: "backend_developer", task: `接口 ${index}` }));
-  assert.equal(normalizeAssignments(many).length, 8);
+  assert.equal(normalizeAssignments(many).length, 6);
 });
 
 test("oversizedAssignments 只拦截明显过大的前端/后端任务", () => {
@@ -161,7 +186,7 @@ test("deliver_artifact 对过大的派发打回一次，原样重交则放行并
 test("validateTaskPlan 限制计划的切片总数", () => {
   const assignments = Array.from({ length: 13 }, (_, index) => ({ id: `s${index}`, agentKey: "backend_developer", task: "t" }));
   const checked = validateTaskPlan({ project: "demo", goal: "g", stages: [{ id: "s", assignments }] }, { roleLimits: { backend_developer: {} } });
-  assert.ok(checked.errors.some((error) => /within 12 slices/.test(error)));
+  assert.ok(checked.errors.some((error) => /within 6 slices/.test(error)));
 });
 
 test("同角色切片声明了互不重叠的写入范围时并行执行，提示词与权限只含本切片范围", async () => {
