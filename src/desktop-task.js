@@ -3,7 +3,7 @@ import { buildValidatedHandoff } from "./domain/delivery.js";
 import { loadProjectSummaryFor } from "./gateway.js";
 import { isTerminated } from "./tasks.js";
 import { ASK_TOOL_ALLOWLIST, applyModeToDelivery, modeInstruction, normalizeModes } from "./desktop-modes.js";
-import { qualityPolicyForTask } from "./quality-gates.js";
+import { createQualityGates, qualityPolicyForTask, requestsQualitySkip, withQualitySkip } from "./quality-gates.js";
 
 const DESKTOP_CHAT_ID = "desktop-local";
 
@@ -72,12 +72,15 @@ export function createDesktopTaskSubmitter({
     const storedTask = followUp && typeof taskStore.getRoot === "function" ? await taskStore.getRoot(task.task_id) : task;
     const sessionFile = storedTask?.session_file || null;
     const memory = formatMemory(storedTask?.conversation_memory);
-    const qualityPolicy = storedTask?.quality_policy || qualityPolicyForTask({
+    const storedPolicy = storedTask?.quality_policy || qualityPolicyForTask({
       team: !singleRole,
       singleRole,
       mode: modes.mode,
       description: input.description,
     });
+    const qualityPolicy = followUp && requestsQualitySkip(input.description)
+      ? withQualitySkip(storedPolicy)
+      : storedPolicy;
     const onEvent = (event) => recordEvent({
       ...event,
       task_id: event.task_id || task.task_id,
@@ -86,6 +89,18 @@ export function createDesktopTaskSubmitter({
       channel: "desktop",
     });
     try {
+      if (followUp && qualityPolicy.skipTestingAndAudit && !storedPolicy.skipTestingAndAudit) {
+        const skippedGates = createQualityGates(qualityPolicy);
+        await taskStore.update?.(task.task_id, {
+          quality_policy: qualityPolicy,
+          quality_gates: skippedGates,
+          status_snapshot: {
+            ...(storedTask?.status_snapshot || {}),
+            quality_gates: skippedGates,
+          },
+        });
+        await onEvent({ type: "quality_gates_skipped", task_id: task.task_id, agent: "project_manager", reason: "explicit_user_request" });
+      }
       if (followUp) {
         await onEvent({
           type: "task_reused",

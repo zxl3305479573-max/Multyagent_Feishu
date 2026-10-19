@@ -14,20 +14,51 @@ import {
   missingAcceptanceEvidence,
   qualityGateReady,
   qualityPolicyForTask,
+  requestsQualitySkip,
   reduceQualityGates,
   validateAcceptanceMatrix,
   validateIntegrationSlice,
 } from "../src/quality-gates.js";
 
-test("quality policy requires independent acceptance, browser evidence and audit for sensitive UI tasks", () => {
+test("quality policy requires independent acceptance, evidence and audit for every implementation task", () => {
   const policy = qualityPolicyForTask({ team: true, mode: "auto", description: "实现登录页面和会话认证" });
   assert.equal(policy.independentAcceptance, true);
   assert.equal(policy.acceptanceMatrix, true);
   assert.equal(policy.e2e, true);
   assert.equal(policy.audit, true);
   assert.deepEqual(policy.requiredEvidence, ["typecheck", "test", "build", "e2e"]);
+  const ordinary = qualityPolicyForTask({ team: true, mode: "auto", description: "实现数据导出接口" });
+  assert.equal(ordinary.independentAcceptance, true);
+  assert.equal(ordinary.audit, true, "普通实现任务也必须经过审计");
   assert.equal(qualityPolicyForTask({ team: true, mode: "ask", description: "解释代码" }).independentAcceptance, false);
   assert.equal(qualityPolicyForTask({ team: true, singleRole: true, mode: "auto", description: "登录" }).independentAcceptance, false);
+});
+
+test("only an explicit user request can skip both testing and audit", () => {
+  assert.equal(requestsQualitySkip("实现页面并跳过测试和审计"), true);
+  assert.equal(requestsQualitySkip("测试和审计都跳过"), true);
+  assert.equal(requestsQualitySkip("不需要测试和审计"), true);
+  assert.equal(requestsQualitySkip("不要跳过测试和审计"), false);
+  const skipped = qualityPolicyForTask({ team: true, description: "实现页面，明确跳过测试和审计" });
+  assert.equal(skipped.skipTestingAndAudit, true);
+  assert.equal(skipped.independentAcceptance, false);
+  assert.equal(skipped.audit, false);
+  assert.deepEqual(skipped.requiredEvidence, []);
+  assert.equal(qualityPolicyForTask({ team: false, singleRole: true, description: "实现页面，跳过测试和审计" }).skipTestingAndAudit, false);
+});
+
+test("developer and project-manager self-tests are reference-only and cannot satisfy final gates", () => {
+  let gates = createQualityGates({ implementationRequired: true, independentAcceptance: true, audit: true });
+  gates = reduceQualityGates(gates, { type: "task_plan_completed" });
+  gates = reduceQualityGates(gates, { type: "test_result", agent: "backend_developer", status: "failed", command: "npm test" });
+  gates = reduceQualityGates(gates, { type: "acceptance_submitted", agent: "project_manager", verdict: "pass", checks: [{ status: "pass" }] });
+  assert.equal(gates.self_test, "failed");
+  assert.equal(gates.independent_acceptance, "pending", "项目经理自测不能写入独立验收");
+  gates = reduceQualityGates(gates, { type: "acceptance_submitted", agent: "tester", verdict: "pass", checks: [{ status: "pass" }] });
+  gates = reduceQualityGates(gates, { type: "delivery_received", agent: "auditor", blockers: [] });
+  assert.equal(qualityGateReady(gates), true, "开发自测失败不替代 tester 与 auditor 的独立结论");
+  gates = reduceQualityGates(gates, { type: "task_settle" });
+  assert.equal(gates.product, "passed");
 });
 
 test("quality gates do not enter product-complete until independent acceptance and audit pass", () => {
@@ -196,7 +227,7 @@ test("quality report and final summary are generated from AC results, commands a
   assert.match(summary, /quality-report\.md/);
 });
 
-test("project manager final cannot settle before the orchestrator schedules independent acceptance", async () => {
+test("every implementation task passes independent acceptance and audit before project-manager settlement", async () => {
   const root = await mkdtemp(join(tmpdir(), "quality-orchestrator-"));
   const projectName = `quality-${Date.now()}`;
   try {
@@ -244,11 +275,15 @@ test("project manager final cannot settle before the orchestrator schedules inde
             },
           };
         }
+        if (agent.key === "auditor") {
+          return { text: "独立审计通过", projectName, delivery: { agentKey: "auditor", summary: "独立审计通过，无阻塞", blockers: [], artifactPaths: [], final: true } };
+        }
         return { text: "最终汇总", projectName, delivery: { agentKey: "project_manager", summary: "最终汇总", artifactPaths: [], final: true } };
       },
     });
     orch.registerRole({ key: "project_manager", displayName: "项目经理" }, null);
     orch.registerRole({ key: "tester", displayName: "测试" }, null);
+    orch.registerRole({ key: "auditor", displayName: "审计" }, null);
     const context = {
       chatId: "desktop-local",
       channel: "desktop",
@@ -257,7 +292,7 @@ test("project manager final cannot settle before the orchestrator schedules inde
       requireIndependentAcceptance: true,
       requireAcceptanceMatrix: true,
       requireE2E: true,
-      requireAudit: false,
+      requireAudit: true,
     };
     await orch.onTaskCompleted("project_manager", task.taskId, {
       delivery: { agentKey: "project_manager", summary: "实现完成", artifactPaths: [], final: true },
@@ -265,11 +300,13 @@ test("project manager final cannot settle before the orchestrator schedules inde
       context,
     });
     await orch.whenIdle();
-    assert.deepEqual(runs.map((item) => item.agent), ["tester", "project_manager"]);
+    assert.deepEqual(runs.map((item) => item.agent), ["tester", "project_manager", "auditor", "project_manager"]);
     const finalTask = await store.get(task.taskId);
     assert.equal(finalTask.quality_gates.independent_acceptance, "passed");
+    assert.equal(finalTask.quality_gates.audit, "passed");
     assert.equal(finalTask.quality_gates.product, "passed");
     assert.ok(events.some((event) => event.type === "quality_gate_blocked" && event.gate === "independent_acceptance"));
+    assert.ok(events.some((event) => event.type === "quality_gate_blocked" && event.gate === "audit"));
     assert.ok(events.some((event) => event.type === "quality_report_generated" && event.product_ready === true));
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -329,6 +366,43 @@ test("security-sensitive tasks cannot settle until the auditor passes after inde
     assert.equal(finalTask.quality_gates.audit, "passed");
     assert.equal(finalTask.quality_gates.product, "passed");
     assert.ok(events.some((event) => event.type === "quality_gate_blocked" && event.gate === "audit"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(join(process.cwd(), "workspace", projectName), { recursive: true, force: true });
+  }
+});
+
+test("an explicit user request lets the project manager skip both independent testing and audit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "quality-skip-"));
+  const projectName = `quality-skip-${Date.now()}`;
+  try {
+    const store = new TaskStore(join(root, "tasks.json"));
+    configureTaskStore(store);
+    const policy = qualityPolicyForTask({ team: true, description: "实现页面，明确跳过测试和审计" });
+    const task = await createTask({ agentKey: "project_manager", chatId: "desktop-local", projectName, quality_policy: policy });
+    await store.applyEvent({ type: "task_plan_completed", task_id: task.taskId });
+    const events = [];
+    const runs = [];
+    const orch = createOrchestrator({
+      log: { info() {}, warn() {}, error() {} },
+      onEvent: async (event) => { events.push(event); await store.applyEvent(event); },
+      runAgent: async (agent) => { runs.push(agent.key); return { delivery: { summary: "done", artifactPaths: [], final: true } }; },
+    });
+    orch.registerRole({ key: "project_manager", displayName: "项目经理" }, null);
+    orch.registerRole({ key: "tester", displayName: "测试" }, null);
+    orch.registerRole({ key: "auditor", displayName: "审计" }, null);
+    await orch.onTaskCompleted("project_manager", task.taskId, {
+      delivery: { agentKey: "project_manager", summary: "按用户要求跳过测试与审计", artifactPaths: [], final: true },
+      context: { chatId: "desktop-local", channel: "desktop", projectName, qualityPolicy: policy },
+    });
+    await orch.whenIdle();
+    assert.deepEqual(runs, [], "用户明确跳过时不得再拉起 tester 或 auditor");
+    const finalTask = await store.get(task.taskId);
+    assert.equal(finalTask.quality_policy.skipTestingAndAudit, true);
+    assert.equal(finalTask.quality_gates.audit, "not_required");
+    assert.equal(finalTask.quality_gates.independent_acceptance, "not_required");
+    assert.equal(finalTask.quality_gates.product, "passed");
+    assert.equal(events.some((event) => event.type === "quality_gate_blocked"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(join(process.cwd(), "workspace", projectName), { recursive: true, force: true });

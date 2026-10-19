@@ -1,6 +1,6 @@
 import { createTask, findRecentTask, findTaskByRoot, setPaused, isTerminated, updateTask } from "./tasks.js";
 import { buildValidatedHandoff } from "./domain/delivery.js";
-import { qualityPolicyForTask } from "./quality-gates.js";
+import { createQualityGates, qualityPolicyForTask, requestsQualitySkip, withQualitySkip } from "./quality-gates.js";
 import { readProjectSummary } from "./project-summary.js";
 import { loadTaskStatus } from "./task-status.js";
 
@@ -294,6 +294,14 @@ export function createRoleHandler({ agent, client, runAgent, isAllowedChat = () 
       await onEvent({ type: "task_created", task_id: task.taskId, agent: agent.key, chat_id: message.chatId, message_id: message.messageId, text: text.slice(0, 200) });
     }
     else { await updateTask(task.taskId, { lastMessageId: message.messageId }); await onEvent({ type: "task_reused", task_id: task.taskId, agent: agent.key, chat_id: message.chatId, message_id: message.messageId, text: text.slice(0, 200) }); }
+    if (agent.key === "project_manager" && requestsQualitySkip(text) && !task.quality_policy?.skipTestingAndAudit) {
+      const qualityPolicy = withQualitySkip(task.quality_policy || qualityPolicyForTask({ team: true, mode: "auto", description: text }));
+      const qualityGates = createQualityGates(qualityPolicy);
+      await updateTask(task.taskId, { quality_policy: qualityPolicy, quality_gates: qualityGates });
+      task.quality_policy = qualityPolicy;
+      task.quality_gates = qualityGates;
+      await onEvent({ type: "quality_gates_skipped", task_id: task.taskId, agent: "project_manager", chat_id: message.chatId, reason: "explicit_user_request" });
+    }
     const control = parseControlCommand(text);
     if (control) { await setPaused(task.taskId, control === "pause"); await sendCard(client, message.chatId, buildTextCard({ text: control === "pause" ? "任务已暂停。" : "任务已恢复。" }, agent)); return; }
     await sendCard(client, message.chatId, buildTaskReceivedCard(agent, task.taskId, text));

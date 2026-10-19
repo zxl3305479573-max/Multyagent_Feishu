@@ -16,6 +16,7 @@ const STATUS_LABELS = {
   ready_to_settle: "等待结算",
   passed: "已通过",
   failed: "未通过",
+  reference_only: "仅供记录",
   not_required: "不适用",
 };
 
@@ -23,31 +24,71 @@ export function qualityStatusLabel(status) {
   return STATUS_LABELS[status] || status;
 }
 
-export function qualityPolicyForTask({ team = true, singleRole = false, mode = "auto", description = "" } = {}) {
-  const functional = team && !singleRole && mode !== "ask";
-  const text = String(description || "");
-  const e2e = functional && /(前端|页面|界面|浏览器|注册|登录|UI|前端开发|web)/i.test(text);
+export function requestsQualitySkip(description = "") {
+  const text = String(description || "").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  if (/(?:不要|不得|不能|不允许|禁止).{0,8}(?:跳过|免除|不做)/i.test(text)) return false;
+  const skip = "(?:跳过|免除|不做|不需要|无需(?:做)?|不用(?:做)?)";
+  const test = "(?:测试|验收)";
+  const audit = "(?:审计|安全审计)";
+  const joined = "(?:和|与|以及|、|及)";
+  return new RegExp(`${skip}.{0,20}${test}.{0,20}${audit}`, "i").test(text)
+    || new RegExp(`${skip}.{0,20}${audit}.{0,20}${test}`, "i").test(text)
+    || new RegExp(`${test}${joined}${audit}.{0,12}${skip}`, "i").test(text)
+    || /(?:skip|omit|bypass).{0,20}(?:test(?:ing)?|acceptance).{0,20}(?:audit|security review)/i.test(text)
+    || /(?:skip|omit|bypass).{0,20}(?:audit|security review).{0,20}(?:test(?:ing)?|acceptance)/i.test(text);
+}
+
+export function withQualitySkip(policy = {}) {
   return {
-    independentAcceptance: functional,
-    acceptanceMatrix: functional,
-    e2e,
-    audit: functional && /(认证|授权|权限|注册|登录|密码|会话|Cookie|Token|支付|迁移|加密|安全|CSRF|XSS)/i.test(text),
-    requiredEvidence: functional ? ["typecheck", "test", "build", ...(e2e ? ["e2e"] : [])] : [],
+    ...policy,
+    implementationRequired: policy.implementationRequired === true || policy.independentAcceptance === true || policy.acceptanceMatrix === true,
+    independentAcceptance: false,
+    acceptanceMatrix: false,
+    e2e: false,
+    audit: false,
+    selfTestReference: false,
+    skipTestingAndAudit: true,
+    requiredEvidence: [],
   };
 }
 
+export function qualityPolicyForTask({ team = true, singleRole = false, mode = "auto", description = "" } = {}) {
+  const functional = team && !singleRole && mode !== "ask";
+  const text = String(description || "");
+  const skipTestingAndAudit = functional && requestsQualitySkip(text);
+  const e2e = functional && /(前端|页面|界面|浏览器|注册|登录|UI|前端开发|web)/i.test(text);
+  const policy = {
+    implementationRequired: functional,
+    independentAcceptance: functional && !skipTestingAndAudit,
+    acceptanceMatrix: functional && !skipTestingAndAudit,
+    e2e: functional && !skipTestingAndAudit && e2e,
+    audit: functional && !skipTestingAndAudit,
+    selfTestReference: false,
+    skipTestingAndAudit,
+    requiredEvidence: functional && !skipTestingAndAudit ? ["typecheck", "test", "build", ...(e2e ? ["e2e"] : [])] : [],
+  };
+  return skipTestingAndAudit ? withQualitySkip(policy) : policy;
+}
+
 export function createQualityGates(policy = {}) {
-  const functional = policy.independentAcceptance === true || policy.acceptanceMatrix === true;
+  const functional = policy.implementationRequired === true
+    || policy.independentAcceptance === true
+    || policy.acceptanceMatrix === true
+    || policy.skipTestingAndAudit === true;
   return {
     policy: {
+      implementationRequired: functional,
       independentAcceptance: policy.independentAcceptance === true,
       acceptanceMatrix: policy.acceptanceMatrix === true,
       e2e: policy.e2e === true,
       audit: policy.audit === true,
+      selfTestReference: false,
+      skipTestingAndAudit: policy.skipTestingAndAudit === true,
       requiredEvidence: Array.isArray(policy.requiredEvidence) ? [...new Set(policy.requiredEvidence.map(String))] : [],
     },
     implementation: functional ? "pending" : "not_required",
-    self_test: functional ? "pending" : "not_required",
+    self_test: functional && policy.skipTestingAndAudit !== true ? "reference_only" : "not_required",
     independent_acceptance: policy.independentAcceptance ? "pending" : "not_required",
     audit: policy.audit ? "pending" : "not_required",
     acceptance_matrix: [],
@@ -66,11 +107,14 @@ function addEvidence(gates, evidence) {
 
 /** Reset only per-turn quality stages; policy and project-level evidence stay on the task. */
 export function resetQualityGates(gates = {}) {
-  const functional = gates.policy?.independentAcceptance === true || gates.policy?.acceptanceMatrix === true;
+  const functional = gates.policy?.implementationRequired === true
+    || gates.policy?.independentAcceptance === true
+    || gates.policy?.acceptanceMatrix === true
+    || gates.policy?.skipTestingAndAudit === true;
   return {
     ...gates,
     implementation: functional ? "pending" : "not_required",
-    self_test: functional ? "pending" : "not_required",
+    self_test: functional && gates.policy?.skipTestingAndAudit !== true ? "reference_only" : "not_required",
     independent_acceptance: gates.policy?.independentAcceptance ? "pending" : "not_required",
     audit: gates.policy?.audit ? "pending" : "not_required",
     acceptance_matrix: [],
@@ -113,6 +157,7 @@ export function reduceQualityGates(gates, event = {}) {
     return next;
   }
   if (event.type === "acceptance_submitted") {
+    if (event.agent !== "tester") return next;
     next.independent_acceptance = event.verdict === "pass" ? "passed" : event.verdict === "fail" ? "failed" : "not_required";
     next.evidence = addEvidence(next, {
       kind: "independent_acceptance",
@@ -143,7 +188,6 @@ export function reduceQualityGates(gates, event = {}) {
   if (event.type === "task_settle") {
     const required = [
       next.implementation,
-      next.self_test,
       next.independent_acceptance,
       next.audit,
     ];
@@ -157,7 +201,6 @@ export function reduceQualityGates(gates, event = {}) {
 export function qualityGateReady(gates = {}) {
   return [
     gates.implementation,
-    gates.self_test,
     gates.independent_acceptance,
     gates.audit,
   ].every((status) => status === "passed" || status === "not_required");
@@ -191,7 +234,7 @@ export function validateAcceptanceMatrix(matrix, assignments = []) {
     else if (seen.has(id)) errors.push(`验收矩阵存在重复 id：${id}`);
     seen.add(id);
     if (!criterion) errors.push(`${id} 缺少 criterion`);
-    if (!["tester", "auditor", "project_manager", "frontend_developer", "backend_developer"].includes(verifier)) errors.push(`${id} 的 verifier 非法`);
+    if (!["tester", "auditor"].includes(verifier)) errors.push(`${id} 的 verifier 必须是 tester 或 auditor；开发角色和项目经理的自测不能作为最终验收`);
     if (!["automated", "manual"].includes(method)) errors.push(`${id} 的 method 只能是 automated 或 manual`);
     if (!evidence) errors.push(`${id} 缺少 evidence 说明`);
     if (!["tester", "auditor", "project_manager", "frontend_developer", "backend_developer"].includes(returnTo)) errors.push(`${id} 的 returnTo 非法`);

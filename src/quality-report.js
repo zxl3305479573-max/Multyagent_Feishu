@@ -146,6 +146,8 @@ function markdown(report) {
     "| --- | --- |",
     stageRows,
     "",
+    "> 开发角色和项目经理的自测、自审仅作过程记录，不计入最终验收或上线结论。",
+    "",
     "## 验收矩阵",
     "",
     "| AC | 检查内容 | 验证者 | 结果 |",
@@ -202,6 +204,7 @@ export function formatQualityReportSummary(report) {
     `- 关键证据：${keyEvidence}`,
     `- 未覆盖项：${report.uncovered.join("；") || "无"}`,
     `- 已知风险：${report.risks.join("；") || "无"}`,
+    "- 证据口径：开发角色和项目经理的自测、自审仅供过程记录，最终结论只采用 tester 与 auditor 的独立结果",
     `- 上线结论：${report.productReady ? "可以上线" : "不可上线"}`,
     `- 质量报告：${report.reportFiles.markdownFile}；${report.reportFiles.jsonFile}`,
   ].join("\n");

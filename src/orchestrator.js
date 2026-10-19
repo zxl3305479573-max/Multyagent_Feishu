@@ -767,28 +767,6 @@ export function createOrchestrator({
     const gates = task?.quality_gates || {};
     const policy = gates.policy || task?.quality_policy || {};
 
-    if (policy.independentAcceptance && gates.self_test !== "passed") {
-      const key = `${rootTaskId}#self-test`;
-      if (!corrections.has(key)) {
-        corrections.set(key, 1);
-        await onEvent({ type: "quality_gate_blocked", task_id: rootTaskId, gate: "self_test", agent: "project_manager", project_name: context.projectName || null });
-        await dispatchTo("project_manager", taskId, {
-          context: {
-            ...withoutAssignments(context),
-            pmCoordination: true,
-            planCompleted: false,
-            approvalBypass: false,
-            correctionNote: "【质量门禁】开发自测尚未通过。请先让开发角色补跑 typecheck、测试和构建并提交真实命令证据；项目经理自己的说明或独立测试不能替代开发自测。",
-          },
-          parentDelivery: delivery,
-          fromAgent: "quality_gate",
-        });
-        return true;
-      }
-      await onEvent({ type: "task_failed", task_id: rootTaskId, agent: "project_manager", gate: "self_test", error: "开发自测未通过，任务不能标记完成" });
-      return true;
-    }
-
     if (policy.independentAcceptance && gates.independent_acceptance !== "passed") {
       if (!roles.has("tester")) {
         await onEvent({ type: "quality_gate_failed", task_id: rootTaskId, gate: "independent_acceptance", error: "测试角色未启用，不能完成独立验收" });
@@ -800,7 +778,7 @@ export function createOrchestrator({
         const assignment = {
           id: "independent-acceptance",
           agentKey: "tester",
-          task: "独立验收当前任务：按验收矩阵逐项检查，必须执行真实 API/浏览器流程并提交结构化 acceptance。项目经理自测和开发单测不能替代本步骤。",
+          task: "独立验收当前任务：按验收矩阵逐项检查，必须执行真实 API/浏览器流程并提交结构化 acceptance。开发角色与项目经理的自测、测试说明不能替代本步骤。",
           acceptanceCriteria: matrix.map((item) => `${item.id} ${item.criterion}；证据要求：${item.evidence}`),
         };
         await onEvent({ type: "quality_gate_blocked", task_id: rootTaskId, gate: "independent_acceptance", agent: "project_manager", project_name: context.projectName || null });
@@ -824,7 +802,7 @@ export function createOrchestrator({
 
     if (policy.audit && gates.audit !== "passed") {
       if (!roles.has("auditor")) {
-        await onEvent({ type: "quality_gate_failed", task_id: rootTaskId, gate: "audit", error: "审计角色未启用，敏感任务不能完成" });
+        await onEvent({ type: "quality_gate_failed", task_id: rootTaskId, gate: "audit", error: "审计角色未启用，任务不能完成" });
         return true;
       }
       if (!auditDispatches.has(rootTaskId)) {
@@ -832,8 +810,8 @@ export function createOrchestrator({
         const assignment = {
           id: "independent-audit",
           agentKey: "auditor",
-          task: "独立安全审计：检查认证、授权、Cookie/Session、CSRF、账号枚举、输入校验、并发一致性、敏感信息日志与响应泄漏，并明确报告 blockers。",
-          acceptanceCriteria: ["无高危安全阻塞项", "关键安全问题有证据并回派给对应角色"],
+          task: "独立审计完整交付：核对需求覆盖、实现完整性、测试证据、交付文件一致性、回归风险和遗留问题，并复核认证、授权、Cookie/Session、CSRF、输入校验、并发一致性、敏感信息日志与响应泄漏。开发角色或项目经理自己的测试与自审不能作为审计依据。",
+          acceptanceCriteria: ["独立审计结论明确且无阻塞项", "关键问题有证据并回派给对应角色"],
         };
         await onEvent({ type: "quality_gate_blocked", task_id: rootTaskId, gate: "audit", agent: "project_manager", project_name: context.projectName || null });
         await dispatchTo("auditor", taskId, {

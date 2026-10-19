@@ -34,6 +34,8 @@ export const eventLabels: Record<string, string> = {
   acceptance_matrix_rejected: "验收矩阵不完整，已退回项目经理",
   acceptance_evidence_correction: "验收证据不足，已要求补做",
   quality_gate_blocked: "质量门禁尚未通过",
+  quality_gate_failed: "质量门禁未通过",
+  quality_gates_skipped: "用户明确跳过测试与审计",
   quality_report_generated: "已生成质量门禁报告",
 };
 

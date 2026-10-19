@@ -52,8 +52,8 @@ export function buildSystemPrompt(agent, projectName) {
       "Slice implementation work: give `frontend_developer` / `backend_developer` one independently verifiable slice per assignment (one API, one page or one component), not the whole feature. Prefer 3-6 slices for a multi-module task, never more than 6; small changes stay a single assignment. Give each a unique `id`, 1-3 `acceptanceCriteria`, and `dependsOn` when a slice needs an earlier one.",
       "Slices of the same role run in parallel only when each declares `fileWriteAllowlist` and the paths do not overlap (including parent/child directories); otherwise they run one after another. Put files that several slices must touch (route registration, menus, dependencies, shared types) into the work slices.",
       "Every multi-slice plan must include exactly one final integration-verification slice: set `integration: true`, assign it to `tester`, and make its `dependsOn` list contain every work slice id. This slice verifies the integrated result independently; the orchestrator rejects plans that only describe integration in free text.",
-      "Before implementation starts, submit `plan.acceptanceMatrix`: every item needs `id`, `criterion`, `verifier`, `method` (automated/manual), `evidence`, and `returnTo`. The orchestrator will reject a feature plan without this matrix.",
-      "You may not substitute your own self-test for independent acceptance. A functional team task must pass the tester's structured `acceptance_submitted`; authentication, authorization, payment, migration, crypto, cookie, token and other security-sensitive tasks must also pass an auditor review. The orchestrator enforces both gates.",
+      "Before implementation starts, submit `plan.acceptanceMatrix`: every item needs `id`, `criterion`, `verifier`, `method` (automated/manual), `evidence`, and `returnTo`. `verifier` must be `tester` or `auditor`; developer and project-manager self-checks are not final verification. The orchestrator will reject a feature plan without this matrix.",
+      "Every implementation task must pass the tester's structured `acceptance_submitted`, then a separate auditor review. Frontend, backend and project-manager self-tests or self-audits are process notes only and never count as final evidence. The only exception is an explicit direct user instruction to the project manager to skip both testing and audit.",
       "Keep deliverables proportional to the user's request; do not add extra architecture documents, diagrams, modules or features that were not asked for.",
       "You have the diagram-design skill available for project plans, dependency maps, roadmaps, and workflow visuals. Use it only for planning/coordination visuals; do not author the final system architecture diagram or put an architecture `diagram` field in your delivery—delegate that to the architect.",
       "Do not produce architecture diagrams yourself: the `diagram` field belongs to the architect. Summarize and dispatch instead.",
@@ -76,6 +76,7 @@ export function buildSystemPrompt(agent, projectName) {
       "",
       "Only the project manager may dispatch other roles. You cannot assign or request other roles directly; if another role's work is needed, describe it in `next` as a recommendation for the project manager.",
       "Only the project manager closes the whole task chain: when the project manager is in the chain, your `final=true` merely marks your own stage as done, and the orchestrator still returns the delivery to the project manager for the final summary.",
+      "Your own tests or audit statements are process notes only; they cannot replace the independent tester acceptance and auditor review.",
     );
   }
   if (agent.key === "tester") {
@@ -91,8 +92,9 @@ export function buildSystemPrompt(agent, projectName) {
   if (agent.key === "auditor") {
     lines.push(
       "",
+      "Run only after the tester has completed independent acceptance. Audit the full delivery for requirement coverage, implementation completeness, test evidence, artifact consistency, regressions and unresolved risks.",
       "For security-sensitive work review authentication, authorization, cookies/session fixation, CSRF, account enumeration, input validation, concurrency consistency, secrets logging, and response leakage.",
-      "Report blockers explicitly. A security blocker means the task is not product-complete.",
+      "Do not rely on frontend, backend or project-manager self-tests as final evidence. Report blockers explicitly; any blocker means the task is not product-complete.",
     );
   }
   lines.push(
