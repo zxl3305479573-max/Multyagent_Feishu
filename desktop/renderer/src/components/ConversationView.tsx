@@ -19,6 +19,32 @@ export function pendingApproval(taskEvents: EventRecord[]) {
   return { taskId: approval.task_id || "", agent: approval.agent || "", summary: delivery?.summary || "", next: delivery?.next || "" };
 }
 
+const QUALITY_STAGE_LABELS: Array<[string, string]> = [
+  ["implementation", "已实现"],
+  ["self_test", "开发自测"],
+  ["independent_acceptance", "独立验收"],
+  ["audit", "独立审计"],
+  ["product", "产品闭环"],
+];
+const QUALITY_STATUS_LABELS: Record<string, string> = {
+  pending: "待完成",
+  in_progress: "进行中",
+  passed: "通过",
+  failed: "未通过",
+  not_required: "不适用",
+  incomplete: "未完成",
+};
+
+function QualityGateStrip({ gates }: { gates: NonNullable<Task["status_snapshot"]>["quality_gates"] }) {
+  if (!gates) return null;
+  return <div className="quality-gate-strip" aria-label="任务质量门禁">
+    {QUALITY_STAGE_LABELS.map(([key, label]) => {
+      const status = gates[key as keyof typeof gates] || "pending";
+      return <span key={key} className={`quality-gate quality-${status}`}><strong>{label}</strong><small>{QUALITY_STATUS_LABELS[status] || status}</small></span>;
+    })}
+  </div>;
+}
+
 type OpenFile = (event: EventRecord) => void;
 
 function Artifacts({ event, onOpenFile }: { event: EventRecord; onOpenFile: OpenFile }) {
@@ -77,6 +103,14 @@ function FinalResult({ group, onOpenFile }: { group: AgentExecutionGroup; onOpen
   }
   return <div className="agent-final-result">
     <div className="agent-final-result-heading"><strong>最终执行结果</strong><time>{formatTime(result.timestamp)}</time></div>
+    {typeof result.aggregate_delivery_count === "number" ? <div className="agent-final-summary-stats">
+      <span><strong>{result.aggregate_delivery_count}</strong><small>子机器人交付</small></span>
+      <span><strong>{result.aggregate_agent_count}</strong><small>覆盖角色</small></span>
+      <span><strong>{result.artifact_count || 0}</strong><small>交付文件</small></span>
+      {typeof result.aggregate_acceptance_count === "number" && result.aggregate_acceptance_count > 0
+        ? <span><strong>{result.aggregate_acceptance_passed || 0}/{result.aggregate_acceptance_count}</strong><small>验收通过</small></span>
+        : null}
+    </div> : null}
     <p>{result.summary || "已完成本轮工作"}</p>
     {(result.blockers?.length || result.risks?.length || result.next) ? <div className="agent-final-fields">
       {result.next && <div><strong>下一步</strong><span>{result.next}</span></div>}
@@ -85,6 +119,20 @@ function FinalResult({ group, onOpenFile }: { group: AgentExecutionGroup; onOpen
     </div> : null}
     {collectArtifacts(result).length ? <Artifacts event={result} onOpenFile={onOpenFile} /> : null}
   </div>;
+}
+
+function FinalSummary({ event }: { event: EventRecord }) {
+  return <section className="final-summary-output" aria-label="项目经理最终总结">
+    <header>
+      <span className="message-avatar agent-avatar">总</span>
+      <div>
+        <strong>项目经理 · 最终总结</strong>
+        <time>{formatTime(event.timestamp)}</time>
+      </div>
+      <span className="final-summary-complete">全部任务已完成</span>
+    </header>
+    <div className="final-summary-output-body">{event.summary || "全部任务已完成。"}</div>
+  </section>;
 }
 
 function UserMessage({ event, task, userName, userInitial }: { event: EventRecord; task: Task; userName: string; userInitial: string }) {
@@ -199,6 +247,8 @@ export function ConversationView({ selected, selectedTask, project, agents, user
   const approvalGroupKey = approval
     ? groups.find((group) => group.agentKey === approval.agent && group.events.some((event) => event.type === "approval_required" && (!approval.taskId || event.task_id === approval.taskId)))?.key || null
     : null;
+  const lastUserInputIndex = taskEvents.reduce((last, event, index) => ["task_created", "task_reused"].includes(event.type || "") ? index : last, -1);
+  const finalSummary = taskEvents.slice(lastUserInputIndex + 1).reverse().find((event) => event.type === "final_summary");
   return <div className="conversation-scroll" key={selected || "empty"} ref={scrollRef}>
     {!selectedTask ? (
       <div className="welcome-state">
@@ -210,6 +260,7 @@ export function ConversationView({ selected, selectedTask, project, agents, user
     ) : (
       <div className="conversation-content">
         <div className="conversation-task-overview"><strong>{selectedTask.title || "当前任务"}</strong><span>{selectedTask.project_name || project} · {taskStatus(selectedTask)}{taskStartedAt ? ` · 开始 ${formatTime(taskStartedAt)} · 总耗时 ${formatDuration(taskDuration)}` : ""}</span></div>
+        <QualityGateStrip gates={selectedTask.status_snapshot?.quality_gates} />
         {taskEvents.length === 0 && (taskEventsLoading
           ? <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>
           : <div className="conversation-empty">暂无任务记录</div>)}
@@ -219,6 +270,7 @@ export function ConversationView({ selected, selectedTask, project, agents, user
         </React.Fragment>)}
         {groups.filter((group) => group.turn >= userEvents.length).map((group) => <ExecutionGroup key={group.key} group={group} agents={agents} approval={group.key === approvalGroupKey ? approval : null} approverName={approverName} approving={approving} onApprove={onApprove} onOpenFile={onOpenFile} />)}
         {approval && !approvalGroupKey && <ApprovalCard approval={approval} approverName={approverName} approving={approving} onApprove={onApprove} />}
+        {finalSummary && <FinalSummary event={finalSummary} />}
         {["running", "in_progress"].includes(snapshotStatus(selectedTask)) && <div className="running-indicator"><span className="pulse-dot" />Agent 正在执行</div>}
       </div>
     )}

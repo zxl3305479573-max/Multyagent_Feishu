@@ -27,7 +27,7 @@ function plan() {
     goal: "Build and verify a feature",
     stages: [
       { id: "design", assignments: [{ id: "architecture", agentKey: "architect", task: "Design it", dependsOn: [], toolAllowlist: ["read", "write"], fileReadAllowlist: ["workspace/demo"], fileWriteAllowlist: ["workspace/demo/artifacts"], networkPolicy: { enabled: false }, acceptanceCriteria: ["Design exists"] }] },
-      { id: "verify", assignments: [{ id: "tests", agentKey: "tester", task: "Verify design", dependsOn: ["architecture"], toolAllowlist: ["read", "bash"], fileReadAllowlist: ["workspace/demo"], fileWriteAllowlist: ["workspace/demo/artifacts"], networkPolicy: { enabled: false }, acceptanceCriteria: ["Tests pass"] }] },
+      { id: "verify", assignments: [{ id: "tests", agentKey: "tester", task: "Verify design", integration: true, dependsOn: ["architecture"], toolAllowlist: ["read", "bash"], fileReadAllowlist: ["workspace/demo"], fileWriteAllowlist: ["workspace/demo/artifacts"], networkPolicy: { enabled: false }, acceptanceCriteria: ["Tests pass"] }] },
     ],
   };
 }
@@ -70,6 +70,27 @@ test("rejects malformed and duplicate assignment identifiers", () => {
   assert.ok(result.errors.some((error) => error.includes("duplicate assignment id")));
 });
 
+test("rejects a multi-slice plan without exactly one complete integration-verification slice", () => {
+  const missing = plan();
+  delete missing.stages[1].assignments[0].integration;
+  const missingResult = validateTaskPlan(missing, { projectName: "demo", roleLimits: limits });
+  assert.ok(missingResult.errors.some((error) => error.includes("integration=true")));
+
+  const incomplete = plan();
+  incomplete.stages[0].assignments.push({
+    id: "implementation",
+    agentKey: "architect",
+    task: "Implement it",
+    dependsOn: ["architecture"],
+    toolAllowlist: ["read", "write"],
+    fileReadAllowlist: ["workspace/demo"],
+    fileWriteAllowlist: ["workspace/demo/artifacts"],
+  });
+  incomplete.stages[1].assignments[0].dependsOn = ["implementation"];
+  const incompleteResult = validateTaskPlan(incomplete, { projectName: "demo", roleLimits: limits });
+  assert.ok(incompleteResult.errors.some((error) => error.includes("全部工作切片")));
+});
+
 test("project manager delivery rejects an invalid structured plan before saving", async () => {
   let delivered = null;
   const tool = createDeliverTool({
@@ -104,7 +125,7 @@ test("project manager can submit a plan using all configured role limits without
         goal: "设计并验证功能",
         stages: [
           { id: "design", assignments: [{ id: "architecture", agentKey: "architect", task: "设计接口", toolAllowlist: ["read", "write"], fileWriteAllowlist: ["workspace/demo/artifacts"] }] },
-          { id: "verify", assignments: [{ id: "tests", agentKey: "tester", task: "验证实现", dependsOn: ["architecture"], toolAllowlist: ["read", "bash"] }] },
+          { id: "verify", assignments: [{ id: "tests", agentKey: "tester", task: "验证实现", integration: true, dependsOn: ["architecture"], toolAllowlist: ["read", "bash"] }] },
         ],
       },
     });

@@ -57,6 +57,7 @@ export function sequenceArchitectFirst(delivery) {
         { id: "implementation", assignments: followers },
       ],
       acceptanceCriteria: [],
+      acceptanceMatrix: Array.isArray(delivery.plan?.acceptanceMatrix) ? delivery.plan.acceptanceMatrix : [],
       autoSequenced: true,
     },
   };
@@ -102,6 +103,7 @@ export function sequenceRepeatedRoles(delivery) {
       goal: String(delivery.summary || "").slice(0, 200),
       stages: [{ id: "slices", assignments: slices }],
       acceptanceCriteria: [],
+      acceptanceMatrix: Array.isArray(delivery.plan?.acceptanceMatrix) ? delivery.plan.acceptanceMatrix : [],
       autoSequenced: true,
     },
   };

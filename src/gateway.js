@@ -1,5 +1,6 @@
 import { createTask, findRecentTask, findTaskByRoot, setPaused, isTerminated, updateTask } from "./tasks.js";
 import { buildValidatedHandoff } from "./domain/delivery.js";
+import { qualityPolicyForTask } from "./quality-gates.js";
 import { readProjectSummary } from "./project-summary.js";
 import { loadTaskStatus } from "./task-status.js";
 
@@ -276,7 +277,22 @@ export function createRoleHandler({ agent, client, runAgent, isAllowedChat = () 
     }
     let task = null;
     if (!isNewTask) task = (message.rootId && await findTaskByRoot(agent.key, message.rootId)) || (!message.rootId && await findRecentTask(agent.key, message.chatId, TTL));
-    if (!task) { task = await createTask({ agentKey: agent.key, chatId: message.chatId, rootKey: message.rootId || message.messageId, messageId: message.messageId }); await onEvent({ type: "task_created", task_id: task.taskId, agent: agent.key, chat_id: message.chatId, message_id: message.messageId, text: text.slice(0, 200) }); }
+    if (!task) {
+      const qualityPolicy = qualityPolicyForTask({
+        team: agent.key === "project_manager",
+        singleRole: agent.key !== "project_manager",
+        mode: "auto",
+        description: text,
+      });
+      task = await createTask({
+        agentKey: agent.key,
+        chatId: message.chatId,
+        rootKey: message.rootId || message.messageId,
+        messageId: message.messageId,
+        quality_policy: qualityPolicy,
+      });
+      await onEvent({ type: "task_created", task_id: task.taskId, agent: agent.key, chat_id: message.chatId, message_id: message.messageId, text: text.slice(0, 200) });
+    }
     else { await updateTask(task.taskId, { lastMessageId: message.messageId }); await onEvent({ type: "task_reused", task_id: task.taskId, agent: agent.key, chat_id: message.chatId, message_id: message.messageId, text: text.slice(0, 200) }); }
     const control = parseControlCommand(text);
     if (control) { await setPaused(task.taskId, control === "pause"); await sendCard(client, message.chatId, buildTextCard({ text: control === "pause" ? "任务已暂停。" : "任务已恢复。" }, agent)); return; }
@@ -286,7 +302,28 @@ export function createRoleHandler({ agent, client, runAgent, isAllowedChat = () 
       // 任务记录里的项目名要与写入白名单同源，并随本轮交付回写，
       // 否则同一项目后续消息的白名单会退回 workspace/default。
       const projectSummary = await loadProjectSummaryFor(agent.key, task.projectName, { root: process.cwd() });
-      const result = await runAgent(agent, text, { taskId: task.taskId, chatId: message.chatId, appId: agent.appId, projectName: task.projectName || null, projectSummary, onEvent }, { sessionFile: task.sessionFile || null });
+      const qualityPolicy = task.quality_policy || qualityPolicyForTask({
+        team: agent.key === "project_manager",
+        singleRole: agent.key !== "project_manager",
+        mode: "auto",
+        description: text,
+      });
+      const qualityContext = {
+        qualityPolicy,
+        requireIndependentAcceptance: qualityPolicy.independentAcceptance === true,
+        requireAcceptanceMatrix: qualityPolicy.acceptanceMatrix === true,
+        requireE2E: qualityPolicy.e2e === true,
+        requireAudit: qualityPolicy.audit === true,
+      };
+      const result = await runAgent(agent, text, {
+        taskId: task.taskId,
+        chatId: message.chatId,
+        appId: agent.appId,
+        projectName: task.projectName || null,
+        projectSummary,
+        ...qualityContext,
+        onEvent,
+      }, { sessionFile: task.sessionFile || null });
       if (result.sessionFile) await updateTask(task.taskId, { sessionFile: result.sessionFile });
       if (result.cancelled || await isTerminated(task.taskId)) {
         await onEvent({ type: "task_cancelled", task_id: task.taskId, agent: agent.key, chat_id: message.chatId });
@@ -294,8 +331,8 @@ export function createRoleHandler({ agent, client, runAgent, isAllowedChat = () 
       }
       const projectName = result.projectName || result.delivery?.projectName || null;
       if (projectName && projectName !== task.projectName) await updateTask(task.taskId, { projectName });
-      if (result.delivery) { await buildValidatedHandoff(result.delivery, { agentKey: agent.key, taskId: task.taskId }); await sendResultCard(client, message.chatId, { ...result, taskId: task.taskId }, { log }); if (orchestrator) await orchestrator.onTaskCompleted(agent.key, task.taskId, { delivery: result.delivery, resultText: result.text, context: { chatId: message.chatId, messageId: message.messageId, correlationId: message.messageId, requireHumanApproval: true, projectName }, approvalRequired: result.approvalRequired === true }); }
-      else { await sendCard(client, message.chatId, buildTextCard(result, agent)); if (orchestrator) await orchestrator.onTaskCompleted(agent.key, task.taskId, { delivery: { agentKey: agent.key, agentName: agent.displayName, summary: result.text || "已完成交付", artifactPaths: [], final: false }, resultText: result.text, context: { chatId: message.chatId, messageId: message.messageId, correlationId: message.messageId, requireHumanApproval: true, projectName } }); }
+      if (result.delivery) { await buildValidatedHandoff(result.delivery, { agentKey: agent.key, taskId: task.taskId }); await sendResultCard(client, message.chatId, { ...result, taskId: task.taskId }, { log }); if (orchestrator) await orchestrator.onTaskCompleted(agent.key, task.taskId, { delivery: result.delivery, resultText: result.text, context: { chatId: message.chatId, messageId: message.messageId, correlationId: message.messageId, requireHumanApproval: true, projectName, ...qualityContext }, approvalRequired: result.approvalRequired === true }); }
+      else { await sendCard(client, message.chatId, buildTextCard(result, agent)); if (orchestrator) await orchestrator.onTaskCompleted(agent.key, task.taskId, { delivery: { agentKey: agent.key, agentName: agent.displayName, summary: result.text || "已完成交付", artifactPaths: [], final: false }, resultText: result.text, context: { chatId: message.chatId, messageId: message.messageId, correlationId: message.messageId, requireHumanApproval: true, projectName, ...qualityContext } }); }
       await onEvent({ type: "task_completed", task_id: task.taskId, agent: agent.key, chat_id: message.chatId, project_name: projectName, has_delivery: Boolean(result.delivery), artifact_count: result.delivery?.artifactPaths?.length || 0, final: result.delivery?.final === true });
     } catch (error) {
       if (await isTerminated(task.taskId)) {

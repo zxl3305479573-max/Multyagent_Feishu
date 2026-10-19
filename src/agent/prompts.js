@@ -49,8 +49,11 @@ export function buildSystemPrompt(agent, projectName) {
       "Architect decision (yours to make, state it in the reason): dispatch `architect` FIRST when the task builds a new system/module from scratch, touches both frontend and backend, adds or changes an interface contract or data model, needs technology selection, or restructures modules. Skip the architect for pure documentation/planning, small single-file fixes, or iterations that follow an existing architecture without changing contracts.",
       "When the architect is needed together with implementation roles, you may list all of them in `assignments`: the system runs the architect first and dispatches the other roles only after the architecture design is delivered. You may also submit an explicit `plan` with the architect in the first stage and the other roles depending on it.",
       "Dispatch implementation/test/audit roles only when their distinct expertise is required; do not add roles the request does not need.",
-      "Slice implementation work: give `frontend_developer` / `backend_developer` one independently verifiable slice per assignment (one API, one page or one component), not the whole feature. The same role may receive several assignments; give each a unique `id`, 1-3 `acceptanceCriteria`, and `dependsOn` when a slice needs an earlier one. Small changes stay a single assignment; keep the total within 8 slices.",
-      "Slices of the same role run in parallel only when each declares `fileWriteAllowlist` and the paths do not overlap (including parent/child directories); otherwise they run one after another. Put files that several slices must touch (route registration, menus, dependencies, shared types) into a final integration slice that `dependsOn` the others.",
+      "Slice implementation work: give `frontend_developer` / `backend_developer` one independently verifiable slice per assignment (one API, one page or one component), not the whole feature. Prefer 3-6 slices for a multi-module task, never more than 6; small changes stay a single assignment. Give each a unique `id`, 1-3 `acceptanceCriteria`, and `dependsOn` when a slice needs an earlier one.",
+      "Slices of the same role run in parallel only when each declares `fileWriteAllowlist` and the paths do not overlap (including parent/child directories); otherwise they run one after another. Put files that several slices must touch (route registration, menus, dependencies, shared types) into the work slices.",
+      "Every multi-slice plan must include exactly one final integration-verification slice: set `integration: true`, assign it to `tester`, and make its `dependsOn` list contain every work slice id. This slice verifies the integrated result independently; the orchestrator rejects plans that only describe integration in free text.",
+      "Before implementation starts, submit `plan.acceptanceMatrix`: every item needs `id`, `criterion`, `verifier`, `method` (automated/manual), `evidence`, and `returnTo`. The orchestrator will reject a feature plan without this matrix.",
+      "You may not substitute your own self-test for independent acceptance. A functional team task must pass the tester's structured `acceptance_submitted`; authentication, authorization, payment, migration, crypto, cookie, token and other security-sensitive tasks must also pass an auditor review. The orchestrator enforces both gates.",
       "Keep deliverables proportional to the user's request; do not add extra architecture documents, diagrams, modules or features that were not asked for.",
       "You have the diagram-design skill available for project plans, dependency maps, roadmaps, and workflow visuals. Use it only for planning/coordination visuals; do not author the final system architecture diagram or put an architecture `diagram` field in your delivery—delegate that to the architect.",
       "Do not produce architecture diagrams yourself: the `diagram` field belongs to the architect. Summarize and dispatch instead.",
@@ -73,6 +76,23 @@ export function buildSystemPrompt(agent, projectName) {
       "",
       "Only the project manager may dispatch other roles. You cannot assign or request other roles directly; if another role's work is needed, describe it in `next` as a recommendation for the project manager.",
       "Only the project manager closes the whole task chain: when the project manager is in the chain, your `final=true` merely marks your own stage as done, and the orchestrator still returns the delivery to the project manager for the final summary.",
+    );
+  }
+  if (agent.key === "tester") {
+    lines.push(
+      "",
+      "Independent acceptance is mandatory for functional tasks. Execute the real API/browser flows required by the task, not only unit tests.",
+      "For UI tasks, complete the user journey in a real browser and save screenshots or a browser-test report as evidence. Mock/jsdom-only verification is insufficient.",
+      "For backend tasks, use a real database and real HTTP requests with cookie round-trips; run typecheck, tests and build when those commands exist.",
+      "Your acceptance checks must map one-to-one to the acceptance matrix by id. A pass verdict with an uncovered/failed AC is invalid.",
+      "Every command evidence item must include the real command, status and numeric exitCode. A command without exitCode=0 cannot satisfy typecheck/test/build/E2E evidence requirements.",
+    );
+  }
+  if (agent.key === "auditor") {
+    lines.push(
+      "",
+      "For security-sensitive work review authentication, authorization, cookies/session fixation, CSRF, account enumeration, input validation, concurrency consistency, secrets logging, and response leakage.",
+      "Report blockers explicitly. A security blocker means the task is not product-complete.",
     );
   }
   lines.push(

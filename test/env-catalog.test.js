@@ -6,7 +6,12 @@ import { buildEnvCatalog, catalogFields, isSecretKey } from "../src/env-catalog.
 import { roleConfig } from "../src/role-config.cjs";
 
 // 只在开发时使用、不属于运行配置的变量。
-const NOT_SETTINGS = new Set(["ELECTRON_RENDERER_URL"]);
+const NOT_SETTINGS = new Set([
+  "ELECTRON_RENDERER_URL",
+  // 仅用于隔离的桌面 E2E 启动，不暴露给最终用户做运行配置。
+  "PI_DESKTOP_E2E",
+  "PI_DESKTOP_E2E_USER_DATA",
+]);
 
 function sourceFiles(dir) {
   return readdirSync(dir).flatMap((name) => {

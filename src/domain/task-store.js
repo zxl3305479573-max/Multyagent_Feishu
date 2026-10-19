@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { readJsonFile, writeFileAtomic } from "../atomic-file.cjs";
 import { createTaskRecord } from "./task.js";
 import { transition } from "./task-state.js";
+import { createQualityGates, reduceQualityGates } from "../quality-gates.js";
 
 function clone(value) {
   return value ? JSON.parse(JSON.stringify(value)) : value;
@@ -248,6 +249,7 @@ export class TaskStore {
     if (!rootTaskId || !this.state.tasks[rootTaskId]) return null;
     const task = this.state.tasks[rootTaskId];
     const current = task.status_snapshot || emptySnapshot(rootTaskId);
+    task.quality_gates = reduceQualityGates(task.quality_gates || createQualityGates(task.quality_policy), event);
     const nextStatus = snapshotStatus(event);
     if (TERMINAL_SNAPSHOT_STATUSES.has(current.status) && !["control_applied", "task_terminated", "task_resumed", "task_retried", "task_reopened"].includes(event.type)) return clone(current);
 
@@ -268,6 +270,7 @@ export class TaskStore {
       error: event.type === "task_retried" ? null : (event.recoverable === true ? null : event.error) || current.error || null,
       blockers: Array.isArray(event.blockers) && event.blockers.length ? event.blockers : current.blockers || [],
       risks: Array.isArray(event.risks) && event.risks.length ? event.risks : current.risks || [],
+      quality_gates: task.quality_gates,
     };
     task.status_snapshot = snapshot;
     task.updated_at = snapshot.updated_at;

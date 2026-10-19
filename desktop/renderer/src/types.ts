@@ -9,7 +9,18 @@ export type Task = {
   status?: string;
   created_at?: string;
   updated_at?: string;
-  status_snapshot?: { status?: string; latest_event?: string; updated_at?: string };
+  status_snapshot?: {
+    status?: string;
+    latest_event?: string;
+    updated_at?: string;
+    quality_gates?: {
+      implementation?: string;
+      self_test?: string;
+      independent_acceptance?: string;
+      audit?: string;
+      product?: string;
+    };
+  };
 };
 export type EventRecord = {
   event_id?: string;
@@ -33,6 +44,10 @@ export type EventRecord = {
   file_path?: string;
   artifact_count?: number;
   artifact_paths?: string[];
+  aggregate_delivery_count?: number;
+  aggregate_agent_count?: number;
+  aggregate_acceptance_count?: number;
+  aggregate_acceptance_passed?: number;
   tool_call_id?: string;
   run_id?: string;
   artifact_items?: Array<{ path?: string; description?: string; type?: string; size?: number }>;
@@ -46,7 +61,7 @@ export type EventRecord = {
   assignments?: Array<{ agentKey?: string; task?: string; reason?: string }>;
   verdict?: "pass" | "fail" | "skip";
   checks?: Array<{ id?: string; title?: string; status?: string; detail?: string }>;
-  evidence?: Array<{ kind?: string; path?: string; text?: string; url?: string }>;
+  evidence?: Array<{ kind?: string; command?: string; status?: string; exitCode?: number; path?: string; text?: string; url?: string }>;
   failed_checks?: string[];
   skip_reason?: string | null;
   targets?: string[];

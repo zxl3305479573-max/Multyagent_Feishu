@@ -3,6 +3,7 @@ import { buildValidatedHandoff } from "./domain/delivery.js";
 import { loadProjectSummaryFor } from "./gateway.js";
 import { isTerminated } from "./tasks.js";
 import { ASK_TOOL_ALLOWLIST, applyModeToDelivery, modeInstruction, normalizeModes } from "./desktop-modes.js";
+import { qualityPolicyForTask } from "./quality-gates.js";
 
 const DESKTOP_CHAT_ID = "desktop-local";
 
@@ -71,6 +72,12 @@ export function createDesktopTaskSubmitter({
     const storedTask = followUp && typeof taskStore.getRoot === "function" ? await taskStore.getRoot(task.task_id) : task;
     const sessionFile = storedTask?.session_file || null;
     const memory = formatMemory(storedTask?.conversation_memory);
+    const qualityPolicy = storedTask?.quality_policy || qualityPolicyForTask({
+      team: !singleRole,
+      singleRole,
+      mode: modes.mode,
+      description: input.description,
+    });
     const onEvent = (event) => recordEvent({
       ...event,
       task_id: event.task_id || task.task_id,
@@ -156,6 +163,11 @@ export function createDesktopTaskSubmitter({
           channel: "desktop",
           // 团队任务统一在项目经理产出计划后等待确认；单个机器人仅在规划模式下等待确认。
           requireHumanApproval: modes.mode !== "ask" && (!singleRole || modes.mode === "plan"),
+          qualityPolicy,
+          requireIndependentAcceptance: qualityPolicy.independentAcceptance === true,
+          requireAcceptanceMatrix: qualityPolicy.acceptanceMatrix === true,
+          requireE2E: qualityPolicy.e2e === true,
+          requireAudit: qualityPolicy.audit === true,
           projectName,
           ...(modes.runtime ? { runtime: modes.runtime } : {}),
           ...(singleRole ? { singleRole: true } : {}),
@@ -200,6 +212,12 @@ export function createDesktopTaskSubmitter({
       title: normalized.title,
       description: normalized.description,
       conversation_memory: withMemory([], "user", normalized.description),
+      quality_policy: qualityPolicyForTask({
+        team: owner === "project_manager",
+        singleRole: owner !== "project_manager",
+        mode: modes.mode,
+        description: normalized.description,
+      }),
     });
     await recordEvent({
       type: "task_created",

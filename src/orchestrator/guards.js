@@ -7,6 +7,7 @@
 // 2. 验收门禁：测试必须提交结构化验收结果（结论 + 逐项检查 + 证据），
 //    “单元测试通过 / 页面能打开”不能当作通过；未通过时交回项目经理决定打回谁修复。
 import { writeScopeOf, writeScopesOverlap } from "./assignments.js";
+import { acceptanceFailureRouting } from "../quality-gates.js";
 
 /** 文字里声称已经派发/分配的说法。只在没有有效 assignments 时才有意义。 */
 const DISPATCH_CLAIM = /(?:已经?|现已|正在|将会?|马上|立即)\s*(?:派发|派给|分派|分配|指派|交给|交由|转交|安排)|派发(?:给|至)|(?:交给|交由|转交给?|分配给|指派给|安排)\s*(?:架构|前端|后端|测试|审计|architect|frontend|backend|tester|auditor)/iu;
@@ -178,6 +179,9 @@ export function validateAcceptance(input) {
   });
   const evidence = (Array.isArray(input.evidence) ? input.evidence : []).slice(0, 20).map((item) => ({
     kind: String(item?.kind || "").trim().toLowerCase(),
+    ...(item?.command ? { command: clip(item.command, 500) } : {}),
+    ...(item?.status ? { status: clip(item.status, 30).toLowerCase() } : {}),
+    ...(Number.isInteger(item?.exitCode) ? { exitCode: item.exitCode } : {}),
     ...(item?.path ? { path: clip(item.path, 500) } : {}),
     ...(item?.text ? { text: clip(item.text, 1000) } : {}),
     ...(item?.url ? { url: clip(item.url, 500) } : {}),
@@ -186,7 +190,7 @@ export function validateAcceptance(input) {
     if (!EVIDENCE_KINDS.has(item.kind)) errors.push(`第 ${index + 1} 条证据的 kind 只能是 command、file、screenshot、url 或 note`);
     else if ((item.kind === "file" || item.kind === "screenshot") && !item.path) errors.push(`第 ${index + 1} 条证据缺少 path`);
     else if (item.kind === "url" && !item.url) errors.push(`第 ${index + 1} 条证据缺少 url`);
-    else if ((item.kind === "command" || item.kind === "note") && !item.text) errors.push(`第 ${index + 1} 条证据缺少 text`);
+    else if ((item.kind === "command" || item.kind === "note") && !item.text && !item.command) errors.push(`第 ${index + 1} 条证据缺少 text 或 command`);
   });
   const skipReason = clip(input.skipReason, 500);
   if (verdict === "pass") {
@@ -212,11 +216,15 @@ export function failedChecks(acceptance) {
 }
 
 /** @param {any} acceptance */
-export function acceptanceFailureNote(acceptance) {
+export function acceptanceFailureNote(acceptance, acceptanceMatrix = []) {
   const failed = failedChecks(acceptance).map((check) => `- ${check.id} ${check.title}${check.detail ? `：${check.detail}` : ""}`).join("\n");
+  const routing = acceptanceFailureRouting(acceptanceMatrix, acceptance);
   return [
     "【验收未通过】测试提交的结构化验收结论为 fail，以下检查未通过：",
     failed || "- （未列出具体检查项）",
+    routing.length
+      ? `必须按开发前验收矩阵回派：${routing.map((item) => `${item.id} → ${item.returnTo}`).join("；")}。`
+      : "失败项没有匹配到验收矩阵中的责任人；请先补齐 returnTo，再决定修复角色。",
     "请据此决定：用 assignments 把具体缺陷派给对应开发角色修复，并在修复后安排测试重新验收；",
     "检查编号形如 <切片id>-AC<n> 时，前缀就是出问题的切片：只返工这些切片，不要整块重做。",
     "若判断为测试误判，请说明理由后继续推进。不要在未修复的情况下直接设置 final=true。",

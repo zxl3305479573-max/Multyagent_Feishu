@@ -9,6 +9,7 @@
 - **两种入口，一份数据**：飞书群聊与桌面工作台共用同一个网关、同一份任务和项目；不接飞书也能只用桌面端。
 - **结构化协作**：项目经理提交阶段计划（assignments），同阶段并行、跨阶段按依赖推进；派发守卫识别“嘴上派发”，验收门禁要求测试给出结论和证据。
 - **计划确认门禁**：团队任务中，项目经理完成规划后不会立即派发；必须在桌面工作台确认计划后，下游 Agent 才会开始执行。
+- **质量完成门禁**：团队功能任务必须经过“已实现 → 开发自测 → 独立验收 → 独立审计（敏感任务）→ 产品闭环”，项目经理不能用自己的复跑代替测试角色验收。
 - **权限边界**：每个角色有工具白名单、可写目录、Shell 模式和联网白名单，策略闸门在每次工具调用前强制检查。
 - **可观测、可控制**：结构化事件日志、飞书多维表格看板与 Trace 表；任务可从发送按钮暂停或继续。
 - **可扩展**：给角色安装 Skill 与插件；接入 GitHub Issues 作为工单来源，完成后自动回写结果。
@@ -68,7 +69,11 @@ Agent 之间不直接对话，所有跨角色消息都经过编排层。更完�
 ```powershell
 npm install
 npm run check   # ESLint + 类型检查 + 单元测试
+npm run desktop:build
+npm run test:e2e  # 真实 Electron Chromium：工作台、运行设置与滚动隔离
 ```
+
+CI 使用 `npm ci` 安装干净依赖，并依次执行 lint、类型检查、单元测试、桌面构建和真实 E2E；E2E 截图与机器可读报告作为构建产物上传。
 
 ### 方式一：桌面工作台（推荐）
 
@@ -254,6 +259,9 @@ PI_AGENT_API_KEY=ollama
 
 ### 派发与交付
 
+- **验收矩阵**：团队功能任务开发前必须提交 `plan.acceptanceMatrix`；每项包含 `id`、`criterion`、`verifier`、`method`、`evidence`、`returnTo`。
+- **独立门禁**：项目经理提交 `final=true` 后，编排层仍会检查开发自测、独立验收和敏感任务审计。缺失时自动补派测试或审计角色，门禁未通过不能结算。
+- **证据报告**：任务结束时会根据结构化事件生成 `quality-report.json` 与 `quality-report.md`，记录五阶段状态、AC 检查、测试/构建/E2E 证据和失败项。
 - **结构化计划**：项目经理在 `deliver_artifact` 中提交 `assignments` / 阶段计划才会真正派发；同阶段并行，阶段之间按依赖推进。默认路由见 `config/routes.json`。
 - **交接契约**：每次交付必带结论、产物、证据、假设；产物路径限制在当前项目的工作区内。
 - **最终汇总**：项目经理发起的任务链，只有项目经理的 `final=true` 才算收尾；其他角色声明 `final` 仍会交回项目经理汇总。失败也交回项目经理重新决策。
@@ -437,6 +445,7 @@ npm run lint       # ESLint（只开启能发现真实缺陷的规则）
 npm run typecheck  # 渲染层 TypeScript + 后端带 // @ts-check 的模块
 npm test           # node:test 单元测试
 npm run check      # 以上全部
+npm run test:e2e   # 需先 npm run desktop:build；生成 test-results/desktop-e2e/
 ```
 
 修改网关代码后需重启网关（桌面端在运行设置里点“重启服务”）才会生效；修改渲染层后重新 `npm run desktop:build`，或用 `npm run desktop:dev` 配合 `ELECTRON_RENDERER_URL` 热更新。

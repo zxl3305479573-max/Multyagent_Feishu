@@ -16,6 +16,7 @@
     "desktop:package": "npm run desktop:build && electron-builder --win",
     "data:merge": "node scripts/merge-data-dir.mjs",
     "test": "node --test \"test/*.test.js\"",
+    "test:e2e": "node scripts/desktop-e2e.mjs",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.node.json && tsc -p desktop/tsconfig.json",
     "check": "npm run lint && npm run typecheck && npm test",
