@@ -326,9 +326,16 @@ export function createOrchestrator({
   // 计划被放弃（终止、重开、交回项目经理重新规划）时广播 cleared，桌面端据此收起切片进度；
   // 正常完成时最后一片交付已广播过全部完成的快照，不再重复。
   function deletePlanRun(rootTaskId, { announce = true } = {}) {
-    if (!planRuns.delete(rootTaskId)) return;
+    const run = planRuns.get(rootTaskId);
+    if (!run) return;
+    planRuns.delete(rootTaskId);
     persistPlanRuns();
-    if (announce) emitPlanProgress({ type: "plan_progress", task_id: rootTaskId, cleared: true, total: 0, completed: 0, slices: [] });
+    if (announce) emitPlanProgress({ type: "plan_progress", task_id: rootTaskId, project_name: planProject(run), cleared: true, total: 0, completed: 0, slices: [] });
+  }
+
+  // 桌面端按项目订阅事件，没有 project_name 的事件不会实时推给已选中项目的窗口。
+  function planProject(run) {
+    return run?.context?.projectName || run?.plan?.project || null;
   }
 
   // 计划状态变化：落盘，并广播切片进度快照（桌面端只取每个任务最新的一条）。
@@ -345,7 +352,7 @@ export function createOrchestrator({
           : run.failed.has(item.id) ? "failed"
             : run.interrupted.has(item.id) ? "interrupted" : "pending",
     }));
-    emitPlanProgress({ type: "plan_progress", task_id: rootTaskId, total: slices.length, completed: slices.filter((item) => item.status === "completed").length, slices });
+    emitPlanProgress({ type: "plan_progress", task_id: rootTaskId, project_name: planProject(run), total: slices.length, completed: slices.filter((item) => item.status === "completed").length, slices });
   }
 
   // 进度只是展示用的快照，不能因写事件失败或变慢而阻塞派发。
@@ -819,6 +826,7 @@ export function createOrchestrator({
       type: "slice_finished",
       task_id: subTaskId,
       parent_task_id: rootTaskId,
+      project_name: projectName,
       agent: targetKey,
       assignment_id: assignment.id,
       status,

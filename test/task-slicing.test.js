@@ -86,11 +86,13 @@ test("显式计划里同一阶段的同角色切片也串行，dependsOn 照常�
   assert.match(runs[1].taskId, /\.be-api$/);
 });
 
-test("sequenceAssignments 给重复角色补齐 id 并转成计划，唯一角色不改写", () => {
+test("sequenceAssignments 把两条及以上的派发转成计划并补齐 id，单条派发不改写", () => {
   const flat = { summary: "s", assignments: [{ agentKey: "frontend_developer", task: "a" }, { agentKey: "frontend_developer", task: "b" }] };
   const sequenced = sequenceAssignments(flat);
   assert.deepEqual(sequenced.plan.stages[0].assignments.map((item) => item.id), ["frontend_developer-1", "frontend_developer-2"]);
-  const single = { summary: "s", assignments: [{ agentKey: "frontend_developer", task: "a" }, { agentKey: "backend_developer", task: "b" }] };
+  const distinct = sequenceAssignments({ summary: "s", assignments: [{ agentKey: "frontend_developer", task: "a" }, { agentKey: "backend_developer", task: "b" }] });
+  assert.deepEqual(distinct.plan.stages[0].assignments.map((item) => item.id), ["frontend_developer", "backend_developer"]);
+  const single = { summary: "s", assignments: [{ agentKey: "frontend_developer", task: "a" }] };
   assert.equal(sequenceAssignments(single), single);
   const withArchitect = sequenceAssignments({ summary: "s", assignments: [{ agentKey: "architect", task: "d" }, ...flat.assignments] });
   assert.deepEqual(withArchitect.plan.stages[1].assignments.map((item) => item.id), ["frontend_developer-1", "frontend_developer-2"]);
@@ -327,4 +329,37 @@ test("切片结束时记录 slice_finished；summarizeSliceStats 按角色、规
   assert.equal(stats.by_criteria_count["0-1 条"].failed, 1);
   assert.equal(stats.parallel.parallel.count, 1);
   assert.deepEqual(stats.slice_gate, { pm_deliveries: 2, rejected: 1, rejection_rate: 0.5, passed_with_warnings: 1 });
+});
+
+test("项目经理一次派发前后端各一条：广播带项目名的进度，两边都交付后才汇总", async () => {
+  const events = [];
+  const order = [];
+  const orch = createOrchestrator({
+    log: quiet,
+    onEvent: async (event) => events.push(event),
+    runAgent: async (agent) => {
+      order.push(`start:${agent.key}`);
+      // 后端先完成、前端慢：扁平并行时后端一完成就会提前触发项目经理汇总。
+      await new Promise((resolve) => setTimeout(resolve, agent.key === "frontend_developer" ? 30 : 5));
+      order.push(`end:${agent.key}`);
+      return { text: "done", delivery: { summary: `${agent.key} done`, artifactPaths: [], artifactsDir: "d", final: true } };
+    },
+  });
+  for (const key of ["project_manager", "frontend_developer", "backend_developer"]) orch.registerRole({ key, displayName: key, appId: "x" }, client);
+  await orch.onTaskCompleted("project_manager", "T-two", {
+    delivery: { summary: "S2", artifactPaths: [], artifactsDir: "d", projectName: "test99", assignments: [
+      { id: "be-register-api", agentKey: "backend_developer", task: "注册接口" },
+      { id: "fe-register-page", agentKey: "frontend_developer", task: "注册页面" },
+    ] },
+    context: { chatId: "desktop-local", channel: "desktop", projectName: "test99" },
+  });
+  await orch.whenIdle();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(order.indexOf("start:project_manager") > order.indexOf("end:frontend_developer"), "项目经理在两边都完成后才汇总");
+  assert.equal(order.filter((item) => item === "start:project_manager").length, 1);
+  const progress = events.filter((event) => event.type === "plan_progress");
+  assert.ok(progress.length >= 2);
+  assert.ok(progress.every((event) => event.project_name === "test99"), "进度事件带项目名，桌面端按项目订阅时才能收到");
+  assert.deepEqual(progress[0].slices.map((slice) => slice.status), ["running", "running"]);
+  assert.ok(events.filter((event) => event.type === "slice_finished").every((event) => event.project_name === "test99"));
 });
