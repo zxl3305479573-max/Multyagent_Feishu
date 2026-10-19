@@ -20,7 +20,9 @@ function rpcTraceEvent(event, { taskId, agentKey }) {
 
 export function createRunAgent({ mode = process.env.PI_AGENT_RUNTIME || "embedded", embedded = runEmbeddedAgent, rpcRun = createAgentRunner() } = {}) {
   return async function runAgent(agent, prompt, context = {}, options = {}) {
-    if (mode !== "rpc") return embedded(agent, prompt, context, options);
+    // 桌面端可按任务选择运行方式（context.runtime），未指定时沿用全局配置 PI_AGENT_RUNTIME。
+    const effective = context.runtime === "rpc" || context.runtime === "embedded" ? context.runtime : mode;
+    if (effective !== "rpc") return embedded(agent, prompt, context, options);
     const projectName = context.projectName || "default";
     const rpcContext = { ...context, projectName };
     const result = await rpcRun(agent, buildPrompt(prompt, rpcContext), {

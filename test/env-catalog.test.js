@@ -32,6 +32,7 @@ test("every role contributes its Feishu credentials as secrets", () => {
     assert.equal(isSecretKey(role.feishu.appSecretEnv), true);
   }
   assert.equal(isSecretKey("DEEPSEEK_API_KEY"), true);
+  assert.equal(isSecretKey("PI_AGENT_API_KEY"), true);
   assert.equal(isSecretKey("PI_AGENT_MODEL"), false);
 });
 

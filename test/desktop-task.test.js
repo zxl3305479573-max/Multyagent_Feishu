@@ -94,3 +94,56 @@ test("desktop task submitter refuses a project switch returned by the project ma
   await submit.whenIdle();
   assert.ok(events.some((event) => event.type === "task_failed" && /项目不一致/.test(event.error)));
 });
+
+test("desktop follow-ups reuse the same root task and resume its persisted Pi session", async () => {
+  const root = await mkdtemp(join(tmpdir(), "desktop-continuation-"));
+  try {
+    const store = new TaskStore(join(root, "tasks.json"));
+    const events = [];
+    const runs = [];
+    const orchestrator = {
+      reopenTask: async (taskId) => { events.push({ type: "task_reopened", task_id: taskId }); return { reopened: true }; },
+      onTaskCompleted: async () => {},
+    };
+    let sequence = 0;
+    const runAgent = async (agent, prompt, context, options) => {
+      sequence += 1;
+      runs.push({ prompt, context, options });
+      return {
+        text: `第 ${sequence} 轮`,
+        sessionFile: `runtime/sessions/student/project_manager/session-${sequence}.jsonl`,
+        projectName: context.projectName,
+        delivery: { agentKey: agent.key, agentName: agent.displayName, summary: `第 ${sequence} 轮`, artifactPaths: [], next: "无需后续操作", final: true },
+      };
+    };
+    const submit = createDesktopTaskSubmitter({
+      taskStore: store,
+      orchestrator,
+      runAgent,
+      projectManagerAgent: { key: "project_manager", displayName: "项目经理" },
+      recordEvent: async (event) => { events.push(event); return event; },
+      loadProjectSummary: async () => ({ content: "已有上下文" }),
+    });
+    const created = await submit({ projectName: "student", title: "学生系统", description: "实现登录" });
+    await submit.whenIdle();
+    const first = await store.get(created.taskId);
+    assert.match(first.session_file, /session-1\.jsonl$/);
+    assert.deepEqual(first.conversation_memory.map((item) => item.role), ["user", "assistant"]);
+
+    const continued = await submit.continueTask({ taskId: created.taskId, message: "再增加成绩导出功能", requestId: "follow-up-1" });
+    await submit.whenIdle();
+    assert.equal(continued.taskId, created.taskId);
+    assert.equal((await store.count()), 1, "follow-up must not create a second task");
+    assert.equal(runs[1].options.sessionFile, first.session_file);
+    assert.match(runs[1].prompt, /同一任务/);
+    assert.match(runs[1].prompt, /再增加成绩导出功能/);
+    assert.match(runs[1].prompt, /此前对话记忆/);
+    assert.match(runs[1].prompt, /实现登录/);
+    assert.ok(events.some((event) => event.type === "task_reused" && event.task_id === created.taskId && event.text === "再增加成绩导出功能"));
+    const finalTask = await store.get(created.taskId);
+    assert.equal(finalTask.session_file, "runtime/sessions/student/project_manager/session-2.jsonl");
+    assert.deepEqual(finalTask.conversation_memory.map((item) => item.role), ["user", "assistant", "user", "assistant"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

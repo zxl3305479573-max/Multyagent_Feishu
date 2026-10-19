@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Agent, AgentCard, AgentExecutionGroup, ControlCommand, CredentialStatus, DesktopSocket, EventRecord, PendingSubmission, Task, WorkspaceView } from "./types";
+import type { Agent, AgentCard, AgentExecutionGroup, ControlCommand, CredentialStatus, DesktopSocket, EventRecord, PendingSubmission, RuntimeConfig, Task, WorkspaceView } from "./types";
 import { eventTime, finalResultOf, formatProjectCommandFeedback, mergeTasks, rootTaskId, snapshotStatus, taskStatus } from "./format";
 import { agentStatus, collectArtifacts, executionOwner, executionTiming, groupToolExecutions } from "./execution-view";
 import { Sidebar } from "./components/Sidebar";
@@ -11,22 +11,24 @@ import { Composer, ConversationView } from "./components/ConversationView";
 import { NewProjectModal } from "./components/NewProjectModal";
 import { TicketsView } from "./components/TicketsView";
 import { CapabilitiesView } from "./components/CapabilitiesView";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 
 let activeSocket: DesktopSocket | null = null;
 
 const COMMAND_NAMES: Record<string, string> = {
   retry: "重试任务",
+  continue_task: "继续任务",
   pause: "暂停任务", resume: "继续任务", terminate: "终止任务",
   export_project: "导出项目历史", cleanup_history: "归档历史", restore_history: "恢复历史",
 };
 
 const EVENT_LIMIT = 1000;
 const LIFECYCLE_STATUS: Record<string, string> = {
-  task_started: "running", task_hold: "paused", task_resumed: "running",
+  task_reopened: "running", task_started: "running", task_hold: "paused", task_resumed: "running",
   task_settle: "completed",
   task_terminated: "cancelled", task_cancelled: "cancelled", task_failed: "failed",
 };
-const SETTLING_EVENTS = ["task_settle", "task_failed", "task_terminated", "task_cancelled"];
+const SETTLING_EVENTS = ["task_settle", "task_failed", "task_terminated", "task_cancelled", "task_reopened"];
 
 // 按 event_id 去重并保留最近 EVENT_LIMIT 条；批量合并只做一次 Set 查重，避免逐条 O(n) 扫描。
 function mergeEvents(current: EventRecord[], incoming: EventRecord[], limit = EVENT_LIMIT): EventRecord[] {
@@ -94,10 +96,13 @@ export function App() {
   const [configuredCredentials, setConfiguredCredentials] = useState<string[]>([]);
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus | null>(null);
   const [feishuEnabled, setFeishuEnabled] = useState(true);
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
+  const [runtimeConfigBusy, setRuntimeConfigBusy] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectNameInput, setProjectNameInput] = useState("");
   const [projectPathInput, setProjectPathInput] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
+  const [confirmingTerminate, setConfirmingTerminate] = useState(false);
   const [pendingCommand, setPendingCommand] = useState<ControlCommand | null>(null);
   const [pendingProjectCommand, setPendingProjectCommand] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -271,9 +276,21 @@ export function App() {
           if (message.error) setNotice(`操作失败：${message.error}`);
           else if (projectFeedback) setNotice(projectFeedback);
           else if (message.command === "create_project") { /* 已在上方提示 */ }
-          else setNotice(message.result?.taskId ? "任务已创建，正在连接项目经理…" : `${COMMAND_NAMES[message.command || ""] || "操作"}已受理`);
+          else if (message.command === "submit_task") setNotice(message.result?.taskId ? "任务已创建，Agent 已开始处理" : "任务提交已受理");
+          else if (message.command === "continue_task") setNotice("后续消息已发送到当前任务");
+          else setNotice(`${COMMAND_NAMES[message.command || ""] || "操作"}已受理`);
         } else if (message.type === "event" && message.event) {
           const event = message.event;
+          if (["task_started", "dispatch_started"].includes(event.type || "")) {
+            setNotice((current) => current.startsWith("任务已创建")
+              || current === "正在创建任务…"
+              || current === "正在发送到当前任务…"
+              || current === "已连接目标项目，正在创建任务…"
+              || current.startsWith("正在切换到目标项目")
+              ? ""
+              : current);
+          }
+          if (event.type === "task_failed") setNotice(`任务执行失败：${event.error || event.summary || "请查看执行记录"}`);
           setEvents((current) => mergeEvents(current, [event]));
           // 飞书端发起的任务也走同一个网关：出现新项目名时直接加入侧边栏，不必重连。
           const eventProject = event.project_name;
@@ -302,6 +319,15 @@ export function App() {
   useEffect(refreshCredentials, []);
 
   useEffect(() => {
+    if (connection !== "已连接" || !activeSocket) return;
+    let cancelled = false;
+    request<RuntimeConfig>("runtime_config")
+      .then((config) => { if (!cancelled) setRuntimeConfig(config); })
+      .catch((error) => { if (!cancelled) setNotice(`读取模型配置失败：${(error as Error).message}`); });
+    return () => { cancelled = true; };
+  }, [connection, request]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -312,16 +338,30 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  useEffect(() => {
+    if (!notice) return;
+    const persistent = /失败|无法|错误|不可用|未连接/.test(notice);
+    const timer = window.setTimeout(() => setNotice(""), persistent ? 10_000 : 4_000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   const send = (command: string, values: Record<string, unknown> = {}) => {
     if (!selected || !activeSocket) return;
     activeSocket.send({ type: "command", command, taskId: selected, ...values, requestId: crypto.randomUUID() });
   };
 
-  const sendControl = (command: ControlCommand) => {
+  const runControl = (command: ControlCommand) => {
     if (!selected || !activeSocket || pendingCommand) return;
-    if (command === "terminate" && !window.confirm("确定终止当前任务吗？终止后仍会保留历史，但不能继续执行。")) return;
     setPendingCommand(command);
     send(command, command === "retry" ? { error: selectedTask?.status_snapshot?.latest_event || "manual retry" } : {});
+  };
+  const sendControl = (command: ControlCommand) => {
+    if (command === "terminate") {
+      if (!selected || !activeSocket || pendingCommand) return;
+      setConfirmingTerminate(true);
+      return;
+    }
+    runControl(command);
   };
 
   const projectCommand = (command: string) => {
@@ -387,14 +427,35 @@ export function App() {
 
   const submitTask = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!taskProject.trim() || !description.trim()) {
-      setNotice("填写项目和任务描述后即可开始");
+    if (!description.trim()) {
+      setNotice("请填写要发送的内容");
+      return;
+    }
+    if (selectedTask) {
+      if (!activeSocket) {
+        setNotice("任务续聊需要在桌面应用中运行");
+        return;
+      }
+      activeSocket.send({
+        type: "command",
+        command: "continue_task",
+        taskId: selectedTask.task_id,
+        message: description.trim(),
+        requestId: crypto.randomUUID(),
+      });
+      setDescription("");
+      setNotice("正在发送到当前任务…");
+      return;
+    }
+    if (!taskProject.trim()) {
+      setNotice("请先选择项目");
       return;
     }
     if (taskProject.trim() !== project && project) {
       pendingSubmission.current = { projectName: taskProject.trim(), title: title.trim(), description: description.trim() };
       setConnection("连接中");
       setProject(taskProject.trim());
+      setDescription("");
       setNotice("正在切换到目标项目，连接就绪后会自动提交…");
       return;
     }
@@ -410,6 +471,7 @@ export function App() {
       description: description.trim(),
       requestId: crypto.randomUUID(),
     });
+    setDescription("");
     setNotice("正在创建任务…");
   };
 
@@ -429,6 +491,34 @@ export function App() {
       const result = await window.desktop.openFile(event.file_path, event.project_name || selectedTask?.project_name || project);
       if (!result.opened) setNotice(`文件无法打开：${result.error || event.file_path}`);
     } catch (error) { setNotice(`文件无法打开：${String(error)}`); }
+  };
+
+  const loadRuntimeModels = useCallback((provider: string) => request<RuntimeConfig>("runtime_config", { provider }), [request]);
+  const changeRuntimeConfig = async (input: { provider: string; model: string; thinking: string }) => {
+    if (runtimeConfigBusy) return;
+    setRuntimeConfigBusy(true);
+    let next: RuntimeConfig | null = null;
+    try {
+      next = await request<RuntimeConfig>("runtime_config_set", input);
+      setRuntimeConfig(next);
+    } catch (error) {
+      setNotice(`切换模型失败：${(error as Error).message}`);
+      return;
+    } finally {
+      setRuntimeConfigBusy(false);
+    }
+    try {
+      await window.desktop?.settings?.save({ PI_AGENT_PROVIDER: input.provider, PI_AGENT_MODEL: input.model, PI_AGENT_THINKING: input.thinking });
+      const model = next.models.find((item) => item.id === next?.model)?.name || next.model;
+      const thinking = next.thinkingLevels.find((item) => item.value === next?.thinking)?.label || next.thinking;
+      setNotice(`已切换为 ${model} · 思考 ${thinking}，从下一次 Agent 执行开始生效`);
+    } catch (error) {
+      setNotice(`模型已切换，但保存默认设置失败：${(error as Error).message}`);
+    }
+  };
+  const changeThinking = (thinking: string) => {
+    if (!runtimeConfig) return;
+    void changeRuntimeConfig({ provider: runtimeConfig.provider, model: runtimeConfig.model, thinking });
   };
   const showSettings = () => {
     setWorkspaceView("settings");
@@ -503,11 +593,12 @@ export function App() {
         {feishuEnabled && !hasManagerCredentials && connection === "已连接" && workspaceView !== "settings" && <div className="setup-hint"><span>飞书已开启但未配置项目经理 App ID / Secret，飞书群暂不可用；桌面端任务不受影响。不使用飞书可在运行设置中关闭。</span><button onClick={showSettings}>前往设置</button></div>}
 
         {workspaceView === "settings" && <SettingsView onSaved={refreshCredentials} onNotice={setNotice} />}
-        {workspaceView === "capabilities" && <CapabilitiesView agents={agents} request={request} onNotice={setNotice} />}
-        {workspaceView === "tickets" && <TicketsView project={project} projects={projects} request={request} onNotice={setNotice} onOpenTask={(taskId) => { setSelected(taskId); setSelectedAgent(""); setWorkspaceView("conversation"); }} />}
+        {workspaceView === "capabilities" && <CapabilitiesView agents={agents} connected={connection === "已连接"} request={request} onNotice={setNotice} />}
+        {workspaceView === "tickets" && <TicketsView project={project} projects={projects} connected={connection === "已连接"} request={request} onNotice={setNotice} onOpenTask={(taskId) => { setSelected(taskId); setSelectedAgent(""); setWorkspaceView("conversation"); }} />}
         {workspaceView === "project" && <ProjectView
           project={project}
           projects={projects}
+          connected={connection === "已连接"}
           stats={projectStats}
           pendingCommand={pendingProjectCommand}
           onSelectProject={(value) => { setProject(value); setSelected(""); setSelectedAgent(""); }}
@@ -534,7 +625,13 @@ export function App() {
           onChange={setDescription}
           onSubmit={submitTask}
           hasTask={Boolean(selectedTask)}
-          canSubmit={Boolean(description.trim()) && Boolean(taskProject.trim()) && connection === "已连接"}
+          canSubmit={Boolean(description.trim()) && Boolean(selectedTask || taskProject.trim()) && connection === "已连接"}
+          runtimeConnected={connection === "已连接"}
+          runtimeConfig={runtimeConfig}
+          runtimeBusy={runtimeConfigBusy}
+          onLoadProvider={loadRuntimeModels}
+          onRuntimeChange={(input) => void changeRuntimeConfig(input)}
+          onThinkingChange={changeThinking}
         />}
       </section>
 
@@ -547,6 +644,17 @@ export function App() {
         onChooseDirectory={() => void chooseProjectDirectory()}
         onSubmit={createProject}
         onClose={() => setProjectModalOpen(false)}
+      />}
+      {confirmingTerminate && <ConfirmDialog
+        title="终止当前任务？"
+        description="终止后仍会保留历史记录，但该任务不能继续执行。"
+        confirmLabel="终止任务"
+        tone="danger"
+        onConfirm={() => {
+          setConfirmingTerminate(false);
+          runControl("terminate");
+        }}
+        onCancel={() => setConfirmingTerminate(false)}
       />}
     </main>
   );

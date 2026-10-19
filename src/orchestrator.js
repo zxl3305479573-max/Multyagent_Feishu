@@ -128,6 +128,36 @@ export function createOrchestrator({
     return resumed;
   }
 
+  /** 用户在同一任务里发起新一回合：清理上一回合的结算与轮次状态，但保留任务 ID 和会话。 */
+  async function reopenTask(taskId) {
+    const rootTaskId = rootOf(taskId);
+    const task = rootTaskId ? await getRootTask(rootTaskId) : null;
+    if (!task) return { reopened: false, reason: "任务不存在" };
+    const status = task.status_snapshot?.status || task.status;
+    if (status === "cancelled" || task.terminated) return { reopened: false, reason: "已终止的任务不能继续" };
+    if (status === "in_progress") return { reopened: false, reason: "当前任务仍在执行" };
+    if (status === "awaiting_approval") return { reopened: false, reason: "当前任务正在等待确认" };
+    failureRecoveries.delete(rootTaskId);
+    rootRounds.delete(rootTaskId);
+    deliveryHistory.delete(rootTaskId);
+    deletePlanRun(rootTaskId);
+    pmConsolidations.delete(rootTaskId);
+    settledRoots.delete(rootTaskId);
+    pendingSettlements.delete(rootTaskId);
+    for (const key of [...corrections.keys()]) if (rootOf(key.split("#")[0]) === rootTaskId) corrections.delete(key);
+    for (const key of [...dispatchGroups.keys()]) if (rootOf(key.split("->")[0]) === rootTaskId) dispatchGroups.delete(key);
+    await setPaused(rootTaskId, false);
+    await onEvent({
+      type: "task_reopened",
+      task_id: rootTaskId,
+      agent: "project_manager",
+      project_name: task.project_name || null,
+      chat_id: task.source_chat_id || null,
+      channel: task.source_chat_id === "desktop-local" ? "desktop" : undefined,
+    });
+    return { reopened: true };
+  }
+
   // 飞书卡片回调要在 3 秒内应答，而「承接用户选择」可能跑完一整轮 Agent，
   // 因此推进过程放后台，回调只负责认领与回执。
   function track(promise, { suppressFailureEvent = false } = {}) {
@@ -601,6 +631,11 @@ export function createOrchestrator({
       dispatchContext = guarded.context;
       settleEmptyAssignments = false;
     }
+    if (dispatchContext.singleRole && agentKey !== "project_manager" && !needsHumanDecision({ agentKey, delivery, context: dispatchContext, approvalRequired })) {
+      await emitStageSettlement({ type: "task_settle", task_id: taskId, reason: "single_role" });
+      log.info(JSON.stringify({ type: "settle", task_id: taskId, reason: "single_role" }));
+      return;
+    }
     if (delivery.final && !(agentKey !== "project_manager" && planHasRemaining(rootTaskId))) {
       // 只有项目经理的 final 才代表整条任务链结束。其他角色声明 final 只说明
       // 它这一阶段无需下游协作，仍要回到项目经理做最终汇总。
@@ -805,6 +840,7 @@ export function createOrchestrator({
         appId: agent.appId,
         chatId: context.chatId,
         channel: context.channel,
+        runtime: context.runtime,
         projectName,
         artifactsDir,
         projectSummary,
@@ -962,6 +998,7 @@ export function createOrchestrator({
       messageId: task.source_message_id || null,
       correlationId: task.source_message_id || null,
       channel: task.source_chat_id === "desktop-local" ? "desktop" : undefined,
+      ...(task.runtime ? { runtime: task.runtime } : {}),
       requireHumanApproval: false,
       projectName: task.project_name || null,
       manualRetry: { error: lastError },
@@ -1061,6 +1098,7 @@ export function createOrchestrator({
         appId: agent.appId,
         chatId,
         channel: pending.context?.channel,
+        runtime: pending.context?.runtime,
         projectName,
         artifactsDir,
         onEvent,
@@ -1100,6 +1138,5 @@ export function createOrchestrator({
     return resolveLatest(chatId, "approve");
   }
 
-  return { registerRole, onTaskCompleted, approveLatest, resolveLatest, resumeTask, retryTask, terminateTask, whenIdle };
+  return { registerRole, onTaskCompleted, approveLatest, resolveLatest, resumeTask, reopenTask, retryTask, terminateTask, whenIdle };
 }
-

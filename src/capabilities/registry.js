@@ -7,13 +7,16 @@
 //
 // 文件放在数据目录 capabilities/{skills,plugins}/<name>/，启用状态与角色分配记录在 runtime/capabilities.json。
 // 来源支持：本地文件夹、GitHub（owner/repo[/子目录][@分支或标签]）、桌面端直接新建 Skill。
+//
+// 本机已有的 Pi Skill / 扩展（~/.pi/agent、Pi 包、数据目录 .pi/ 下的）也会被发现并列出，但不复制、不自动启用：
+// 机器人默认一概不加载，只有在能力页里分配给某个角色后，该角色才会加载它。
 import { execFile } from "node:child_process";
 import { cp, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, getAgentDir, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { readJsonFileSync, writeFileAtomic } from "../atomic-file.cjs";
 
 const run = promisify(execFile);
@@ -106,6 +109,38 @@ async function readPlugin(dir) {
   return { name, description, entry, tools };
 }
 
+const insideDir = (dir, target) => {
+  const inside = relative(resolve(dir), resolve(target));
+  return inside === "" || (!inside.startsWith("..") && !inside.startsWith(sep) && !/^[A-Za-z]:/.test(inside));
+};
+
+// 扩展的显示名：入口是 index.* 时用所在目录名，否则用文件名。
+function extensionName(path) {
+  const file = basename(path, extname(path));
+  return file === "index" ? basename(resolve(path, "..")) : file;
+}
+
+/**
+ * 用 Pi 自己的发现规则列出本机已安装的 Skill 与扩展（与在终端运行 pi 时看到的一致）。
+ * 会执行扩展的注册函数以读取工具名，这与 pi 每次启动时的行为相同。
+ */
+export async function discoverLocalWithPi({ cwd = process.cwd(), agentDir = getAgentDir(), exclude = [] } = {}) {
+  const loader = new DefaultResourceLoader({ cwd, agentDir, noPromptTemplates: true, noThemes: true, noContextFiles: true });
+  await loader.reload();
+  const excluded = (path) => exclude.some((dir) => insideDir(dir, path));
+  const skills = loader.getSkills().skills
+    .map((skill) => ({ name: skill.name, description: skill.description, path: basename(skill.filePath) === "SKILL.md" ? skill.baseDir : skill.filePath }))
+    .filter((skill) => !excluded(skill.path));
+  const plugins = loader.getExtensions().extensions
+    .filter((extension) => !extension.hidden && (extension.resolvedPath || extension.path))
+    .map((extension) => {
+      const path = extension.resolvedPath || extension.path;
+      return { name: extensionName(path), description: "", path, tools: [...extension.tools.keys()] };
+    })
+    .filter((plugin) => !excluded(plugin.path));
+  return { skills, plugins };
+}
+
 export function createCapabilityRegistry({
   root = resolve(process.cwd(), "capabilities"),
   stateFile = resolve(process.cwd(), "runtime", "capabilities.json"),
@@ -113,10 +148,15 @@ export function createCapabilityRegistry({
   git = (args, options) => run("git", args, { timeout: 120_000, windowsHide: true, ...options }),
   now = () => new Date(),
   log = console,
+  discoverLocal = () => discoverLocalWithPi({ exclude: [root] }),
 } = {}) {
   let state = readJsonFileSync(stateFile, { fallback: () => ({}), onCorrupt: "backup", log }) || {};
   state.skills ||= {};
   state.plugins ||= {};
+  // 本机能力按绝对路径记录分配情况；名称、描述、工具名在每次发现时刷新。
+  state.local ||= {};
+  state.local.skills ||= {};
+  state.local.plugins ||= {};
   // 每次变更递增：Agent 加载器按它判断缓存是否过期，改完无需重启网关。
   let version = 0;
   const dirOf = (kind, name) => join(root, kind === "skill" ? "skills" : "plugins", name);
@@ -200,7 +240,50 @@ export function createCapabilityRegistry({
     return [...new Set((Array.isArray(roles) ? roles : []).map(String))].filter((role) => !allowed.size || allowed.has(role));
   }
 
-  async function assign({ kind, name, roles, enabled } = {}) {
+  // 本机能力：只能分配最近一次发现到的路径，不能借此让机器人加载任意文件。
+  let lastDiscovered = { skills: [], plugins: [] };
+  async function refreshLocal() {
+    try {
+      lastDiscovered = await discoverLocal();
+    } catch (error) {
+      return { skills: [], plugins: [], error: String(error.message || error).slice(0, 300) };
+    }
+    let changed = false;
+    for (const kind of KINDS) {
+      const records = state.local[kind === "skill" ? "skills" : "plugins"];
+      for (const item of lastDiscovered[kind === "skill" ? "skills" : "plugins"]) {
+        const record = records[item.path];
+        if (!record) continue;
+        const next = { ...record, name: item.name, ...(item.tools ? { tools: item.tools } : {}) };
+        if (JSON.stringify(next) !== JSON.stringify(record)) { records[item.path] = next; changed = true; }
+      }
+    }
+    if (changed) await persist();
+    const describe = (kind) => lastDiscovered[kind === "skill" ? "skills" : "plugins"].map((item) => {
+      const record = state.local[kind === "skill" ? "skills" : "plugins"][item.path];
+      return { kind, local: true, ...item, roles: record?.roles || [], enabled: record ? record.enabled : true, source: `本机：${item.path}`, installed: true };
+    });
+    return { skills: describe("skill"), plugins: describe("plugin") };
+  }
+
+  async function assignLocal({ kind, path, roles, enabled }) {
+    const key = kind === "skill" ? "skills" : "plugins";
+    const item = lastDiscovered[key]?.find((entry) => entry.path === path) || null;
+    const records = state.local[key];
+    if (!item && !records[path]) throw new Error("找不到这个本机能力，请刷新后重试");
+    const record = records[path] || { name: item.name, roles: [], enabled: true, ...(item.tools ? { tools: item.tools } : {}) };
+    if (roles !== undefined) record.roles = normalizeRoles(roles);
+    if (enabled !== undefined) record.enabled = enabled === true;
+    records[path] = record;
+    await persist();
+    return { kind, local: true, path, ...record };
+  }
+
+  async function assign({ kind, name, roles, enabled, local = false, path } = {}) {
+    if (local) {
+      bucket(kind);
+      return assignLocal({ kind, path: String(path || ""), roles, enabled });
+    }
     const record = bucket(kind)[name];
     if (!record) throw new Error("找不到这个能力");
     if (roles !== undefined) record.roles = normalizeRoles(roles);
@@ -220,7 +303,8 @@ export function createCapabilityRegistry({
 
   async function list() {
     const describe = (kind) => Object.values(bucket(kind)).map((record) => ({ kind, ...record, installed: existsSync(dirOf(kind, record.name)) }));
-    return { skills: describe("skill"), plugins: describe("plugin"), roles: roleKeys, root };
+    const local = await refreshLocal();
+    return { skills: describe("skill"), plugins: describe("plugin"), local, roles: roleKeys, root };
   }
 
   /** 某个角色当前启用的能力：Skill 目录、插件入口和插件声明的工具名（同步，供 Agent 启动时读取）。 */
@@ -228,11 +312,15 @@ export function createCapabilityRegistry({
     const active = (records) => Object.values(records).filter((record) => record.enabled && record.roles.includes(agentKey));
     const skills = active(state.skills).map((record) => dirOf("skill", record.name)).filter((dir) => existsSync(dir));
     const plugins = active(state.plugins).filter((record) => existsSync(dirOf("plugin", record.name)));
+    // 本机能力只在分配给该角色时加载。
+    const localActive = (records) => Object.entries(records).filter(([path, record]) => record.enabled && record.roles.includes(agentKey) && existsSync(path));
+    const localSkills = localActive(state.local.skills).map(([path]) => path);
+    const localPlugins = localActive(state.local.plugins);
     return {
       version,
-      skillPaths: skills,
-      extensionPaths: plugins.map((record) => resolve(dirOf("plugin", record.name), record.entry)),
-      tools: [...new Set(plugins.flatMap((record) => record.tools))],
+      skillPaths: [...skills, ...localSkills],
+      extensionPaths: [...plugins.map((record) => resolve(dirOf("plugin", record.name), record.entry)), ...localPlugins.map(([path]) => path)],
+      tools: [...new Set([...plugins.flatMap((record) => record.tools), ...localPlugins.flatMap(([, record]) => record.tools || [])])],
     };
   }
 

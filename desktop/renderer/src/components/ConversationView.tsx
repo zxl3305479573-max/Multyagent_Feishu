@@ -3,14 +3,24 @@ import type { Agent, AgentExecutionGroup, AgentExecutionItem, EventRecord, Task 
 import { eventLabels, statusLabels, verdictLabels } from "../labels";
 import { formatDuration, formatFileSize, formatTime, snapshotStatus, taskStatus } from "../format";
 import { collectArtifacts, toolExecutionStatus } from "../execution-view";
+import { RuntimeModelPicker } from "./RuntimeModelPicker";
+import type { RuntimeConfig } from "../types";
 
 type OpenFile = (event: EventRecord) => void;
 
 function Artifacts({ event, onOpenFile }: { event: EventRecord; onOpenFile: OpenFile }) {
-  return <div className="delivery-artifacts"><strong>交付文件</strong>{collectArtifacts(event).map((artifact) => <div className="delivery-artifact" key={artifact.path}>
-    <a href="#open-file" onClick={(clickEvent) => { clickEvent.preventDefault(); onOpenFile({ ...event, file_path: artifact.path }); }} title="打开交付文件">{artifact.path}</a>
-    <span>{artifact.description}</span><small>{artifact.type || "文件"}{artifact.size !== undefined ? ` · ${formatFileSize(artifact.size)}` : ""}</small>
-  </div>)}</div>;
+  const artifacts = collectArtifacts(event);
+  const totalSize = artifacts.reduce((sum, artifact) => sum + (typeof artifact.size === "number" ? artifact.size : 0), 0);
+  return <details className="delivery-artifacts">
+    <summary>
+      <span className="delivery-artifacts-title"><strong>交付文件</strong><small>{artifacts.length} 个{totalSize ? ` · ${formatFileSize(totalSize)}` : ""}</small></span>
+      <span className="delivery-artifacts-chevron">›</span>
+    </summary>
+    <div className="delivery-artifact-list">{artifacts.map((artifact) => <div className="delivery-artifact" key={artifact.path}>
+      <a href="#open-file" onClick={(clickEvent) => { clickEvent.preventDefault(); onOpenFile({ ...event, file_path: artifact.path }); }} title="打开交付文件">{artifact.path}</a>
+      <span>{artifact.description}</span><small>{artifact.type || "文件"}{artifact.size !== undefined ? ` · ${formatFileSize(artifact.size)}` : ""}</small>
+    </div>)}</div>
+  </details>;
 }
 
 // 测试的结构化验收：结论、逐项检查和证据，失败项一眼可见。
@@ -153,7 +163,7 @@ export function ConversationView({ selected, selectedTask, project, agents, sele
         {taskEvents.length === 0 && (taskEventsLoading
           ? <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>
           : <div className="conversation-empty">暂无任务记录</div>)}
-        {taskEvents.filter((event) => event.type === "task_created").map((event, index) => <article className="message user-message" key={event.event_id || `request-${index}`}><div className="message-avatar user-avatar">你</div><div className="message-body"><div className="message-author">你 <time>{formatTime(event.timestamp)}</time></div><p>{selectedTask.description || event.text || selectedTask.title}</p></div></article>)}
+        {taskEvents.filter((event) => ["task_created", "task_reused"].includes(event.type || "")).map((event, index) => <article className="message user-message" key={event.event_id || `request-${index}`}><div className="message-avatar user-avatar">你</div><div className="message-body"><div className="message-author">你 <time>{formatTime(event.timestamp)}</time></div><p>{event.type === "task_reused" ? event.text || "继续当前任务" : selectedTask.description || event.text || selectedTask.title}</p></div></article>)}
         {groups.map((group) => <ExecutionGroup key={group.key} group={group} agents={agents} focused={selectedAgent === group.key} sectionRef={(element) => { sectionRefs.current[group.key] = element; }} onOpenFile={onOpenFile} />)}
         {["running", "in_progress"].includes(snapshotStatus(selectedTask)) && <div className="running-indicator"><span className="pulse-dot" />Agent 正在执行</div>}
       </div>
@@ -167,13 +177,22 @@ type ComposerProps = {
   onSubmit: (event: React.FormEvent) => void;
   hasTask: boolean;
   canSubmit: boolean;
+  runtimeConnected: boolean;
+  runtimeConfig: RuntimeConfig | null;
+  runtimeBusy: boolean;
+  onLoadProvider: (provider: string) => Promise<RuntimeConfig>;
+  onRuntimeChange: (input: { provider: string; model: string; thinking: string }) => void;
+  onThinkingChange: (thinking: string) => void;
 };
 
-export function Composer({ value, onChange, onSubmit, hasTask, canSubmit }: ComposerProps) {
+export function Composer({ value, onChange, onSubmit, hasTask, canSubmit, runtimeConnected, runtimeConfig, runtimeBusy, onLoadProvider, onRuntimeChange, onThinkingChange }: ComposerProps) {
   return <div className="composer-wrap">
     <form className="composer" onSubmit={onSubmit}>
-      <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={hasTask ? "继续描述下一个任务…" : "描述你想完成的任务…"} rows={3} aria-label="任务描述" />
-      <div className="composer-send-row"><button className="send-button" type="submit" disabled={!canSubmit} aria-label="提交任务" title="提交新任务">↑</button></div>
+      <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={hasTask ? "继续当前任务…" : "描述你想完成的任务…"} rows={3} aria-label="任务描述" />
+      <div className="composer-send-row">
+        <RuntimeModelPicker config={runtimeConfig} connected={runtimeConnected} busy={runtimeBusy} onLoadProvider={onLoadProvider} onSelect={onRuntimeChange} onThinking={onThinkingChange} />
+        <button className="send-button" type="submit" disabled={!canSubmit} aria-label="提交任务" title="提交新任务">↑</button>
+      </div>
     </form>
   </div>;
 }

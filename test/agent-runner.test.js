@@ -58,6 +58,24 @@ test("RPC runner keeps the repository root cwd and passes the serialized task co
   assert.equal(context.chatId, "chat-1");
 });
 
+test("RPC runner points Pi at the generated custom model catalog", async () => {
+  const calls = [];
+  const runner = {
+    run: async (_prompt, options) => { calls.push(options); return { text: "完成", events: [], exit: { code: 0, signal: null } }; },
+  };
+  const runAgentRpc = createAgentRunner({
+    runner,
+    root: "D:/repo",
+    prepareModelConfig: async () => ({ agentDir: "D:/repo/runtime/pi-agent" }),
+  });
+  await runAgentRpc(
+    { key: "tester", displayName: "测试", max_runtime_seconds: 5 },
+    "执行测试",
+    { projectName: "student", taskId: "T-model", env: { PI_CODING_AGENT_DIR: "D:/ignored" } },
+  );
+  assert.equal(calls[0].env.PI_CODING_AGENT_DIR, "D:/repo/runtime/pi-agent");
+});
+
 test("worktree isolation stays opt-in and only switches cwd when explicitly enabled", async () => {
   const calls = [];
   const runner = { run: async (_prompt, options) => { calls.push(options); return { text: "", events: [], exit: { code: 0 } }; } };

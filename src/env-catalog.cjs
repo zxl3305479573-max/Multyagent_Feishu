@@ -41,6 +41,12 @@ const MODEL_PROVIDERS = [
 ];
 
 const THINKING_OPTIONS = [["off", "关闭"], ["minimal", "极少"], ["low", "低"], ["medium", "中"], ["high", "高"], ["xhigh", "极高"]];
+const MODEL_API_OPTIONS = [
+  ["openai-completions", "OpenAI Chat Completions（兼容服务）"],
+  ["openai-responses", "OpenAI Responses"],
+  ["anthropic-messages", "Anthropic Messages"],
+  ["google-generative-ai", "Google Generative AI"],
+];
 
 function roleFields(roles) {
   const fields = [];
@@ -76,11 +82,21 @@ function buildEnvCatalog({ roles = roleConfig().roles } = {}) {
     {
       id: "model",
       title: "模型",
-      description: "所有角色共用的模型服务商、模型与思考强度。",
+      description: "所有角色共用的模型。内置服务商直接选 ID 和 Key；Ollama、vLLM、LM Studio、代理网关或其他兼容服务填写自定义 Base URL 与协议。",
       fields: [
-        { key: "PI_AGENT_PROVIDER", label: "模型服务商", type: "select", default: "deepseek", options: MODEL_PROVIDERS.map(([id, name]) => [id, name]), allowCustom: true, description: "pi-coding-agent 中的服务商 ID。下方会显示该服务商需要的 API Key。" },
-        { key: "PI_AGENT_MODEL", label: "模型", type: "text", default: "deepseek-flash", description: "服务商下的模型 ID，例如 deepseek-flash、gpt-5.1。" },
-        { key: "PI_AGENT_THINKING", label: "思考强度", type: "select", default: "off", options: THINKING_OPTIONS, description: "全局默认值；角色配置里的 thinking 优先。" },
+        { key: "PI_AGENT_PROVIDER", label: "模型服务商", type: "select", default: "deepseek", options: MODEL_PROVIDERS.map(([id, name]) => [id, name]), allowCustom: true, description: "Pi 服务商 ID。使用自定义兼容服务时可直接输入任意稳定 ID，例如 ollama、vllm、company-gateway。" },
+        { key: "PI_AGENT_MODEL", label: "模型", type: "text", default: "deepseek-flash", description: "服务商下的模型 ID，例如 deepseek-flash、gpt-5.1、qwen2.5-coder:7b。" },
+        { key: "PI_AGENT_BASE_URL", label: "自定义 Base URL", type: "text", placeholder: "http://localhost:11434/v1", description: "填写后由 Pi 通过自定义网关访问所选模型；留空则使用内置服务商默认地址。需同时填写模型 ID 和 API 协议。" },
+        { key: "PI_AGENT_API_TYPE", label: "自定义 API 协议", type: "select", default: "openai-completions", options: MODEL_API_OPTIONS, description: "自定义 Base URL 使用的请求协议。多数 Ollama、vLLM、LM Studio 与兼容网关使用 OpenAI Chat Completions。" },
+        { key: "PI_AGENT_API_KEY", label: "自定义服务商 API Key", type: "secret", description: "仅用于自定义 Base URL；不会写进生成的 models.json，运行时通过环境变量注入。本地无鉴权服务可填写任意占位值。" },
+        { key: "PI_AGENT_MODELS_FILE", label: "Pi models.json 文件", type: "path", advanced: true, placeholder: "留空时根据上方配置自动生成", description: "高级用法：直接指定 Pi 的 models.json。填写后优先于自定义 Base URL，可声明多个服务商、模型与兼容参数。" },
+        { key: "PI_AGENT_MODEL_NAME", label: "模型显示名", type: "text", advanced: true, placeholder: "可留空", description: "仅用于自定义模型的可读名称。" },
+        { key: "PI_AGENT_CONTEXT_WINDOW", label: "上下文窗口", type: "number", min: 1, advanced: true, description: "自定义模型支持的上下文 Token 数；按服务商实际能力填写。" },
+        { key: "PI_AGENT_MAX_TOKENS", label: "最大输出 Token", type: "number", min: 1, advanced: true, description: "自定义模型单次最大输出 Token。" },
+        { key: "PI_AGENT_MODEL_REASONING", label: "支持推理", type: "boolean", trueValue: "true", falseValue: "false", default: "false", advanced: true, description: "标记自定义模型支持推理/思考能力。" },
+        { key: "PI_AGENT_SUPPORTS_DEVELOPER_ROLE", label: "支持 developer 角色", type: "boolean", trueValue: "true", falseValue: "false", default: "false", advanced: true, description: "仅 OpenAI Chat Completions。兼容服务不支持时保持关闭，Pi 会改用 system 角色。" },
+        { key: "PI_AGENT_SUPPORTS_REASONING_EFFORT", label: "支持 reasoning effort", type: "boolean", trueValue: "true", falseValue: "false", default: "false", advanced: true, description: "仅 OpenAI Chat Completions。模型不支持时保持关闭。" },
+        { key: "PI_AGENT_THINKING", label: "思考强度", type: "select", default: "off", options: THINKING_OPTIONS, description: "全局思考强度；设置后覆盖角色配置。也可在对话输入框右下角实时切换。" },
         ...providerKeyFields(),
         { key: "AZURE_OPENAI_BASE_URL", label: "Azure OpenAI Base URL", type: "text", advanced: true, provider: "azure-openai-responses", placeholder: "https://{resource}.openai.azure.com", description: "使用 Azure OpenAI 时填写（或填写资源名）。" },
         { key: "AZURE_OPENAI_RESOURCE_NAME", label: "Azure OpenAI 资源名", type: "text", advanced: true, provider: "azure-openai-responses", description: "Base URL 的替代写法。" },

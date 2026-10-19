@@ -286,7 +286,8 @@ export function createRoleHandler({ agent, client, runAgent, isAllowedChat = () 
       // 任务记录里的项目名要与写入白名单同源，并随本轮交付回写，
       // 否则同一项目后续消息的白名单会退回 workspace/default。
       const projectSummary = await loadProjectSummaryFor(agent.key, task.projectName, { root: process.cwd() });
-      const result = await runAgent(agent, text, { taskId: task.taskId, chatId: message.chatId, appId: agent.appId, projectName: task.projectName || null, projectSummary, onEvent });
+      const result = await runAgent(agent, text, { taskId: task.taskId, chatId: message.chatId, appId: agent.appId, projectName: task.projectName || null, projectSummary, onEvent }, { sessionFile: task.sessionFile || null });
+      if (result.sessionFile) await updateTask(task.taskId, { sessionFile: result.sessionFile });
       if (result.cancelled || await isTerminated(task.taskId)) {
         await onEvent({ type: "task_cancelled", task_id: task.taskId, agent: agent.key, chat_id: message.chatId });
         return;

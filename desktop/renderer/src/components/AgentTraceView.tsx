@@ -18,6 +18,7 @@ export function AgentTraceView({ agents, selectedAgent, taskTitle, events, onOpe
       <div className="central-view inspector-content">
         <div className="task-controls"><div><strong>Agent 时间线</strong><span>{scope || "选择一个 Agent 查看事件"}</span></div></div>
         <div className="trace-heading"><h3>结构化事件</h3><span>{events.length} 条记录</span></div>
+        {events.length === 0 && <div className="conversation-empty">当前范围还没有执行事件</div>}
         {events.map((event, index) => <div className="trace-row" key={event.event_id || `trace-${index}`}>
           <span className={`trace-dot ${event.status === "failed" ? "trace-failed" : ""}`} />
           <div>

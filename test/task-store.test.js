@@ -17,6 +17,23 @@ test("event snapshots persist and do not regress after a terminal event", async 
   assert.deepEqual(snapshot.active_agents, []);
 });
 
+test("task_reopened resumes a completed task for a follow-up turn", async () => {
+  const store = new TaskStore("runtime/task-store.reopen.test.json");
+  try {
+    const task = await store.create({ task_id: "T-reopen", agent: "project_manager", source_chat_id: "desktop-local" });
+    await store.applyEvent({ type: "task_started", task_id: task.task_id, agent: "project_manager" });
+    await store.applyEvent({ type: "task_settle", task_id: task.task_id });
+    assert.equal((await store.getStatus(task.task_id)).status, "completed");
+    await store.applyEvent({ type: "task_reopened", task_id: task.task_id, agent: "project_manager" });
+    await store.applyEvent({ type: "task_started", task_id: task.task_id, agent: "project_manager" });
+    const status = await store.getStatus(task.task_id);
+    assert.equal(status.status, "in_progress");
+    assert.deepEqual(status.active_agents, ["project_manager"]);
+  } finally {
+    rmSync("runtime/task-store.reopen.test.json", { force: true });
+  }
+});
+
 test("child settlement does not complete the root or discard another active agent", async () => {
   const file = "runtime/task-store.child-settle.test.json";
   rmSync(file, { force: true });

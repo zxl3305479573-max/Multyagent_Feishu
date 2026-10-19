@@ -29,6 +29,7 @@ import { registerActiveSession } from "./session-control.js";
 import { roleConfig } from "./role-config.cjs";
 import { createPolicyFactory } from "./agent/policy-gate.js";
 import { getCapabilityRegistry } from "./capabilities/index.js";
+import { configuredThinking, prepareModelConfig, selectedModel } from "./model-config.js";
 import { buildPrompt, buildSystemPrompt, DEFAULT_TOOLS, extractText, sanitizeAgentReply } from "./agent/prompts.js";
 import { mapPiToolEvent } from "./agent/tool-events.js";
 import { buildTaskPlanRoleLimits, createAgentCliTool, createDeliverTool, createProjectTool, createTaskStatusTool } from "./agent/tools.js";
@@ -38,11 +39,6 @@ export { createPolicyFactory, SENSITIVE_PATTERNS } from "./agent/policy-gate.js"
 export { buildPrompt, buildSystemPrompt, extractText, sanitizeAgentReply } from "./agent/prompts.js";
 export { mapPiToolEvent } from "./agent/tool-events.js";
 export { createAgentCliTool, createDeliverTool, createProjectTool, createTaskStatusTool, normalizeAssignments } from "./agent/tools.js";
-
-const MODEL_PROVIDER = process.env.PI_AGENT_PROVIDER || "deepseek";
-// deepseek-flash is the default runtime model; override with PI_AGENT_MODEL when needed.
-const MODEL_ID = process.env.PI_AGENT_MODEL || "deepseek-flash";
-const THINKING_LEVEL = process.env.PI_AGENT_THINKING || "off";
 
 // The diagram-design skill is intentionally scoped to the planning/design
 // agents. Other role agents should not receive the extra visual-authoring
@@ -73,9 +69,14 @@ let modelRuntimePromise;
 
 function getModelRuntime() {
   if (!modelRuntimePromise) {
-    modelRuntimePromise = ModelRuntime.create();
+    modelRuntimePromise = prepareModelConfig()
+      .then((config) => ModelRuntime.create(config ? { modelsPath: config.modelsPath } : {}));
   }
   return modelRuntimePromise;
+}
+
+export function getRuntimeModelRuntime() {
+  return getModelRuntime();
 }
 
 // 每个角色缓存一份 loader（系统提示不同），首次创建后复用。
@@ -93,6 +94,10 @@ function getLoader(agent, projectNameOrGetter, taskPermissionsGetter = null) {
     const loader = new DefaultResourceLoader({
       cwd: process.cwd(),
       agentDir: getAgentDir(),
+      // 不自动发现本机的 Skill / 扩展：只加载能力页里分配给该角色的（含本机已安装、被分配的），
+      // 避免个人 Pi 环境里的东西悄悄进入所有机器人。策略闸门是内联扩展，不受影响。
+      noSkills: true,
+      noExtensions: true,
       additionalSkillPaths: [...diagramSkillPaths(agent.key), ...capabilities.skillPaths],
       additionalExtensionPaths: capabilities.extensionPaths,
       systemPromptOverride: () => buildSystemPrompt(agent, getProjectName()),
@@ -119,12 +124,14 @@ export function sessionFileBelongsToDir(sessionFile, sessionDir) {
 export async function runAgent(agent, text, context, { sessionFile } = {}) {
   if (await isTerminated(context.taskId)) return { text: "", cancelled: true, sessionFile: sessionFile || null, delivery: null, projectName: context.projectName || null };
   const modelRuntime = await getModelRuntime();
-  const model = modelRuntime.getModel(MODEL_PROVIDER, MODEL_ID);
+  const selected = selectedModel();
+  const model = modelRuntime.getModel(selected.provider, selected.model);
   if (!model) {
-    const credentialHint = MODEL_PROVIDER === "deepseek"
+    const credentialHint = selected.provider === "deepseek"
       ? "请配置 DEEPSEEK_API_KEY，或先用 pi login deepseek 完成认证"
-      : `请配置 ${MODEL_PROVIDER} 的 API Key 或 pi 登录凭据`;
-    throw new Error(`模型不可用: ${MODEL_PROVIDER}/${MODEL_ID}。${credentialHint}`);
+      : `请配置 ${selected.provider} 的 API Key、自定义模型 Base URL，或通过 PI_AGENT_MODELS_FILE 指定完整 models.json`;
+    const runtimeError = modelRuntime.getError?.();
+    throw new Error(`模型不可用: ${selected.provider}/${selected.model}。${credentialHint}${runtimeError ? `。Pi 配置错误：${runtimeError}` : ""}`);
   }
 
   let activeProject = context.projectName || null;
@@ -184,7 +191,7 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
 
   const { session } = await createAgentSession({
     model,
-    thinkingLevel: cfg.thinking || THINKING_LEVEL,
+    thinkingLevel: configuredThinking() || cfg.thinking || "off",
     modelRuntime,
     tools,
     customTools,

@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useState } from "react";
 import type { Ticket, TicketSource } from "../types";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 type Request = <T = unknown>(command: string, payload?: Record<string, unknown>) => Promise<T>;
 
 type Props = {
   project: string;
   projects: string[];
+  connected: boolean;
   request: Request;
   onNotice: (text: string) => void;
   onOpenTask: (taskId: string) => void;
@@ -20,7 +22,7 @@ const emptySource = (project: string): TicketSource => ({
 });
 
 // 工单收件箱：配置 GitHub 仓库 → 本地项目的工单源，查看待办，把工单交给项目经理；可开启定时拉单。
-export function TicketsView({ project, projects, request, onNotice, onOpenTask }: Props) {
+export function TicketsView({ project, projects, connected, request, onNotice, onOpenTask }: Props) {
   const [sources, setSources] = useState<TicketSource[]>([]);
   const [hasToken, setHasToken] = useState(true);
   const [activeId, setActiveId] = useState("");
@@ -28,6 +30,7 @@ export function TicketsView({ project, projects, request, onNotice, onOpenTask }
   const [draft, setDraft] = useState<TicketSource | null>(null);
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState("");
+  const [removeTarget, setRemoveTarget] = useState<TicketSource | null>(null);
   const scope = project ? { projectName: project } : {};
   const active = sources.find((source) => source.id === activeId) || null;
 
@@ -50,9 +53,9 @@ export function TicketsView({ project, projects, request, onNotice, onOpenTask }
     finally { setBusy(""); }
   }, [request, onNotice]);
 
-  useEffect(() => { void loadSources(); }, [loadSources]);
+  useEffect(() => { if (connected) void loadSources(); }, [connected, loadSources]);
   // 只在切换工单源（或其仓库被修改）时重新拉取，工单源列表刷新本身不触发。
-  useEffect(() => { void loadInbox(active); }, [activeId, active?.repo, loadInbox]);
+  useEffect(() => { if (connected) void loadInbox(active); }, [connected, activeId, active?.repo, loadInbox]);
 
   async function saveDraft() {
     if (!draft) return;
@@ -67,12 +70,20 @@ export function TicketsView({ project, projects, request, onNotice, onOpenTask }
     finally { setBusy(""); }
   }
 
-  async function removeSource(source: TicketSource) {
-    if (!window.confirm(`移除工单源 ${source.repo}？已派发的任务不受影响。`)) return;
+  function removeSource(source: TicketSource) {
+    setRemoveTarget(source);
+  }
+
+  async function confirmRemoveSource() {
+    if (!removeTarget) return;
+    const source = removeTarget;
+    setRemoveTarget(null);
     try {
+      setBusy("remove");
       await request("tickets_remove_source", { sourceId: source.id, projectName: source.project });
       await loadSources();
     } catch (error) { onNotice(`移除失败：${(error as Error).message}`); }
+    finally { setBusy(""); }
   }
 
   async function dispatch(ticket: Ticket) {
@@ -107,7 +118,7 @@ export function TicketsView({ project, projects, request, onNotice, onOpenTask }
         {sources.map((source) => <button key={source.id} className={`ticket-source ${source.id === activeId ? "is-selected" : ""}`} onClick={() => setActiveId(source.id)}>
           <strong>{source.repo}</strong><span>{source.project}{source.pull.enabled ? ` · 每 ${source.pull.everyHours} 小时拉单` : ""}</span>
         </button>)}
-        <button className="ticket-source ticket-source-add" onClick={() => setDraft(emptySource(project || projects[0] || ""))}>＋ 添加工单源</button>
+        <button className="ticket-source ticket-source-add" disabled={!connected} onClick={() => setDraft(emptySource(project || projects[0] || ""))}>＋ 添加工单源</button>
       </div>
 
       {draft && <section className="ticket-form">
@@ -156,6 +167,14 @@ export function TicketsView({ project, projects, request, onNotice, onOpenTask }
         </article>)}
       </section>}
       {!active && !draft && <p className="ticket-empty">还没有工单源。添加一个 GitHub 仓库，把 Issues 接到项目经理。</p>}
+      {removeTarget && <ConfirmDialog
+        title="移除工单源？"
+        description={<>将停止从 <strong>{removeTarget.repo}</strong> 拉取新工单。已派发的任务不受影响。</>}
+        confirmLabel="确认移除"
+        tone="danger"
+        onConfirm={() => void confirmRemoveSource()}
+        onCancel={() => setRemoveTarget(null)}
+      />}
     </div>
   );
 }

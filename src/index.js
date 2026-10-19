@@ -22,6 +22,8 @@ import { createProjectRegistry } from "./project-registry.js";
 import { createGitHubClient } from "./tickets/github.js";
 import { createTicketService } from "./tickets/service.js";
 import { getCapabilityRegistry } from "./capabilities/index.js";
+import { applyRuntimeConfig, runtimeConfigPayload } from "./model-config.js";
+import { getRuntimeModelRuntime } from "./pi-agent.js";
 import { createShutdown } from "./shutdown.js";
 import { roleConfig } from "./role-config.cjs";
 import { feishuEnabled } from "./feishu-mode.cjs";
@@ -269,6 +271,8 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
       orchestrator,
       runAgent,
       projectManagerAgent,
+      // 输入框“单独交给某个机器人”可选的角色：已连接飞书的用已解析身份，否则用角色定义（仅桌面运行）。
+      agents: config.agents.filter((definition) => definition.enabled).map((definition) => prepared.find((item) => item.definition.key === definition.key)?.agent || { ...definition }),
       recordEvent: publishRecordEvent,
     })
     : null;
@@ -330,6 +334,10 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
     restoreHistory,
     tickets: ticketService,
     capabilities: getCapabilityRegistry(),
+    runtimeConfig: {
+      get: async ({ provider } = {}) => runtimeConfigPayload(await getRuntimeModelRuntime(), { provider }),
+      set: async (input) => applyRuntimeConfig(await getRuntimeModelRuntime(), input),
+    },
     host: "127.0.0.1",
     port: Number(process.env.PI_DESKTOP_PORT) || 0,
   });

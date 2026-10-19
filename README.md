@@ -128,9 +128,12 @@ npm run desktop:package   # 生成 Windows 安装包（输出到 release/）
 - **侧边栏**：项目切换、新建项目 / 新建对话、最近任务，以及工单、机器人能力、运行设置入口；可折叠。
 - **顶栏**：当前任务名、所属项目，右侧一字排开六个 Agent 的状态（悬停查看最近动作、耗时和任务数，点击跳到该 Agent 的执行记录）。
 - **对话页**：按 Agent 分组展示执行记录与最终结果；连续的工具调用合并成一个可折叠块，产物文件可直接打开。
+- **同任务续聊**：选中已有任务后，输入框的新消息会作为该任务的后续轮次发送；复用根任务与 Pi 会话文件，并把用户消息和阶段摘要持久化到任务记录，session 丢失时仍可恢复关键记忆。需要全新任务时点「新建项目对话」。
+- **输入框运行选择**：右下角显示当前模型与思考强度；点开即可切换服务商、模型和思考等级，后续 Agent 立即使用新配置，并自动写回运行设置。
 - **执行观察**：单个 Agent 的完整事件轨迹（只展示结构化事件，不展示隐藏推理）。
+- **自适应内容区**：对话、运行设置、机器人能力、工单、项目上下文和执行观察都随窗口宽度调整；宽屏使用多列，窄屏自动收起侧栏并改为单列。
 - **项目上下文**：项目统计、阶段摘要，支持导出快照、归档与恢复历史。
-- **运行设置**：列出网关与 Agent 读取的全部环境配置（飞书、模型、Agent 运行、多维表格、GitHub 工单、运行与存储），可搜索、修改、恢复默认，并标注每项的生效来源（设置 / 系统环境变量 / 桌面端管理 / 默认）。关闭飞书后，飞书与看板分组自动收起。
+- **运行设置**：左侧按「一级分组 → 二级标题」列出配置目录，右侧一次展示一个配置页面；可搜索、修改、恢复默认，并标注每项的生效来源（设置 / 系统环境变量 / 桌面端管理 / 默认）。关闭飞书后，飞书与看板分组自动收起。
 
 ### 安全与运行
 
@@ -194,10 +197,30 @@ npm run desktop:package   # 生成 Windows 安装包（输出到 release/）
 | --- | --- |
 | `PI_AGENT_PROVIDER` | pi-coding-agent 中的服务商 ID，默认 `deepseek` |
 | `PI_AGENT_MODEL` | 服务商下的模型 ID，默认 `deepseek-flash` |
-| `PI_AGENT_THINKING` | 全局思考强度，默认 `off`；角色配置里的 `thinking` 优先 |
+| `PI_AGENT_THINKING` | 全局思考强度；设置后覆盖角色配置，未设置时使用角色的 `thinking` |
 | `<PROVIDER>_API_KEY` | 对应服务商的 API Key，例如 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY` |
+| `PI_AGENT_BASE_URL` | 自定义模型网关地址，例如 Ollama `http://localhost:11434/v1` |
+| `PI_AGENT_API_TYPE` | 自定义协议：`openai-completions`、`openai-responses`、`anthropic-messages` 或 `google-generative-ai` |
+| `PI_AGENT_API_KEY` | 自定义服务商的通用 Key；不会写入生成的模型文件 |
+| `PI_AGENT_MODELS_FILE` | 直接指定 Pi 的 `models.json`，优先于上面的自定义 Base URL 配置 |
 
 运行设置内置了 DeepSeek、OpenAI、Anthropic、Google Gemini、Azure OpenAI、OpenRouter、Moonshot / Kimi、Z.AI、Qwen、MiniMax、Xiaomi MiMo、Mistral、Groq 等服务商，选择后只显示该服务商需要的 Key；也可以填写自定义服务商 ID。完整清单见 `src/env-catalog.cjs`。
+
+### 接入本地或自定义模型
+
+在运行设置「模型」里填写服务商 ID、模型 ID、Base URL 和 API 协议即可，例如：
+
+```text
+PI_AGENT_PROVIDER=ollama
+PI_AGENT_MODEL=qwen2.5-coder:7b
+PI_AGENT_BASE_URL=http://localhost:11434/v1
+PI_AGENT_API_TYPE=openai-completions
+PI_AGENT_API_KEY=ollama
+```
+
+网关会生成 `runtime/pi-agent/models.json`，内置与 RPC 两种运行模式都会加载。API Key 不会写入该文件，而是在请求时从环境变量读取。上下文窗口、最大输出 Token、推理能力和 OpenAI 兼容参数可在高级选项中设置。
+
+需要同时声明多个服务商或 Pi 原生高级字段时，直接指定 `PI_AGENT_MODELS_FILE`。文件格式与 Pi 官方 `models.json` 一致；使用 RPC 模式时，`auth.json` 应与该文件位于同一目录。
 
 架构设计师与项目经理会使用 diagram-design 技能绘制架构图，默认读取 `~/.codex/skills/diagram-design`，可用 `PI_DIAGRAM_SKILL_PATH` 覆盖；打包时若存在 `skills/diagram-design` 会随包附带并优先使用。
 

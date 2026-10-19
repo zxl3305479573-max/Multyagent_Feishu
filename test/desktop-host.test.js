@@ -42,15 +42,20 @@ test("desktop host retries a failed task and resumes its orchestration checkpoin
 
 test("desktop host exposes task submission as a command", async () => {
   const submitted = [];
+  const continued = [];
+  const submitTask = async (input) => { submitted.push(input); return { taskId: "TASK-1", status: "accepted" }; };
+  submitTask.continueTask = async (input) => { continued.push(input); return { taskId: "TASK-1", status: "accepted", continued: true }; };
   const host = createDesktopHost({
     token: "desktop-session-token-for-tests",
     eventsFile: ".tmp/no-events.jsonl",
     taskStore: { list: async () => [] },
     orchestrator: {},
-    submitTask: async (input) => { submitted.push(input); return { taskId: "TASK-1", status: "accepted" }; },
+    submitTask,
   });
   assert.deepEqual(await host.commandHandlers.submit_task({ projectName: "demo", title: "标题", description: "描述" }), { taskId: "TASK-1", status: "accepted" });
   assert.deepEqual(submitted, [{ projectName: "demo", title: "标题", description: "描述" }]);
+  assert.deepEqual(await host.commandHandlers.continue_task({ taskId: "TASK-1", message: "继续完善" }), { taskId: "TASK-1", status: "accepted", continued: true });
+  assert.deepEqual(continued, [{ taskId: "TASK-1", message: "继续完善" }]);
 });
 
 test("desktop host exposes project export and recoverable history cleanup", async () => {
@@ -98,4 +103,27 @@ test("desktop host exposes capability management and records each change", async
   assert.deepEqual(calls.map(([action]) => action), ["install", "assign", "remove"]);
   assert.deepEqual(recorded.map((event) => event.type), ["capability_installed", "capability_updated", "capability_removed"]);
   assert.ok(recorded.every((event) => event.channel === "desktop"));
+});
+
+test("desktop host exposes runtime model selection without restarting the gateway", async () => {
+  const calls = [];
+  const recorded = [];
+  const current = { provider: "openai", model: "gpt-a", thinking: "off", listingProvider: "openai", providers: [], models: [], thinkingLevels: [] };
+  const runtimeConfig = {
+    get: async (input) => { calls.push(["get", input]); return current; },
+    set: async (input) => { calls.push(["set", input]); return { ...current, ...input }; },
+  };
+  const host = createDesktopHost({
+    token: "desktop-session-token-for-tests",
+    eventsFile: ".tmp/no-events.jsonl",
+    taskStore: { list: async () => [] },
+    orchestrator: {},
+    runtimeConfig,
+    recordEvent: async (event) => recorded.push(event),
+  });
+  assert.deepEqual(await host.commandHandlers.runtime_config({ provider: "openai" }), current);
+  const switched = await host.commandHandlers.runtime_config_set({ provider: "local", model: "coder", thinking: "high" });
+  assert.deepEqual(switched, { ...current, provider: "local", model: "coder", thinking: "high" });
+  assert.deepEqual(calls, [["get", { provider: "openai" }], ["set", { provider: "local", model: "coder", thinking: "high" }]]);
+  assert.deepEqual(recorded, [{ type: "runtime_model_changed", provider: "local", model: "coder", thinking: "high", channel: "desktop" }]);
 });

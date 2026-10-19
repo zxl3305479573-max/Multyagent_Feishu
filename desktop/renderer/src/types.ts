@@ -112,6 +112,18 @@ export type AgentExecutionGroup = {
   finalResult?: EventRecord;
 };
 export type AgentCard = { agent: Agent; status: string; latest?: EventRecord; taskCount: number; durationMs: number | null };
+export type RuntimeModelChoice = { id: string; name: string; reasoning: boolean; contextWindow?: number | null };
+export type RuntimeProviderChoice = { id: string; name: string; modelCount: number };
+export type RuntimeThinkingChoice = { value: string; label: string };
+export type RuntimeConfig = {
+  provider: string;
+  model: string;
+  thinking: string;
+  listingProvider: string;
+  providers: RuntimeProviderChoice[];
+  models: RuntimeModelChoice[];
+  thinkingLevels: RuntimeThinkingChoice[];
+};
 
 export type CredentialStatus = { encryptionAvailable: boolean; keys: Array<{ key: string; readable: boolean }> };
 

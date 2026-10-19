@@ -24,6 +24,7 @@ export function createTaskRecord(input = {}) {
     agent: input.agent || input.requested_role || null,
     title: input.title || "",
     description: input.description || "",
+    conversation_memory: Array.isArray(input.conversation_memory) ? input.conversation_memory : [],
     status: input.status || "received",
     paused: input.paused === true,
     terminated: input.terminated === true,
@@ -39,6 +40,9 @@ export function createTaskRecord(input = {}) {
     max_turns: input.max_turns || 8,
     max_runtime_seconds: input.max_runtime_seconds || 900,
     idempotency_key: input.idempotency_key || null,
+    // 桌面端发起时选择的运行方式（embedded / rpc）与模式；重试、续聊沿用同一设置。
+    runtime: input.runtime || null,
+    desktop_mode: input.desktop_mode || null,
     created_at: input.created_at || now,
     updated_at: input.updated_at || now,
   };

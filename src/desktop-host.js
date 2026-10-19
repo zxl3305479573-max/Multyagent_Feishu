@@ -10,7 +10,7 @@ async function scopedSource(tickets, { sourceId, projectName }) {
   return source;
 }
 
-export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, recordEvent, agents, submitTask, createProject, listProjects, exportProject, cleanupHistory, restoreHistory, tickets = null, capabilities = null, host, port } = {}) {
+export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, recordEvent, agents, submitTask, createProject, listProjects, exportProject, cleanupHistory, restoreHistory, tickets = null, capabilities = null, runtimeConfig = null, host, port } = {}) {
   const requireCapabilities = () => {
     if (!capabilities) throw new Error("能力管理不可用");
     return capabilities;
@@ -18,6 +18,10 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
   const requireTickets = () => {
     if (!tickets) throw new Error("工单功能不可用（需要启用项目经理）");
     return tickets;
+  };
+  const requireRuntimeConfig = () => {
+    if (!runtimeConfig) throw new Error("模型切换不可用");
+    return runtimeConfig;
   };
   if (!taskStore || !orchestrator) throw new TypeError("desktop host requires taskStore and orchestrator");
   const commandHandlers = {
@@ -57,6 +61,20 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
       if (typeof submitTask !== "function") throw new Error("desktop task submission is unavailable");
       return submitTask(input || {});
     },
+    async continue_task(input = {}) {
+      if (typeof submitTask?.continueTask !== "function") throw new Error("desktop task continuation is unavailable");
+      return submitTask.continueTask(input);
+    },
+    // 规划模式的确认：taskId 是 approval_required 事件里的任务编号（可能是子任务）。
+    async approve_task({ taskId, choice = "approve" } = {}) {
+      if (typeof orchestrator.resolveLatest !== "function") throw new Error("task approval is unavailable");
+      const id = String(taskId || "").trim();
+      if (!id) throw new Error("taskId is required");
+      const resolved = await orchestrator.resolveLatest("desktop-local", String(choice || "approve"), id);
+      if (!resolved) throw new Error("这个任务当前没有等待确认的内容");
+      await recordEvent?.({ type: "control_applied", task_id: rootOf(id), command: "approve", result: "approved", choice: String(choice || "approve") });
+      return { approved: true, agentKey: resolved.agentKey };
+    },
     async create_project(input) {
       if (typeof createProject !== "function") throw new Error("project creation is unavailable");
       return createProject(input || {});
@@ -73,6 +91,20 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
       if (typeof restoreHistory !== "function") throw new Error("history restore is unavailable");
       return restoreHistory(input || {});
     },
+    async runtime_config({ provider } = {}) {
+      return requireRuntimeConfig().get({ provider });
+    },
+    async runtime_config_set(input = {}) {
+      const result = await requireRuntimeConfig().set(input);
+      await recordEvent?.({
+        type: "runtime_model_changed",
+        provider: result.provider,
+        model: result.model,
+        thinking: result.thinking,
+        channel: "desktop",
+      });
+      return result;
+    },
     async capabilities_list() {
       return requireCapabilities().list();
     },
@@ -81,9 +113,9 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
       await recordEvent?.({ type: "capability_installed", kind, name: installed.name, source: installed.source, roles: installed.roles, channel: "desktop" });
       return { capability: installed };
     },
-    async capabilities_assign({ kind, name, roles, enabled } = {}) {
-      const updated = await requireCapabilities().assign({ kind, name, roles, enabled });
-      await recordEvent?.({ type: "capability_updated", kind, name, roles: updated.roles, enabled: updated.enabled, channel: "desktop" });
+    async capabilities_assign({ kind, name, roles, enabled, local = false, path } = {}) {
+      const updated = await requireCapabilities().assign({ kind, name, roles, enabled, local: local === true, path });
+      await recordEvent?.({ type: "capability_updated", kind, name: updated.name, local: local === true, roles: updated.roles, enabled: updated.enabled, channel: "desktop" });
       return { capability: updated };
     },
     async capabilities_remove({ kind, name } = {}) {

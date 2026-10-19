@@ -21,6 +21,7 @@ function rootOf(taskId) { return String(taskId || "").split(":")[0]; }
 
 function snapshotStatus(event = {}) {
   if (event.type === "task_retried") return "in_progress";
+  if (event.type === "task_reopened") return "in_progress";
   if (event.type === "dispatch_failed" && event.recoverable === true) return null;
   if (["task_failed", "dispatch_failed", "selection_failed", "continuation_failed"].includes(event.type)) return "failed";
   if (["task_terminated", "task_cancelled"].includes(event.type)) return "cancelled";
@@ -248,7 +249,7 @@ export class TaskStore {
     const task = this.state.tasks[rootTaskId];
     const current = task.status_snapshot || emptySnapshot(rootTaskId);
     const nextStatus = snapshotStatus(event);
-    if (TERMINAL_SNAPSHOT_STATUSES.has(current.status) && !["control_applied", "task_terminated", "task_resumed", "task_retried"].includes(event.type)) return clone(current);
+    if (TERMINAL_SNAPSHOT_STATUSES.has(current.status) && !["control_applied", "task_terminated", "task_resumed", "task_retried", "task_reopened"].includes(event.type)) return clone(current);
 
     const active = new Set(current.active_agents || []);
     const agent = event.target || event.agent || null;
