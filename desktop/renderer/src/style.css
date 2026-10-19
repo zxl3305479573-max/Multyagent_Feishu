@@ -498,3 +498,21 @@ kbd { margin-left: auto; padding: 2px 5px; border: 1px solid #e5e7eb; border-rad
   .setting-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .settings-savebar { flex-wrap: wrap; }
 }
+
+/* 测试的结构化验收卡 */
+.acceptance-card { display: grid; gap: 8px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--muted); border-radius: 7px; background: var(--surface); }
+.acceptance-card.verdict-pass { border-left-color: var(--green); }
+.acceptance-card.verdict-fail { border-left-color: var(--red); }
+.acceptance-heading { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.acceptance-heading span { color: var(--muted); font-size: 13px; }
+.acceptance-checks { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.acceptance-checks li { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; }
+.acceptance-checks small { grid-column: 2; color: var(--muted); }
+.acceptance-checks .check-status { font-weight: 600; color: var(--muted); }
+.acceptance-checks .check-pass .check-status { color: var(--green); }
+.acceptance-checks .check-fail .check-status { color: var(--red); }
+.acceptance-evidence { display: grid; gap: 4px; font-size: 13px; }
+.acceptance-evidence div { display: flex; gap: 8px; min-width: 0; }
+.acceptance-evidence div span:first-child { color: var(--muted); }
+.acceptance-evidence a, .acceptance-evidence div span:last-child { overflow-wrap: anywhere; }
+

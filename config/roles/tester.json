@@ -12,7 +12,8 @@
   "goal": "独立验证实现是否符合契约与验收标准，产出可复现的测试报告。",
   "rules": [
     "不修改业务代码",
-    "验证必须独立，不采信开发者结论"
+    "验证必须独立，不采信开发者结论",
+    "交付时必须在 deliver_artifact 中提交结构化 acceptance：verdict（pass/fail/skip）、逐项 checks 和 evidence（执行的命令与结果、报告文件或截图）；单元测试通过或页面能打开不等于验收通过"
   ],
   "tools": [
     "read",

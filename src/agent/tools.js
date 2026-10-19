@@ -10,10 +10,25 @@ import { executeAgentCli } from "../agent-cli.js";
 import { loadTaskStatus } from "../task-status.js";
 import { validateTaskPlan } from "../task-plan.js";
 import { roleConfig } from "../role-config.cjs";
+import { validateAcceptance } from "../orchestrator/guards.js";
+import { resolveProjectFile } from "../project-file.cjs";
 
 const agentsConfig = { agents: roleConfig().agents };
 
-export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, roleLimits = {}, onDeliver }) {
+// 测试的结构化验收结果；证据里的文件/截图必须真实存在于当前项目目录。
+async function checkAcceptance(input, { root, projectName }) {
+  const checked = validateAcceptance(input);
+  if (!checked.valid || !projectName) return checked;
+  const errors = [];
+  for (const item of checked.acceptance.evidence) {
+    if (item.kind !== "file" && item.kind !== "screenshot") continue;
+    try { await resolveProjectFile(root, projectName, item.path); }
+    catch (error) { errors.push(`证据文件 ${item.path} 不可用：${error.message}`); }
+  }
+  return errors.length ? { ...checked, valid: false, errors } : checked;
+}
+
+export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, agentName, roleLimits = {}, onDeliver, root = process.cwd() }) {
   return defineTool({
     name: "deliver_artifact",
     label: "交付产物",
@@ -42,6 +57,23 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         reason: Type.Optional(Type.String()),
       }))),
       plan: Type.Optional(Type.Any({ description: "项目经理使用的结构化阶段计划；包含 project、goal、stages 和权限快照" })),
+      acceptance: Type.Optional(Type.Object({
+        verdict: Type.String({ description: "pass | fail | skip。单元测试通过或页面能打开不等于 pass" }),
+        summary: Type.Optional(Type.String({ description: "一两句验收结论" })),
+        checks: Type.Array(Type.Object({
+          id: Type.Optional(Type.String({ description: "检查编号，例如 AC1" })),
+          title: Type.String({ description: "检查点，对应需求或验收标准" }),
+          status: Type.String({ description: "pass | fail | skip" }),
+          detail: Type.Optional(Type.String({ description: "实际现象；失败时写清复现步骤" })),
+        }), { description: "逐项检查结果" }),
+        evidence: Type.Optional(Type.Array(Type.Object({
+          kind: Type.String({ description: "command | file | screenshot | url | note" }),
+          path: Type.Optional(Type.String({ description: "file/screenshot 的项目内路径" })),
+          text: Type.Optional(Type.String({ description: "command/note：执行的命令与结果摘要" })),
+          url: Type.Optional(Type.String()),
+        }), { description: "验收证据" })),
+        skipReason: Type.Optional(Type.String({ description: "verdict=skip 时必填" })),
+      }, { description: "测试必填：结构化验收结果。其他角色不要填写" })),
       diagram: Type.Optional(Type.Object({
         title: Type.Optional(Type.String({ description: "流程图标题" })),
         nodes: Type.Array(Type.Object({
@@ -69,6 +101,14 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         }
         plan = checked.plan;
       }
+      let acceptance = null;
+      if (agentKey === "tester") {
+        const checked = await checkAcceptance(params.acceptance, { root, projectName: getProjectName?.() || null });
+        if (!checked.valid) {
+          return { content: [{ type: "text", text: `验收结果校验失败：${checked.errors.join("；")}。请修正 acceptance 后重新调用 deliver_artifact。` }], details: { acceptanceErrors: checked.errors } };
+        }
+        acceptance = checked.acceptance;
+      }
       const rawAssignments = params.assignments || (plan?.stages?.[0]?.assignments || []);
       const delivery = {
         summary: sanitizeAgentReply(params.summary),
@@ -81,6 +121,7 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         choices: params.choices || [],
         assignments: normalizeAssignments(rawAssignments, { selfAgentKey: agentKey, allowDispatch: agentKey === "project_manager" }),
         droppedAssignments: agentKey === "project_manager" ? droppedAssignments(rawAssignments, { selfAgentKey: agentKey }) : [],
+        acceptance,
         plan,
         diagram: params.diagram || null,
         final: params.final === true,

@@ -38,6 +38,11 @@ export type EventRecord = {
   risks?: string[];
   agents?: string[];
   assignments?: Array<{ agentKey?: string; task?: string; reason?: string }>;
+  verdict?: "pass" | "fail" | "skip";
+  checks?: Array<{ id?: string; title?: string; status?: string; detail?: string }>;
+  evidence?: Array<{ kind?: string; path?: string; text?: string; url?: string }>;
+  failed_checks?: string[];
+  skip_reason?: string | null;
   targets?: string[];
   detail?: string;
 };

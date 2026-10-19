@@ -1,6 +1,6 @@
 import React from "react";
 import type { Agent, AgentExecutionGroup, EventRecord, Task } from "../types";
-import { eventLabels, statusLabels } from "../labels";
+import { eventLabels, statusLabels, verdictLabels } from "../labels";
 import { formatDuration, formatFileSize, formatTime, snapshotStatus, taskStatus } from "../format";
 import { collectArtifacts, toolExecutionStatus } from "../execution-view";
 
@@ -11,6 +11,20 @@ function Artifacts({ event, onOpenFile }: { event: EventRecord; onOpenFile: Open
     <a href="#open-file" onClick={(clickEvent) => { clickEvent.preventDefault(); onOpenFile({ ...event, file_path: artifact.path }); }} title="打开交付文件">{artifact.path}</a>
     <span>{artifact.description}</span><small>{artifact.type || "文件"}{artifact.size !== undefined ? ` · ${formatFileSize(artifact.size)}` : ""}</small>
   </div>)}</div>;
+}
+
+// 测试的结构化验收：结论、逐项检查和证据，失败项一眼可见。
+function Acceptance({ event, onOpenFile }: { event: EventRecord; onOpenFile: OpenFile }) {
+  return <div className={`acceptance-card verdict-${event.verdict}`}>
+    <div className="acceptance-heading"><strong>验收结论：{verdictLabels[event.verdict || ""] || event.verdict}</strong>{event.skip_reason && <span>{event.skip_reason}</span>}</div>
+    {event.checks?.length ? <ul className="acceptance-checks">{event.checks.map((check, index) => <li key={check.id || index} className={`check-${check.status}`}>
+      <span className="check-status">{verdictLabels[check.status || ""] || check.status}</span><span>{check.id ? `${check.id} ` : ""}{check.title}</span>{check.detail && <small>{check.detail}</small>}
+    </li>)}</ul> : null}
+    {event.evidence?.length ? <div className="acceptance-evidence"><strong>证据</strong>{event.evidence.map((item, index) => <div key={index}>
+      <span>{item.kind}</span>
+      {item.path ? <a href="#open-file" onClick={(clickEvent) => { clickEvent.preventDefault(); onOpenFile({ ...event, file_path: item.path }); }}>{item.path}</a> : item.url ? <span>{item.url}</span> : <span>{item.text}</span>}
+    </div>)}</div> : null}
+  </div>;
 }
 
 function ExecutionEvent({ event, agents, onOpenFile }: { event: EventRecord; agents: Agent[]; onOpenFile: OpenFile }) {
@@ -26,6 +40,8 @@ function ExecutionEvent({ event, agents, onOpenFile }: { event: EventRecord; age
       {event.error && <p className="event-error">{event.error}</p>}
       {typeof event.artifact_count === "number" && event.artifact_count > 0 && <p className="event-artifacts">交付了 {event.artifact_count} 个文件</p>}
       {event.type === "delivery_received" && collectArtifacts(event).length ? <Artifacts event={event} onOpenFile={onOpenFile} /> : null}
+      {event.type === "acceptance_submitted" ? <Acceptance event={event} onOpenFile={onOpenFile} /> : null}
+      {event.failed_checks?.length && event.type !== "acceptance_submitted" ? <p className="event-error">未通过：{event.failed_checks.join("；")}</p> : null}
       {event.targets?.length ? <div className="message-tags">{event.targets.map((target) => <span key={target}>派给 {agents.find((agent) => agent.key === target)?.displayName || target}</span>)}</div> : null}
     </div>
   </article>;

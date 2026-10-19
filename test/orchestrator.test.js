@@ -40,6 +40,9 @@ test("matchRoutes：无匹配返回空", () => {
   assert.deepEqual(matchRoutes(routes, "unknown_role"), []);
 });
 
+// 测试角色在项目经理主导的任务链里必须提交结构化验收结果。
+const PASSED_ACCEPTANCE = { verdict: "pass", summary: "全部通过", checks: [{ id: "AC1", title: "核心流程", status: "pass" }], evidence: [{ kind: "command", text: "npm test：12/12 通过" }] };
+
 function setupMock() {
   const dispatched = [];
   const runAgent = async (agent) => {
@@ -178,7 +181,7 @@ test("structured PM plans execute stages sequentially while assignments in one s
   const orch = createOrchestrator({
     runAgent: async (agent) => {
       dispatched.push(agent.key);
-      return { text: "done", delivery: { summary: "done", artifactPaths: [], artifactsDir: "d", final: agent.key === "project_manager" } };
+      return { text: "done", delivery: { summary: "done", artifactPaths: [], artifactsDir: "d", final: agent.key === "project_manager", ...(agent.key === "tester" ? { acceptance: PASSED_ACCEPTANCE } : {}) } };
     },
     log: { info() {}, error() {}, warn() {} },
   });
@@ -891,7 +894,7 @@ test("非 PM 角色声明 final 时，根任务仍回到项目经理做最终汇
   try {
     const task = await createTask({ agentKey: "project_manager", chatId: "chat-final", rootKey: "m-final", messageId: "m-final" });
     await orch.onTaskCompleted("tester", `${task.taskId}:tester`, {
-      delivery: { agentKey: "tester", summary: "测试通过，无需后续", artifactPaths: [], final: true },
+      delivery: { agentKey: "tester", summary: "测试通过，无需后续", artifactPaths: [], final: true, acceptance: PASSED_ACCEPTANCE },
       parentTaskId: task.taskId,
       context: { chatId: "chat-final" },
     });
@@ -1110,7 +1113,7 @@ test("派发守卫：项目经理只在文字里说已派发时，先纠正一�
 
 test("派发守卫：纠正后仍只在文字里派发时，按点名的角色兜底派发", async () => {
   const { orch, runs, events } = guardHarness((key, _count, prompt) => key !== "project_manager"
-    ? { text: "ok", delivery: { agentKey: key, summary: `${key} 完成`, artifactPaths: [], final: true } }
+    ? { text: "ok", delivery: { agentKey: key, summary: `${key} 完成`, artifactPaths: [], final: true, ...(key === "tester" ? { acceptance: PASSED_ACCEPTANCE } : {}) } }
     : /最终汇总/.test(prompt)
       ? { text: "ok", delivery: { agentKey: key, summary: "全部完成", artifactPaths: [], final: true } }
       : { text: "ok", delivery: { agentKey: key, summary: "已交给测试验证登录流程", artifactPaths: [] } });
@@ -1130,9 +1133,50 @@ test("派发守卫：兜底也推断不出派发对象时把任务判为失败�
   assert.ok(events.some((event) => event.type === "task_failed" && event.task_id === "T-unresolved" && /无法确定派发对象/.test(event.error)));
 });
 
+test("验收门禁：测试结论为 fail 时不再推进到审计，交回项目经理决定打回修复", async () => {
+  const file = "runtime/tasks.acceptance-fail.test.json";
+  _resetForTest(file);
+  const { orch, runs, events } = guardHarness((key) => ({ text: "ok", delivery: { agentKey: key, summary: "已安排前端修复", artifactPaths: [], final: true } }));
+  try {
+    const task = await createTask({ agentKey: "project_manager", chatId: "chat-acc", rootKey: "m-acc", messageId: "m-acc" });
+    const acceptance = { verdict: "fail", summary: "登录失败", checks: [{ id: "AC2", title: "错误密码提示", status: "fail", detail: "返回 500" }], evidence: [{ kind: "command", text: "curl → 500" }] };
+    await orch.onTaskCompleted("tester", `${task.taskId}:tester`, { delivery: { agentKey: "tester", summary: "验收未通过", artifactPaths: [], acceptance }, parentTaskId: task.taskId, context: { chatId: "chat-acc" } });
+    await orch.whenIdle();
+    assert.deepEqual(runs.map((run) => run.key), ["project_manager"], "审计不应在验收失败后被派发");
+    assert.match(runs[0].prompt, /【验收未通过】/);
+    assert.match(runs[0].prompt, /AC2 错误密码提示：返回 500/);
+    const submitted = events.find((event) => event.type === "acceptance_submitted");
+    assert.equal(submitted?.verdict, "fail");
+    assert.deepEqual(submitted.failed_checks, ["错误密码提示"]);
+    assert.ok(events.some((event) => event.type === "acceptance_failed_handed_to_pm"));
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test("验收门禁：测试未提交验收结果时重派一次补交，补交通过后正常推进", async () => {
+  const file = "runtime/tasks.acceptance-missing.test.json";
+  _resetForTest(file);
+  const { orch, runs, events } = guardHarness((key) => key === "tester"
+    ? { text: "ok", delivery: { agentKey: key, summary: "补交验收", artifactPaths: [], final: true, acceptance: PASSED_ACCEPTANCE } }
+    : { text: "ok", delivery: { agentKey: key, summary: `${key} 完成`, artifactPaths: [], final: true } });
+  try {
+    const task = await createTask({ agentKey: "project_manager", chatId: "chat-miss", rootKey: "m-miss", messageId: "m-miss" });
+    await orch.onTaskCompleted("tester", `${task.taskId}:tester`, { delivery: { agentKey: "tester", summary: "测过了，没问题", artifactPaths: [], final: true }, parentTaskId: task.taskId, context: { chatId: "chat-miss" } });
+    await orch.whenIdle();
+    assert.equal(runs[0].key, "tester");
+    assert.match(runs[0].prompt, /【验收纠正】/);
+    assert.ok(events.some((event) => event.type === "acceptance_correction"));
+    assert.ok(events.some((event) => event.type === "acceptance_submitted" && event.verdict === "pass"));
+    assert.equal(runs.at(-1).key, "project_manager", "验收通过后仍回到项目经理汇总");
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
 test("派发守卫：飞书需人工确认的上下文里，兜底派发直接执行，不登记无法点击的待确认", async () => {
   const { orch, runs } = guardHarness((key, _count, prompt) => key !== "project_manager"
-    ? { text: "ok", delivery: { agentKey: key, summary: `${key} 完成`, artifactPaths: [], final: true } }
+    ? { text: "ok", delivery: { agentKey: key, summary: `${key} 完成`, artifactPaths: [], final: true, acceptance: PASSED_ACCEPTANCE } }
     : /最终汇总/.test(prompt)
       ? { text: "ok", delivery: { agentKey: key, summary: "全部完成", artifactPaths: [], final: true } }
       : { text: "ok", delivery: { agentKey: key, summary: "已交给测试验证", artifactPaths: [] } });

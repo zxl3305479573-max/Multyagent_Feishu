@@ -9,7 +9,7 @@ import { readyPlanAssignments } from "./plan-scheduler.js";
 import { createPendingStores } from "./orchestrator/pending-store.js";
 import { sequenceArchitectFirst, withAssignments, withoutAssignments } from "./orchestrator/assignments.js";
 import { isTerminalNext, matchRoutes, MAX_DISPATCH_ROUNDS, routesConfig } from "./orchestrator/routes.js";
-import { detectVerbalDispatch, dispatchCorrectionNote, inferDispatchTargets } from "./orchestrator/guards.js";
+import { ACCEPTANCE_MISSING_NOTE, acceptanceFailureNote, detectVerbalDispatch, dispatchCorrectionNote, failedChecks, inferDispatchTargets } from "./orchestrator/guards.js";
 
 export { matchRoutes };
 
@@ -41,7 +41,7 @@ export function createOrchestrator({
   const failureRecoveries = new Map();
   const maxFailureRecoveries = Number(process.env.PI_MAX_FAILURE_RECOVERIES) || 2;
   const pendingSettlements = new Map();
-  // 派发守卫已纠正过的根任务：每个根任务只纠正一次，避免纠正本身陷入循环。
+  // 协作守卫已纠正过的次数（派发守卫按根任务、验收纠正按子任务），每类只纠正一次，避免纠正本身陷入循环。
   const corrections = new Map();
 
   async function emitStageSettlement(event) {
@@ -206,6 +206,23 @@ export function createOrchestrator({
       assignments: (delivery.assignments || []).map((item) => item.agentKey),
       summary: String(delivery.summary || "").slice(0, 12000),
     });
+    if (delivery.acceptance) {
+      const acceptance = delivery.acceptance;
+      await onEvent({
+        type: "acceptance_submitted",
+        agent: agentKey,
+        task_id: taskId,
+        parent_task_id: parentTaskId || null,
+        chat_id: context.chatId || null,
+        project_name: context.projectName || delivery.projectName || null,
+        verdict: acceptance.verdict,
+        summary: acceptance.summary || "",
+        checks: acceptance.checks,
+        evidence: acceptance.evidence,
+        failed_checks: failedChecks(acceptance).map((check) => check.title),
+        skip_reason: acceptance.skipReason || null,
+      });
+    }
     const summaryProject = context.projectName || delivery.projectName || null;
     if (summaryProject) {
       try {
@@ -344,8 +361,15 @@ export function createOrchestrator({
     return true;
   }
 
-  // 派发守卫（借鉴 team-leader-guard）：项目经理“嘴上派发”时先纠正一次；
-  // 仍未给出有效 assignments 时按文字推断兜底派发，推断不出则判失败等人工重试。
+  function clearRootPlan(rootTaskId) {
+    planRuns.delete(rootTaskId);
+    pmConsolidations.delete(rootTaskId);
+    for (const key of [...dispatchGroups.keys()]) if (rootOf(key.split("->")[0]) === rootTaskId) dispatchGroups.delete(key);
+  }
+
+  // 协作守卫（借鉴 team-leader-guard / acceptance gate）：
+  // - 项目经理“嘴上派发”：先纠正一次；仍未给出有效 assignments 时按文字推断兜底派发，推断不出则判失败等人工重试。
+  // - 测试未提交结构化验收：纠正一次；验收 fail 时清掉计划残留，交回项目经理决定打回谁修复。
   // 返回 { handled: true } 表示本次交付已由守卫接管；返回 { delivery, context } 表示改写后继续正常流程。
   async function applyCollaborationGuards({ agentKey, taskId, parentTaskId, rootTaskId, delivery, resultText, context }) {
     if (agentKey === "project_manager") {
@@ -378,7 +402,42 @@ export function createOrchestrator({
       // 飞书卡片在守卫改写前已按原交付发出（没有确认按钮），兜底派发若再登记待确认就无人能点，故直接执行。
       return { delivery: { ...delivery, assignments }, context: { ...withAssignments(context, assignments), approvalBypass: true } };
     }
-    return {};
+    if (agentKey !== "tester") return {};
+    const acceptance = delivery.acceptance;
+    const pmOwned = roles.has("project_manager") && await projectManagerOwnsRoot(rootTaskId);
+    if (!acceptance) {
+      const acceptanceKey = `${taskId}#acceptance`;
+      // 验收门禁只约束项目经理主导的任务链，且只有编排层派发的测试才能原样重派；
+      // 用户直接 @测试 或静态路由的单角色任务只记录缺失。
+      if (pmOwned && parentTaskId && !corrections.has(acceptanceKey)) {
+        corrections.set(acceptanceKey, 1);
+        await onEvent({ type: "acceptance_correction", agent: agentKey, task_id: taskId, parent_task_id: parentTaskId, project_name: context.projectName || null, chat_id: context.chatId || null });
+        await dispatchTo("tester", parentTaskId, {
+          context: { ...context, approvalBypass: false, pmCoordination: false, correctionNote: ACCEPTANCE_MISSING_NOTE },
+          parentDelivery: { ...delivery, summary: `你上一轮的交付：${delivery.summary || "（无摘要）"}` },
+          fromAgent: "acceptance_gate",
+        });
+        return { handled: true };
+      }
+      await onEvent({ type: "acceptance_missing", agent: agentKey, task_id: taskId, parent_task_id: parentTaskId || null, project_name: context.projectName || null, chat_id: context.chatId || null });
+      if (!pmOwned) return {};
+      return handAcceptanceToProjectManager({ taskId, rootTaskId, delivery, context, note: "【验收缺失】测试两次都没有提交结构化验收结果，本轮实现视为未经验证。请决定重新派发测试（写明验收标准），或说明不需要验收的理由。" });
+    }
+    if (acceptance.verdict !== "fail" || !pmOwned) return {};
+    return handAcceptanceToProjectManager({ taskId, rootTaskId, delivery, context, note: acceptanceFailureNote(acceptance) });
+  }
+
+  // 验收未通过或缺失：不再按计划/路由推进到审计或收尾，清掉残留后交回项目经理决定由谁修复。
+  async function handAcceptanceToProjectManager({ taskId, rootTaskId, delivery, context, note }) {
+    if (!(await withinRoundBudget(taskId))) return { handled: true };
+    clearRootPlan(rootTaskId);
+    await onEvent({ type: "acceptance_failed_handed_to_pm", agent: "tester", task_id: taskId, project_name: context.projectName || null, chat_id: context.chatId || null, failed_checks: failedChecks(delivery.acceptance).map((check) => check.title) });
+    await dispatchTo("project_manager", taskId, {
+      context: { ...withoutAssignments(context), pmCoordination: true, planCompleted: false, approvalBypass: false, correctionNote: note },
+      parentDelivery: delivery,
+      fromAgent: "tester",
+    });
+    return { handled: true };
   }
 
   async function processTaskCompleted(agentKey, taskId, payload = {}) {

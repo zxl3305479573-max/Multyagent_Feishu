@@ -20,6 +20,10 @@ export function sanitizeLoggedEvent(event = {}) {
         ...(typeof item?.type === "string" ? { type: redactTraceText(item.type).slice(0, 30) } : {}),
         ...(Number.isFinite(item?.size) && item.size >= 0 ? { size: item.size } : {}),
       }));
+    } else if (Array.isArray(value) && ["checks", "evidence"].includes(key)) {
+      // 验收检查与证据里可能出现命令和输出摘要，逐字段脱敏截断。
+      safe[key] = value.slice(0, 30).map((item) => Object.fromEntries(Object.entries(item && typeof item === "object" ? item : {})
+        .map(([field, text]) => [field, typeof text === "string" ? redactTraceText(text, 1000).slice(0, 1000) : text])));
     } else if (Array.isArray(value) && ["artifact_paths", "assignments", "choices", "blockers", "risks"].includes(key)) {
       safe[key] = value.map((item) => typeof item === "string" ? redactTraceText(item).slice(0, 1000) : item);
     } else {

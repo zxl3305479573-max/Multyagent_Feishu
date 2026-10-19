@@ -25,7 +25,13 @@ export const eventLabels: Record<string, string> = {
   control_applied: "任务控制已更新",
   dispatch_correction: "派发未生效，已要求项目经理重新派发",
   dispatch_fallback: "按项目经理的说明兜底派发",
+  acceptance_submitted: "提交了验收结果",
+  acceptance_correction: "未提交验收结果，已要求测试补交",
+  acceptance_missing: "测试未提交验收结果",
+  acceptance_failed_handed_to_pm: "验收未通过，已交回项目经理",
 };
+
+export const verdictLabels: Record<string, string> = { pass: "通过", fail: "未通过", skip: "跳过" };
 
 export const statusLabels: Record<string, string> = {
   received: "已接收",

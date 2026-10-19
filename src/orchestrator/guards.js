@@ -1,9 +1,11 @@
 // @ts-check
 // 协作守卫：把“Agent 说了”与“Agent 真的提交了结构化信号”区分开。
 //
-// 派发守卫：项目经理只有在 deliver_artifact 里给出有效 assignments 才会真正派发。
+// 1. 派发守卫：项目经理只有在 deliver_artifact 里给出有效 assignments 才会真正派发。
 //    它若只在文字里写“已派发给前端”，或给出的 assignments 全部无效被过滤，任务会悄悄卡住。
 //    这里识别这两种情况，由编排层先纠正一次、仍失败再按文字推断兜底。
+// 2. 验收门禁：测试必须提交结构化验收结果（结论 + 逐项检查 + 证据），
+//    “单元测试通过 / 页面能打开”不能当作通过；未通过时交回项目经理决定打回谁修复。
 
 /** 文字里声称已经派发/分配的说法。只在没有有效 assignments 时才有意义。 */
 const DISPATCH_CLAIM = /(?:已经?|现已|正在|将会?|马上|立即)\s*(?:派发|派给|分派|分配|指派|交给|交由|转交|安排)|派发(?:给|至)|(?:交给|交由|转交给?|分配给|指派给|安排)\s*(?:架构|前端|后端|测试|审计|architect|frontend|backend|tester|auditor)/iu;
@@ -68,3 +70,83 @@ export function dispatchCorrectionNote(detection, availableKeys = []) {
     "确实不需要派发时，删去派发说法，自己完成或设置 final=true 并如实说明。",
   ].join("\n");
 }
+
+const VERDICTS = new Set(["pass", "fail", "skip"]);
+const CHECK_STATUSES = new Set(["pass", "fail", "skip"]);
+const EVIDENCE_KINDS = new Set(["command", "file", "screenshot", "url", "note"]);
+const clip = (value, max) => String(value ?? "").trim().slice(0, max);
+
+/**
+ * 校验并规整测试提交的结构化验收结果。
+ * - verdict=pass：至少一项检查且全部 pass，并至少一条证据；
+ * - verdict=fail：至少一项检查为 fail；
+ * - verdict=skip：必须写明 skipReason（例如纯库项目没有可验收的界面或接口）。
+ * @param {any} input
+ * @returns {{ valid: boolean, errors: string[], acceptance: any }}
+ */
+export function validateAcceptance(input) {
+  const errors = [];
+  if (!input || typeof input !== "object") return { valid: false, errors: ["缺少 acceptance 验收结果"], acceptance: null };
+  const verdict = String(input.verdict || "").trim().toLowerCase();
+  if (!VERDICTS.has(verdict)) errors.push("verdict 只能是 pass、fail 或 skip");
+  const checks = (Array.isArray(input.checks) ? input.checks : []).slice(0, 30).map((check, index) => ({
+    id: clip(check?.id || `C${index + 1}`, 40),
+    title: clip(check?.title, 200),
+    status: String(check?.status || "").trim().toLowerCase(),
+    ...(check?.detail ? { detail: clip(check.detail, 500) } : {}),
+  }));
+  checks.forEach((check, index) => {
+    if (!check.title) errors.push(`第 ${index + 1} 项检查缺少 title`);
+    if (!CHECK_STATUSES.has(check.status)) errors.push(`检查 ${check.id} 的 status 只能是 pass、fail 或 skip`);
+  });
+  const evidence = (Array.isArray(input.evidence) ? input.evidence : []).slice(0, 20).map((item) => ({
+    kind: String(item?.kind || "").trim().toLowerCase(),
+    ...(item?.path ? { path: clip(item.path, 500) } : {}),
+    ...(item?.text ? { text: clip(item.text, 1000) } : {}),
+    ...(item?.url ? { url: clip(item.url, 500) } : {}),
+  }));
+  evidence.forEach((item, index) => {
+    if (!EVIDENCE_KINDS.has(item.kind)) errors.push(`第 ${index + 1} 条证据的 kind 只能是 command、file、screenshot、url 或 note`);
+    else if ((item.kind === "file" || item.kind === "screenshot") && !item.path) errors.push(`第 ${index + 1} 条证据缺少 path`);
+    else if (item.kind === "url" && !item.url) errors.push(`第 ${index + 1} 条证据缺少 url`);
+    else if ((item.kind === "command" || item.kind === "note") && !item.text) errors.push(`第 ${index + 1} 条证据缺少 text`);
+  });
+  const skipReason = clip(input.skipReason, 500);
+  if (verdict === "pass") {
+    if (!checks.length) errors.push("verdict=pass 至少需要一项检查");
+    if (checks.some((check) => check.status !== "pass")) errors.push("verdict=pass 时所有检查都必须为 pass；有未通过或跳过的项请如实给出 fail 或说明");
+    if (!evidence.length) errors.push("verdict=pass 至少需要一条证据（执行的命令与结果、测试报告文件或截图）");
+  }
+  if (verdict === "fail" && !checks.some((check) => check.status === "fail")) errors.push("verdict=fail 时至少有一项检查为 fail，并写明失败现象");
+  if (verdict === "skip" && !skipReason) errors.push("verdict=skip 必须填写 skipReason");
+  const acceptance = {
+    verdict,
+    summary: clip(input.summary, 500),
+    checks,
+    evidence,
+    ...(skipReason ? { skipReason } : {}),
+  };
+  return { valid: errors.length === 0, errors, acceptance };
+}
+
+/** @param {any} acceptance @returns {Array<{ id: string, title: string, status: string, detail?: string }>} */
+export function failedChecks(acceptance) {
+  return (acceptance?.checks || []).filter((check) => check.status === "fail");
+}
+
+/** @param {any} acceptance */
+export function acceptanceFailureNote(acceptance) {
+  const failed = failedChecks(acceptance).map((check) => `- ${check.id} ${check.title}${check.detail ? `：${check.detail}` : ""}`).join("\n");
+  return [
+    "【验收未通过】测试提交的结构化验收结论为 fail，以下检查未通过：",
+    failed || "- （未列出具体检查项）",
+    "请据此决定：用 assignments 把具体缺陷派给对应开发角色修复，并在修复后安排测试重新验收；",
+    "若判断为测试误判，请说明理由后继续推进。不要在未修复的情况下直接设置 final=true。",
+  ].join("\n");
+}
+
+export const ACCEPTANCE_MISSING_NOTE = [
+  "【验收纠正】你上一轮没有提交结构化验收结果。",
+  "请重新调用 deliver_artifact，并填写 acceptance：verdict（pass/fail/skip）、checks（逐项检查及状态）、evidence（执行的命令与结果、报告文件或截图）。",
+  "“单元测试通过”或“页面能打开”不能直接当作通过；没有可验收内容时用 verdict=skip 并写明 skipReason。",
+].join("\n");
