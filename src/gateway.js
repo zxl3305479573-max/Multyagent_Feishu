@@ -197,7 +197,7 @@ const ACTION_INVALID_TOAST = "该操作无需确认或已失效";
 const ACTION_ERROR_TOAST = "确认失败，请查看网关日志";
 function toast(type, content) { return { toast: { type, content } }; }
 
-export function createCardActionHandler({ orchestrator, client, agent = {}, log = console, onEvent = async () => {} } = {}) {
+export function createCardActionHandler({ orchestrator, client, agent = {}, log = console, onEvent = async () => {}, ticketActions = null } = {}) {
   return async (event) => {
     const rawValue = event?.action?.value ?? event?.event?.action?.value;
     let value = rawValue;
@@ -210,6 +210,17 @@ export function createCardActionHandler({ orchestrator, client, agent = {}, log 
     await onEvent({ type: "card_action_received", action: action || null, choice: value.choice || null, chat_id: chatId || null, agent: agent.key, message_id: event?.messageId || null });
     // 回调诊断：多实例或事件投递异常时，这两行日志能直接说明点击落到了哪个进程/会话。
     log.info?.(`[card] pid=${process.pid} action=${action || "-"} choice=${value.choice || "-"} chat=${chatId || "-"} message=${event?.messageId || "-"}`);
+    // 工单确认卡：“交给项目经理 / 忽略”，与任务确认卡分开处理。
+    if (action === "ticket" && typeof ticketActions === "function") {
+      try {
+        const outcome = await ticketActions(value);
+        if (chatId) await sendCard(client, chatId, buildTextCard({ text: outcome.message }, agent));
+        return toast(outcome.ok ? "success" : "warning", outcome.message);
+      } catch (error) {
+        log.error(`ticket card action failed: ${error.message}`);
+        return toast("error", `工单处理失败：${String(error.message).slice(0, 60)}`);
+      }
+    }
     if (!["approve", "choice"].includes(action) || !chatId || !orchestrator?.resolveLatest) return toast("warning", ACTION_INVALID_TOAST);
     try {
       const resolved = await orchestrator.resolveLatest(chatId, value.choice || "approve", value.task_id || null);

@@ -2,7 +2,19 @@ import { createDesktopControlServer } from "./desktop-control.js";
 
 const rootOf = (taskId) => String(taskId || "").split(":")[0];
 
-export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, recordEvent, agents, submitTask, createProject, listProjects, exportProject, cleanupHistory, restoreHistory, host, port } = {}) {
+// 项目作用域连接只能操作本项目的工单源：请求带的 projectName 必须与工单源的项目一致。
+async function scopedSource(tickets, { sourceId, projectName }) {
+  const source = (await tickets.listSources()).find((item) => item.id === sourceId);
+  if (!source) throw new Error("找不到这个工单源");
+  if (projectName && source.project !== projectName) throw new Error("工单源不属于当前项目");
+  return source;
+}
+
+export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, recordEvent, agents, submitTask, createProject, listProjects, exportProject, cleanupHistory, restoreHistory, tickets = null, host, port } = {}) {
+  const requireTickets = () => {
+    if (!tickets) throw new Error("工单功能不可用（需要启用项目经理）");
+    return tickets;
+  };
   if (!taskStore || !orchestrator) throw new TypeError("desktop host requires taskStore and orchestrator");
   const commandHandlers = {
     async pause({ taskId }) {
@@ -56,6 +68,30 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
     async restore_history(input) {
       if (typeof restoreHistory !== "function") throw new Error("history restore is unavailable");
       return restoreHistory(input || {});
+    },
+    async tickets_sources({ projectName } = {}) {
+      const service = requireTickets();
+      return { sources: await service.listSources({ project: projectName || "" }), hasToken: service.hasToken() };
+    },
+    async tickets_save_source({ projectName, source } = {}) {
+      if (projectName && source?.project !== projectName) throw new Error("工单源不属于当前项目");
+      return { source: await requireTickets().saveSource(source || {}) };
+    },
+    async tickets_remove_source(input = {}) {
+      await scopedSource(requireTickets(), input);
+      return requireTickets().removeSource(input.sourceId);
+    },
+    async tickets_inbox(input = {}) {
+      await scopedSource(requireTickets(), input);
+      return requireTickets().inbox({ sourceId: input.sourceId });
+    },
+    async tickets_dispatch(input = {}) {
+      await scopedSource(requireTickets(), input);
+      return requireTickets().dispatch({ sourceId: input.sourceId, number: Number(input.number), note: String(input.note || ""), origin: "desktop" });
+    },
+    async tickets_pull(input = {}) {
+      await scopedSource(requireTickets(), input);
+      return requireTickets().pull(input.sourceId, { reason: "manual" });
     },
   };
   const server = createDesktopControlServer({ token, eventsFile, taskStore, agents, commandHandlers, listProjects, host, port });

@@ -65,7 +65,26 @@ export type DesktopSocket = {
   subscribe: (listener: (message: DesktopMessage) => void) => () => void;
   close: () => void;
 };
-export type WorkspaceView = "conversation" | "agent" | "project" | "settings";
+export type WorkspaceView = "conversation" | "agent" | "project" | "settings" | "tickets";
+export type TicketSource = {
+  id: string;
+  repo: string;
+  project: string;
+  labels: string[];
+  assignee: string;
+  autoClose: boolean;
+  pull: { enabled: boolean; everyHours: number; threshold: "severe" | "major" | "all"; confirmInFeishu: boolean; chatId: string; nextRunAt?: string | null; lastRunAt?: string | null; lastResult?: string };
+};
+export type Ticket = {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  labels: string[];
+  priority: { rank: number; label: string };
+  status: string;
+  taskId?: string | null;
+};
 export type PendingSubmission = { projectName: string; title: string; description: string };
 export type ControlCommand = "pause" | "resume" | "terminate" | "retry";
 

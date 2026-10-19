@@ -516,3 +516,35 @@ kbd { margin-left: auto; padding: 2px 5px; border: 1px solid #e5e7eb; border-rad
 .acceptance-evidence div span:first-child { color: var(--muted); }
 .acceptance-evidence a, .acceptance-evidence div span:last-child { overflow-wrap: anywhere; }
 
+/* GitHub 工单收件箱 */
+.tickets-view { display: grid; gap: 14px; align-content: start; }
+.tickets-view .setup-hint { padding: 9px 12px; border: 1px solid #eadfbe; border-radius: 7px; font-size: 13px; }
+.tickets-view .project-action-button { display: inline-block; width: auto; margin: 0; text-align: center; }
+.tickets-sources { display: flex; flex-wrap: wrap; gap: 8px; }
+.ticket-source { display: grid; gap: 2px; min-width: 160px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; text-align: left; cursor: pointer; }
+.ticket-source span { color: var(--muted); font-size: 12px; }
+.ticket-source.is-selected { border-color: var(--accent); background: var(--accent-soft); }
+.ticket-source-add { align-content: center; color: var(--accent); }
+.ticket-form { display: grid; gap: 10px; max-width: 560px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; }
+.ticket-form h3, .ticket-inbox h3 { margin: 0; font-size: 15px; }
+.ticket-form label { display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
+.ticket-form input:not([type="checkbox"]), .ticket-form select, .ticket-row-actions input { min-height: 32px; padding: 0 9px; border: 1px solid #dfe2e6; border-radius: 6px; color: var(--ink); font-size: 13px; }
+.ticket-form .ticket-check { display: flex; align-items: center; gap: 7px; color: var(--ink); }
+.ticket-pull-fields { display: grid; gap: 10px; padding-left: 22px; }
+.ticket-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.ticket-inbox { display: grid; gap: 10px; }
+.ticket-inbox-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.ticket-inbox-heading small { color: var(--muted); font-size: 12px; }
+.ticket-inbox-actions, .ticket-row-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ticket-row-actions input { flex: 1 1 200px; min-width: 0; }
+.ticket-row { display: grid; gap: 7px; padding: 11px 12px; border: 1px solid var(--line); border-left: 3px solid #cfd4da; border-radius: 7px; background: #fff; }
+.ticket-row.priority-0 { border-left-color: var(--red); }
+.ticket-row.priority-10 { border-left-color: #d97a1c; }
+.ticket-row-main { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.ticket-row-main strong { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+.ticket-priority, .ticket-status { padding: 2px 7px; border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 12px; white-space: nowrap; }
+.ticket-status.status-dispatched { background: var(--accent-soft); color: var(--accent); }
+.ticket-status.status-completed { color: var(--green); }
+.ticket-status.status-failed { color: var(--red); }
+.ticket-body { margin: 0; color: #58606b; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ticket-empty { color: var(--muted); font-size: 13px; }

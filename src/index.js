@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
 import { createRunAgent } from "./handlers.js";
-import { createCardActionHandler, createRoleHandler } from "./gateway.js";
+import { createCardActionHandler, createRoleHandler, sendCard } from "./gateway.js";
 import { createOrchestrator } from "./orchestrator.js";
 import { TaskStore } from "./domain/task-store.js";
 import { createEventLogger } from "./observability.js";
@@ -19,6 +19,8 @@ import { createDesktopHost } from "./desktop-host.js";
 import { createDesktopTaskSubmitter } from "./desktop-task.js";
 import { archiveProjectHistory, exportProjectSnapshot, restoreProjectHistory } from "./project-history.js";
 import { createProjectRegistry } from "./project-registry.js";
+import { createGitHubClient } from "./tickets/github.js";
+import { createTicketService } from "./tickets/service.js";
 import { createShutdown } from "./shutdown.js";
 import { roleConfig } from "./role-config.cjs";
 import { rotateEventLog } from "./event-log.js";
@@ -34,6 +36,7 @@ const feishuClientLogger = createCompactLogger();
 // wrappers below read it at call time so ordering stays flexible.
 let recordEvent;
 let desktopHost = null;
+let ticketService = null;
 
 // 单实例守卫：同一套应用凭据只允许一个长连接网关。
 // 两个网关同时运行时，事件与卡片回调只会投给其中一个，
@@ -246,6 +249,8 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
   const publishRecordEvent = async (event) => {
     const entry = await gatewayRecordEvent(event);
     desktopHost?.publish(entry);
+    // 工单回写挂在事件流上；失败只记日志，不影响任务本身。
+    ticketService?.handleEvent(entry).catch((error) => console.warn(`[tickets] ${error.message}`));
     return entry;
   };
   const submitTask = boardOwner?.agent
@@ -257,6 +262,21 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
       recordEvent: publishRecordEvent,
     })
     : null;
+  ticketService = submitTask
+    ? createTicketService({
+      client: createGitHubClient(),
+      token: process.env.GITHUB_TOKEN || "",
+      submitTask,
+      recordEvent: publishRecordEvent,
+      // 飞书确认卡由项目经理机器人发出，回调同样落到项目经理的卡片处理器。
+      sendCard: (chatId, card) => sendCard(boardOwner.client, chatId, card),
+      defaultChatId: allowedChatId,
+    })
+    : null;
+  if (ticketService) {
+    ticketService.start();
+    lifecycle.register("tickets", () => ticketService.stop());
+  }
   const exportProject = async ({ projectName, outputFile } = {}) => {
     const project = String(projectName || "").trim();
     if (!project) throw new Error("projectName is required");
@@ -297,6 +317,7 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
     exportProject,
     cleanupHistory,
     restoreHistory,
+    tickets: ticketService,
     host: "127.0.0.1",
     port: Number(process.env.PI_DESKTOP_PORT) || 0,
   });
@@ -325,7 +346,13 @@ for (const { definition, agent, client, appId, appSecret, identity } of prepared
     onEvent: (event) => recordEvent(event),
     isAllowedChat: (chatId) => !allowedChatId || chatId === allowedChatId,
   });
-  const cardActionHandler = createCardActionHandler({ orchestrator, client, agent, onEvent: (event) => recordEvent(event) });
+  const cardActionHandler = createCardActionHandler({
+    orchestrator,
+    client,
+    agent,
+    onEvent: (event) => recordEvent(event),
+    ticketActions: definition.key === "project_manager" && ticketService ? (value) => ticketService.handleCardAction(value) : null,
+  });
   const wsClient = new WSClient({
     appId,
     appSecret,

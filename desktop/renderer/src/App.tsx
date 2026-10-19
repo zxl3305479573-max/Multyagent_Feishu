@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, AgentCard, AgentExecutionGroup, ControlCommand, CredentialStatus, DesktopSocket, EventRecord, PendingSubmission, Task, WorkspaceView } from "./types";
-import { eventTime, finalResultOf, formatProjectCommandFeedback, mergeTasks, rootTaskId } from "./format";
+import { eventTime, finalResultOf, formatProjectCommandFeedback, mergeTasks, rootTaskId, snapshotStatus, taskStatus } from "./format";
 import { agentStatus, collectArtifacts, executionOwner, executionTiming, groupToolExecutions } from "./execution-view";
 import { Sidebar } from "./components/Sidebar";
 import { SettingsView } from "./components/SettingsView";
@@ -9,6 +9,7 @@ import { AgentTraceView } from "./components/AgentTraceView";
 import { AgentStatusStrip } from "./components/AgentStatusStrip";
 import { Composer, ConversationView } from "./components/ConversationView";
 import { NewProjectModal } from "./components/NewProjectModal";
+import { TicketsView } from "./components/TicketsView";
 
 let activeSocket: DesktopSocket | null = null;
 
@@ -87,6 +88,8 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("conversation");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // 窄屏下侧栏改为抽屉：切换视图、任务或项目后自动收起。
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [configuredCredentials, setConfiguredCredentials] = useState<string[]>([]);
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus | null>(null);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -100,6 +103,14 @@ export function App() {
   const historyRequests = useRef(new Map<string, string>());
   const [now, setNow] = useState(Date.now());
   const pendingSubmission = useRef<PendingSubmission | null>(null);
+  // 需要等结果的命令（工单页）：按 requestId 对应 command_result，不走通用的提示文案。
+  const pendingRequests = useRef(new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>());
+  const request = useCallback(<T,>(command: string, payload: Record<string, unknown> = {}) => new Promise<T>((resolve, reject) => {
+    if (!activeSocket) { reject(new Error("本地任务服务未连接")); return; }
+    const requestId = crypto.randomUUID();
+    pendingRequests.current.set(requestId, { resolve: resolve as (value: unknown) => void, reject });
+    activeSocket.send({ type: "command", command, ...payload, requestId });
+  }), []);
   const agentSectionRefs = useRef<Record<string, HTMLElement | null>>({});
   const selectedTask = useMemo(() => tasks.find((task) => task.task_id === selected), [tasks, selected]);
   const currentStatus = selectedTask?.status_snapshot?.status || selectedTask?.status;
@@ -189,6 +200,8 @@ export function App() {
     // 重连（切换项目、归档/恢复历史后）要重新拉取任务记录；先回到“连接中”，ready 后再触发拉取。
     setTaskHistory({});
     historyRequests.current.clear();
+    for (const pending of pendingRequests.current.values()) pending.reject(new Error("连接已重置，请重试"));
+    pendingRequests.current.clear();
     setConnection("连接中");
     (async () => {
       if (!window.desktop) {
@@ -214,6 +227,11 @@ export function App() {
             currentSocket.send({ type: "command", command: "submit_task", ...pending, requestId: crypto.randomUUID() });
             setNotice("已连接目标项目，正在创建任务…");
           }
+        } else if (message.type === "command_result" && message.requestId && pendingRequests.current.has(message.requestId)) {
+          const pending = pendingRequests.current.get(message.requestId)!;
+          pendingRequests.current.delete(message.requestId);
+          if (message.error) pending.reject(new Error(message.error));
+          else pending.resolve(message.result);
         } else if (message.type === "command_result" && message.command === "task_events") {
           // 只读查询，不提示；失败时记为空，界面显示“暂无记录”而不是一直转圈。
           const taskId = historyRequests.current.get(message.requestId || "") || message.result?.taskId;
@@ -271,6 +289,8 @@ export function App() {
       socket?.close();
     };
   }, [project, refreshVersion]);
+
+  useEffect(() => setMobileNavOpen(false), [selected, selectedAgent, workspaceView, project, projectModalOpen]);
 
   const refreshCredentials = () => {
     window.desktop?.credentials?.list?.().then(setConfiguredCredentials).catch(() => {});
@@ -422,15 +442,18 @@ export function App() {
   };
 
   const headerTitle = workspaceView === "settings" ? "运行设置"
+    : workspaceView === "tickets" ? "GitHub 工单"
     : workspaceView === "project" ? "项目上下文"
       : workspaceView === "agent" ? `${agents.find((agent) => agent.key === selectedAgent)?.displayName || selectedAgent || "全部 Agent"} · 执行观察`
         : selectedTask?.title || (selected ? selected : "新建任务");
   const headerSubtitle = workspaceView === "settings" ? "管理全部运行配置"
+    : workspaceView === "tickets" ? project || "全部项目"
     : workspaceView === "project" ? project || "全部项目"
       : selectedTask?.project_name || project || "选择项目";
 
   return (
-    <main className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+    <main className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""} ${mobileNavOpen ? "mobile-nav-open" : ""}`}>
+      {mobileNavOpen && <button className="sidebar-backdrop" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />}
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
@@ -452,6 +475,7 @@ export function App() {
         selectedAgent={selectedAgent}
         onObserveAgent={(agentKey) => { setSelectedAgent(agentKey); setWorkspaceView("agent"); }}
         onOpenSettings={showSettings}
+        onOpenTickets={() => { setWorkspaceView("tickets"); setSelectedAgent(""); }}
         onNewProject={openNewProject}
         onNewConversation={openNewProjectConversation}
       />
@@ -459,9 +483,11 @@ export function App() {
       <section className="workspace">
         <header className="workspace-header">
           <div className="conversation-heading">
+            <button className="icon-button mobile-nav-toggle" aria-label="打开导航" title="打开导航" onClick={() => setMobileNavOpen(true)}>☰</button>
             {workspaceView !== "conversation" && <button className="workspace-back-button" onClick={() => { setWorkspaceView("conversation"); setSelectedAgent(""); }} aria-label="返回对话" title="返回对话">‹ <span>返回对话</span></button>}
             <div className="conversation-heading-copy"><h1>{headerTitle}</h1><span className="header-project">{headerSubtitle}</span></div>
           </div>
+          {workspaceView === "conversation" && selectedTask && <span className={`task-state state-${snapshotStatus(selectedTask)}`}><i />{taskStatus(selectedTask)}</span>}
         </header>
 
         {notice && <div className="notice-bar" role="status"><span>{notice}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setNotice("")}>×</button></div>}
@@ -472,6 +498,7 @@ export function App() {
         {workspaceView === "conversation" && <AgentStatusStrip cards={agentCards} selectedAgent={selectedAgent} onSelect={scrollToAgent} />}
 
         {workspaceView === "settings" && <SettingsView onSaved={refreshCredentials} onNotice={setNotice} />}
+        {workspaceView === "tickets" && <TicketsView project={project} projects={projects} request={request} onNotice={setNotice} onOpenTask={(taskId) => { setSelected(taskId); setSelectedAgent(""); setWorkspaceView("conversation"); }} />}
         {workspaceView === "project" && <ProjectView
           project={project}
           projects={projects}

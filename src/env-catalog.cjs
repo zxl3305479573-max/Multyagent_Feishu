@@ -106,6 +106,14 @@ function buildEnvCatalog({ roles = roleConfig().roles } = {}) {
       ],
     },
     {
+      id: "tickets",
+      title: "GitHub 工单",
+      description: "从 GitHub Issues 拉取工单交给项目经理，完成后自动回写结果。工单源在桌面端「工单」页配置。",
+      fields: [
+        { key: "GITHUB_TOKEN", label: "GitHub Token", type: "secret", description: "需要 Issues 读写权限（fine-grained token：Issues → Read and write）。只发送给 api.github.com 与 GitHub 附件域名。" },
+      ],
+    },
+    {
       id: "bitable",
       title: "多维表格看板",
       description: "任务看板与执行 Trace 投影到飞书多维表格；只有项目经理应用需要表格权限。",

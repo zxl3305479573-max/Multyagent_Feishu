@@ -22,6 +22,7 @@ type Props = {
   selectedAgent: string;
   onObserveAgent: (agentKey: string) => void;
   onOpenSettings: () => void;
+  onOpenTickets: () => void;
   onNewProject: () => void;
   onNewConversation: () => void;
 };
@@ -64,6 +65,7 @@ export function Sidebar(props: Props) {
         <div className={`connection-line ${connectionClass(connection)}`}><span className="connection-dot" />{connection}</div>
         {project && <button className="project-context-strip" onClick={props.onOpenProject} aria-label="打开项目上下文" title="项目上下文"><span className="project-context-icon">⌂</span><span className="project-context-details"><span className="project-context-title"><strong>{project}</strong><span>当前项目</span></span><span className="project-context-meta"><span>{projectStats.taskCount} 个任务</span><span>{projectStats.eventCount} 条事件</span></span><span className="project-context-isolated">上下文已隔离 · 管理项目</span></span></button>}
         {agents.length > 0 && <div className="agent-nav-block"><div className="sidebar-section-heading"><span>Agent</span></div>{agents.filter((agent) => agent.enabled !== false).map((agent) => <button key={agent.key} className={`agent-nav ${selectedAgent === agent.key ? "is-selected" : ""}`} onClick={() => props.onObserveAgent(agent.key)} title={`${agent.displayName || agent.key} · 观察`}>{agent.displayName || agent.key}<span>观察</span></button>)}</div>}
+        <button className="settings-nav" onClick={props.onOpenTickets} title="GitHub 工单"><span>☰</span><span className="sidebar-label">工单</span></button>
         <button className="settings-nav" onClick={props.onOpenSettings} title="运行设置"><span>⚙</span><span className="sidebar-label">运行设置</span></button>
       </div>
     </aside>
