@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = readFileSync(new URL("../desktop/renderer/src/execution-view.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { groupToolExecutions, toolExecutionStatus, collectArtifacts, executionOwner, executionInstanceId, groupAgentExecutionInstances, numberAgentInstances, agentStatus, executionTiming, latestPlanProgress, splitConversationTurns } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { groupToolExecutions, toolExecutionStatus, collectArtifacts, executionOwner, executionInstanceId, groupAgentExecutionInstances, groupExecutionInstancesByAgent, numberAgentInstances, agentStatus, executionTiming, latestPlanProgress, splitConversationTurns } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 test("conversation turns keep each user input before the execution it triggered", () => {
   const at = (seconds) => new Date(seconds * 1000).toISOString();
@@ -50,6 +50,25 @@ test("same-role child bots keep separate execution groups and receive stable ins
     { ...groups[1], displayName: "前端开发" },
   ]);
   assert.deepEqual(continued.slice(-2).map((group) => group.displayName), ["1号前端开发", "2号前端开发"], "继续执行同一个子机器人时沿用原编号");
+});
+
+test("six role bots stay independent and task slices stay with their own role", () => {
+  const groups = groupAgentExecutionInstances([
+    { type: "agent_started", agent: "project_manager", task_id: "T", timestamp: "2026-01-01T00:00:01Z" },
+    { type: "dispatch_started", from: "project_manager", target: "frontend_developer", parent_task_id: "T", task_id: "T:frontend_developer", timestamp: "2026-01-01T00:00:02Z" },
+    { type: "agent_started", agent: "frontend_developer", task_id: "T:frontend_developer", timestamp: "2026-01-01T00:00:03Z" },
+    { type: "dispatch_started", from: "project_manager", target: "backend_developer", parent_task_id: "T", task_id: "T:backend_developer", timestamp: "2026-01-01T00:00:04Z" },
+    { type: "dispatch_started", from: "frontend_developer", target: "tester", parent_task_id: "T:frontend_developer", task_id: "T:frontend_developer:tester", timestamp: "2026-01-01T00:00:05Z" },
+    { type: "dispatch_started", from: "project_manager", target: "frontend_developer", parent_task_id: "T", task_id: "T:frontend_developer.second", timestamp: "2026-01-01T00:00:06Z" },
+  ]).map((group) => ({ ...group, displayName: group.agentKey }));
+  const bundles = groupExecutionInstancesByAgent(groups);
+  assert.deepEqual(bundles.map((bundle) => bundle.agentKey), ["project_manager", "frontend_developer", "backend_developer", "tester"]);
+  assert.equal(bundles[0].instances.length, 1, "项目经理只包含自己的执行实例");
+  assert.equal(bundles[0].displayName, "project_manager", "主角色名不编号");
+  assert.equal(bundles[0].instances[0].displayName, "project_manager", "未分片时不生成 1 号子机器人");
+  assert.deepEqual(bundles.map((bundle) => bundle.instances.length), [1, 2, 1, 1]);
+  assert.deepEqual(bundles[1].instances.map((group) => group.displayName), ["1号frontend_developer", "2号frontend_developer"]);
+  assert.ok(bundles[1].instances.every((group) => group.agentKey === "frontend_developer"), "前端分块只归前端主机器人");
 });
 
 test("overlapping identical tools pair by call ID across intervening lifecycle events", () => {

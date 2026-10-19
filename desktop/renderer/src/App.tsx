@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, AgentExecutionGroup, ControlCommand, CredentialStatus, DesktopSocket, EventRecord, PendingSubmission, RuntimeConfig, Task, WorkspaceView } from "./types";
 import { eventTime, finalResultOf, formatProjectCommandFeedback, mergeTasks, rootTaskId, snapshotStatus, taskStatus } from "./format";
-import { agentStatus, collectArtifacts, executionTiming, groupAgentExecutionInstances, groupToolExecutions, numberAgentInstances, splitConversationTurns } from "./execution-view";
+import { agentStatus, collectArtifacts, executionTiming, groupAgentExecutionInstances, groupToolExecutions, splitConversationTurns } from "./execution-view";
 import { Sidebar } from "./components/Sidebar";
 import { SettingsView } from "./components/SettingsView";
 import { ProjectView } from "./components/ProjectView";
@@ -201,7 +201,7 @@ export function App() {
         };
       });
     });
-    return numberAgentInstances(groups);
+    return groups;
   }, [agents, taskEvents, selectedTask, currentStatus, now, settledAt]);
   const projectStats = useMemo(() => ({
     taskCount: tasks.filter((task) => !project || task.project_name === project).length,

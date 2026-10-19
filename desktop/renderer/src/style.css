@@ -306,6 +306,25 @@ kbd { margin-left: auto; padding: 2px 5px; border: 1px solid var(--line); border
 .agent-execution-overview-copy > p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; }
 .agent-execution-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--subtle); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .agent-execution-meta .meta-failed { color: var(--red); }
+.subagent-executions { display: grid; gap: 7px; padding: 11px 14px 13px; border-top: 1px solid var(--line-soft); background: #fafbfd; }
+.subagent-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 0 1px 2px; }
+.subagent-list-heading strong { color: var(--ink-2); font-size: 12.5px; font-weight: 600; }
+.subagent-list-heading span { color: var(--subtle); font-size: 11.5px; }
+.subagent-execution { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-raised); overflow: hidden; }
+.subagent-execution > summary { display: flex; align-items: center; gap: 9px; min-height: 50px; padding: 8px 10px; cursor: pointer; list-style: none; transition: background 120ms ease; }
+.subagent-execution > summary::-webkit-details-marker { display: none; }
+.subagent-execution > summary:hover { background: var(--surface); }
+.subagent-avatar { width: 24px; height: 24px; flex: none; border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; }
+.subagent-summary-main { display: grid; flex: 1 1 auto; gap: 3px; min-width: 0; }
+.subagent-summary-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.subagent-summary-title strong { overflow: hidden; color: var(--ink); font-size: 12.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-summary-main > small { overflow: hidden; color: var(--muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-summary-meta { flex: none; color: var(--subtle); font-size: 11px; font-variant-numeric: tabular-nums; }
+.subagent-chevron { flex: none; color: var(--subtle); font-size: 17px; line-height: 1; transition: transform 140ms var(--ease); }
+.subagent-execution[open] > summary .subagent-chevron { transform: rotate(90deg); }
+.subagent-execution-body { border-top: 1px solid var(--line-soft); }
+.subagent-execution-body > .agent-execution-process { border-top: 0; }
+.subagent-execution-body > .agent-final-result { background: #f8faff; }
 .agent-execution-process { border-top: 1px solid var(--line-soft); }
 .agent-execution-process > summary { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 7px 14px; color: var(--muted); cursor: pointer; list-style: none; font-size: 12.5px; font-weight: 500; transition: background 120ms ease, color 120ms ease; }
 .agent-execution-process > summary::-webkit-details-marker { display: none; }
@@ -344,7 +363,8 @@ kbd { margin-left: auto; padding: 2px 5px; border: 1px solid var(--line); border
 .tool-execution summary:hover { background: var(--surface); }
 .tool-execution-chevron { width: 10px; color: var(--subtle); font-size: 17px; line-height: 1; transition: transform 140ms var(--ease); }
 .tool-execution[open] .tool-execution-chevron { transform: rotate(90deg); }
-.tool-execution-title { min-width: 0; flex: 1; overflow: hidden; font-family: var(--mono); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.tool-execution-title { min-width: 0; max-width: 34%; flex: 0 1 auto; overflow: hidden; font-family: var(--mono); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.tool-execution-description { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
 .tool-execution-status, .tool-execution-count { flex: none; color: var(--subtle); font-size: 11.5px; }
 .tool-execution-running .tool-execution-status { color: var(--accent); }
 .tool-execution-completed .tool-execution-status { color: var(--green); }
@@ -361,6 +381,11 @@ kbd { margin-left: auto; padding: 2px 5px; border: 1px solid var(--line); border
 .agent-final-summary-stats strong { color: var(--accent-ink); font-size: 13px; font-variant-numeric: tabular-nums; }
 .agent-final-summary-stats small { color: var(--muted); font-size: 11px; }
 .agent-final-result > p { margin: 0; color: var(--ink-2); font-size: 13.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.role-final-result { background: linear-gradient(180deg, #f4f8ff, #fff 68%); }
+.role-final-contributions { display: grid; gap: 7px; }
+.role-final-contribution { display: grid; gap: 3px; padding: 9px 10px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: rgba(255, 255, 255, .78); }
+.role-final-contribution strong { color: var(--accent-ink); font-size: 12.5px; font-weight: 600; }
+.role-final-contribution p { margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .final-summary-output { display: grid; gap: 12px; margin: 18px 0 6px; padding: 15px 16px; border: 1px solid var(--accent-line); border-radius: var(--radius-lg); background: linear-gradient(160deg, #f4f8ff, #fff 58%); box-shadow: var(--shadow-sm); }
 .final-summary-output > header { display: flex; align-items: center; gap: 9px; }
 .final-summary-output > header > div { display: grid; gap: 2px; min-width: 0; }
@@ -549,6 +574,8 @@ kbd { margin-left: auto; padding: 2px 5px; border: 1px solid var(--line); border
   .agent-execution-overview { gap: 8px; padding: 10px; }
   .agent-execution-overview-title { align-items: flex-start; }
   .agent-execution-meta { gap: 3px 8px; }
+  .subagent-executions { padding-inline: 10px; }
+  .subagent-summary-meta { display: none; }
   .agent-execution-process > summary { padding-inline: 10px; }
   .agent-execution-events { padding-left: 30px; padding-right: 10px; }
   .agent-execution-events::before { left: 17px; }
@@ -556,6 +583,7 @@ kbd { margin-left: auto; padding: 2px 5px; border: 1px solid var(--line); border
   .tool-execution-content { padding-left: 12px; padding-right: 8px; }
   .tool-execution summary { gap: 5px; padding-inline: 8px; }
   .tool-execution-count { display: none; }
+  .tool-execution-title { max-width: 42%; }
   .composer-send-row { gap: 5px; }
   .composer-runtime-pickers { gap: 4px; }
   .composer-picker summary { max-width: 145px; }

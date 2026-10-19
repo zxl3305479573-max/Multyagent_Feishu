@@ -33,6 +33,14 @@ export type AgentExecutionInstance<E extends ExecutionEvent> = {
   events: E[];
 };
 
+type NamedExecutionInstance<G extends ExecutionEvent = ExecutionEvent> = AgentExecutionInstance<G> & { displayName: string };
+
+export type AgentExecutionBundle<G extends NamedExecutionInstance = NamedExecutionInstance> = {
+  agentKey: string;
+  displayName: string;
+  instances: G[];
+};
+
 export function isUserInputEvent(event: ExecutionEvent) {
   return ["task_created", "task_reused"].includes(event.type || "");
 }
@@ -97,6 +105,29 @@ export function numberAgentInstances<T extends NumberableExecutionGroup>(groups:
     const index = keys.indexOf(identity);
     return { ...group, displayName: `${index + 1}号${group.displayName}` };
   });
+}
+
+/** Six role bots stay independent. Only execution instances of the same role share a parent card. */
+export function groupExecutionInstancesByAgent<G extends NamedExecutionInstance>(groups: G[]): AgentExecutionBundle<G>[] {
+  const bundles = new Map<string, AgentExecutionBundle<G>>();
+  for (const group of groups) {
+    const bundle = bundles.get(group.agentKey) || {
+      agentKey: group.agentKey,
+      displayName: group.displayName.replace(/^\d+号/, ""),
+      instances: [],
+    };
+    bundle.instances.push(group);
+    bundles.set(group.agentKey, bundle);
+  }
+  return [...bundles.values()].map((bundle) => ({
+    ...bundle,
+    instances: bundle.instances.length === 1
+      ? bundle.instances
+      : bundle.instances.map((group, index) => ({
+        ...group,
+        displayName: `${index + 1}号${bundle.displayName}`,
+      })),
+  }));
 }
 
 /** Match by invocation ID; old logs fall back to FIFO within the same task, run and tool. */
