@@ -23,6 +23,8 @@ export const eventLabels: Record<string, string> = {
   delivery_received: "提交了阶段结果",
   approval_required: "等待确认",
   control_applied: "任务控制已更新",
+  dispatch_correction: "派发未生效，已要求项目经理重新派发",
+  dispatch_fallback: "按项目经理的说明兜底派发",
 };
 
 export const statusLabels: Record<string, string> = {

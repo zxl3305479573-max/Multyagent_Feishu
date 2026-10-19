@@ -1076,3 +1076,68 @@ test("手动重试：失败的任务交回项目经理重新决策并重新结�
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+function guardHarness(respond) {
+  const runs = [];
+  const events = [];
+  const client = { im: { message: { create: async () => ({ code: 0 }) } } };
+  const orch = createOrchestrator({
+    runAgent: async (agent, prompt) => {
+      runs.push({ key: agent.key, prompt });
+      return respond(agent.key, runs.filter((run) => run.key === agent.key).length, prompt);
+    },
+    onEvent: async (event) => events.push(event),
+    log: { info() {}, warn() {}, error() {} },
+  });
+  for (const key of ["project_manager", "frontend_developer", "tester", "auditor"]) orch.registerRole({ key, displayName: key, appId: "x" }, client);
+  return { orch, runs, events };
+}
+const desktopContext = { chatId: "desktop-local", channel: "desktop", requireHumanApproval: false };
+
+test("派发守卫：项目经理只在文字里说已派发时，先纠正一次，纠正后按 assignments 真正派发", async () => {
+  const { orch, runs, events } = guardHarness((key, _count, prompt) => key !== "project_manager"
+    ? { text: "ok", delivery: { agentKey: key, summary: `${key} 完成`, artifactPaths: [], final: true } }
+    : /最终汇总/.test(prompt)
+      ? { text: "ok", delivery: { agentKey: key, summary: "全部完成", artifactPaths: [], final: true } }
+      : { text: "ok", delivery: { agentKey: key, summary: "重新派发", assignments: [{ agentKey: "frontend_developer", task: "实现登录页" }], artifactPaths: [] } });
+  await orch.onTaskCompleted("project_manager", "T-verbal", { delivery: { agentKey: "project_manager", summary: "已派发给前端开发实现登录页", artifactPaths: [] }, context: desktopContext });
+  await orch.whenIdle();
+  assert.deepEqual(runs.map((run) => run.key), ["project_manager", "frontend_developer", "project_manager"]);
+  assert.match(runs[0].prompt, /【派发纠正】/);
+  assert.match(runs[0].prompt, /frontend_developer/);
+  assert.ok(events.some((event) => event.type === "dispatch_correction" && event.reason === "verbal_claim"));
+});
+
+test("派发守卫：纠正后仍只在文字里派发时，按点名的角色兜底派发", async () => {
+  const { orch, runs, events } = guardHarness((key, _count, prompt) => key !== "project_manager"
+    ? { text: "ok", delivery: { agentKey: key, summary: `${key} 完成`, artifactPaths: [], final: true } }
+    : /最终汇总/.test(prompt)
+      ? { text: "ok", delivery: { agentKey: key, summary: "全部完成", artifactPaths: [], final: true } }
+      : { text: "ok", delivery: { agentKey: key, summary: "已交给测试验证登录流程", artifactPaths: [] } });
+  await orch.onTaskCompleted("project_manager", "T-fallback", { delivery: { agentKey: "project_manager", summary: "已交给测试验证", artifactPaths: [] }, context: desktopContext });
+  await orch.whenIdle();
+  assert.deepEqual(runs.map((run) => run.key), ["project_manager", "tester", "project_manager"]);
+  const fallback = events.find((event) => event.type === "dispatch_fallback");
+  assert.deepEqual(fallback?.targets, ["tester"]);
+  assert.match(runs[1].prompt, /验证登录流程/);
+});
+
+test("派发守卫：兜底也推断不出派发对象时把任务判为失败，等待人工重试", async () => {
+  const { orch, runs, events } = guardHarness(() => ({ text: "ok", delivery: { agentKey: "project_manager", summary: "已安排相关同事跟进", artifactPaths: [] } }));
+  await orch.onTaskCompleted("project_manager", "T-unresolved", { delivery: { agentKey: "project_manager", summary: "已安排相关同事跟进", artifactPaths: [] }, context: desktopContext });
+  await orch.whenIdle();
+  assert.deepEqual(runs.map((run) => run.key), ["project_manager"]);
+  assert.ok(events.some((event) => event.type === "task_failed" && event.task_id === "T-unresolved" && /无法确定派发对象/.test(event.error)));
+});
+
+test("派发守卫：飞书需人工确认的上下文里，兜底派发直接执行，不登记无法点击的待确认", async () => {
+  const { orch, runs } = guardHarness((key, _count, prompt) => key !== "project_manager"
+    ? { text: "ok", delivery: { agentKey: key, summary: `${key} 完成`, artifactPaths: [], final: true } }
+    : /最终汇总/.test(prompt)
+      ? { text: "ok", delivery: { agentKey: key, summary: "全部完成", artifactPaths: [], final: true } }
+      : { text: "ok", delivery: { agentKey: key, summary: "已交给测试验证", artifactPaths: [] } });
+  await orch.onTaskCompleted("project_manager", "T-feishu-fallback", { delivery: { agentKey: "project_manager", summary: "已交给测试验证", artifactPaths: [] }, context: { chatId: "feishu-chat", requireHumanApproval: true } });
+  await orch.whenIdle();
+  assert.deepEqual(runs.map((run) => run.key), ["project_manager", "tester", "project_manager"]);
+  assert.equal(await orch.resolveLatest("feishu-chat", "approve"), null, "不应留下待确认项");
+});

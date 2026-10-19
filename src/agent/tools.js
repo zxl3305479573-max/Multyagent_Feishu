@@ -69,6 +69,7 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         }
         plan = checked.plan;
       }
+      const rawAssignments = params.assignments || (plan?.stages?.[0]?.assignments || []);
       const delivery = {
         summary: sanitizeAgentReply(params.summary),
         artifactPaths: params.artifactPaths || [],
@@ -78,7 +79,8 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
         assumptions: params.assumptions || [],
         risks: params.risks || [],
         choices: params.choices || [],
-        assignments: normalizeAssignments(params.assignments || (plan?.stages?.[0]?.assignments || []), { selfAgentKey: agentKey, allowDispatch: agentKey === "project_manager" }),
+        assignments: normalizeAssignments(rawAssignments, { selfAgentKey: agentKey, allowDispatch: agentKey === "project_manager" }),
+        droppedAssignments: agentKey === "project_manager" ? droppedAssignments(rawAssignments, { selfAgentKey: agentKey }) : [],
         plan,
         diagram: params.diagram || null,
         final: params.final === true,
@@ -95,6 +97,27 @@ export function createDeliverTool({ getArtifactsDir, getProjectName, agentKey, a
       };
     },
   });
+}
+
+// 被 normalizeAssignments 过滤掉的派发项及原因；编排层据此识别“给了派发却全部无效”的情况。
+export function droppedAssignments(value, { selfAgentKey = null, maxAssignments = 3 } = {}) {
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set(agentsConfig.agents.map((agent) => agent.key));
+  const seen = new Set();
+  const dropped = [];
+  let kept = 0;
+  for (const item of value) {
+    const agentKey = item && typeof item.agentKey === "string" ? item.agentKey : "";
+    let reason = "";
+    if (!allowed.has(agentKey)) reason = "未知角色";
+    else if (agentKey === selfAgentKey) reason = "不能派给自己";
+    else if (typeof item.task !== "string" || !item.task.trim()) reason = "缺少 task";
+    else if (seen.has(agentKey)) reason = "重复派发";
+    else if (kept >= maxAssignments) reason = `超过单次 ${maxAssignments} 个上限`;
+    if (reason) dropped.push({ agentKey: agentKey || "?", reason });
+    else { seen.add(agentKey); kept += 1; }
+  }
+  return dropped;
 }
 
 export function normalizeAssignments(value, { selfAgentKey = null, maxAssignments = 3, allowDispatch = true } = {}) {

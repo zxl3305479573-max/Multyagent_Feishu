@@ -9,6 +9,7 @@ import { readyPlanAssignments } from "./plan-scheduler.js";
 import { createPendingStores } from "./orchestrator/pending-store.js";
 import { sequenceArchitectFirst, withAssignments, withoutAssignments } from "./orchestrator/assignments.js";
 import { isTerminalNext, matchRoutes, MAX_DISPATCH_ROUNDS, routesConfig } from "./orchestrator/routes.js";
+import { detectVerbalDispatch, dispatchCorrectionNote, inferDispatchTargets } from "./orchestrator/guards.js";
 
 export { matchRoutes };
 
@@ -40,6 +41,8 @@ export function createOrchestrator({
   const failureRecoveries = new Map();
   const maxFailureRecoveries = Number(process.env.PI_MAX_FAILURE_RECOVERIES) || 2;
   const pendingSettlements = new Map();
+  // 派发守卫已纠正过的根任务：每个根任务只纠正一次，避免纠正本身陷入循环。
+  const corrections = new Map();
 
   async function emitStageSettlement(event) {
     const rootTaskId = rootOf(event.task_id);
@@ -341,6 +344,43 @@ export function createOrchestrator({
     return true;
   }
 
+  // 派发守卫（借鉴 team-leader-guard）：项目经理“嘴上派发”时先纠正一次；
+  // 仍未给出有效 assignments 时按文字推断兜底派发，推断不出则判失败等人工重试。
+  // 返回 { handled: true } 表示本次交付已由守卫接管；返回 { delivery, context } 表示改写后继续正常流程。
+  async function applyCollaborationGuards({ agentKey, taskId, parentTaskId, rootTaskId, delivery, resultText, context }) {
+    if (agentKey === "project_manager") {
+      const dispatchKey = `${rootTaskId}#dispatch`;
+      if (delivery.assignments?.length) { corrections.delete(dispatchKey); return {}; }
+      const detection = detectVerbalDispatch({ delivery, resultText });
+      if (!detection) return {};
+      const available = [...roles.keys()];
+      if (!corrections.has(dispatchKey)) {
+        corrections.set(dispatchKey, 1);
+        if (!(await withinRoundBudget(taskId))) return { handled: true };
+        await onEvent({ type: "dispatch_correction", agent: agentKey, task_id: taskId, parent_task_id: parentTaskId || null, project_name: context.projectName || null, chat_id: context.chatId || null, reason: detection.reason, detail: detection.detail.slice(0, 300) });
+        await dispatchTo("project_manager", taskId, {
+          context: { ...withoutAssignments(context), pmCoordination: true, planCompleted: false, approvalBypass: false, correctionNote: dispatchCorrectionNote(detection, available) },
+          parentDelivery: delivery,
+          fromAgent: "dispatch_guard",
+        });
+        return { handled: true };
+      }
+      corrections.delete(dispatchKey);
+      const text = [delivery.summary, delivery.next, resultText].filter(Boolean).join("\n");
+      const targets = inferDispatchTargets(text, available);
+      if (!targets.length) {
+        await onEvent({ type: "task_failed", task_id: rootTaskId, agent: agentKey, project_name: context.projectName || null, error: "项目经理声称已派发但未提交有效 assignments，自动纠正后仍无法确定派发对象，请重试或补充说明" });
+        return { handled: true };
+      }
+      const task = String(delivery.next || delivery.summary || "").trim().slice(0, 1000);
+      const assignments = targets.map((target) => ({ agentKey: target, task, reason: "派发守卫兜底：项目经理未提交有效 assignments" }));
+      await onEvent({ type: "dispatch_fallback", agent: agentKey, task_id: taskId, parent_task_id: parentTaskId || null, project_name: context.projectName || null, chat_id: context.chatId || null, targets, reason: detection.reason });
+      // 飞书卡片在守卫改写前已按原交付发出（没有确认按钮），兜底派发若再登记待确认就无人能点，故直接执行。
+      return { delivery: { ...delivery, assignments }, context: { ...withAssignments(context, assignments), approvalBypass: true } };
+    }
+    return {};
+  }
+
   async function processTaskCompleted(agentKey, taskId, payload = {}) {
     const { context, parentTaskId, approvalRequired, resultText } = payload;
     let { delivery } = payload;
@@ -397,6 +437,13 @@ export function createOrchestrator({
       await onEvent({ type: "task_hold", task_id: taskId, reason: "paused" });
       log.info(JSON.stringify({ type: "hold", task_id: taskId, reason: "paused" }));
       return;
+    }
+    const guarded = await applyCollaborationGuards({ agentKey, taskId, parentTaskId, rootTaskId, delivery, resultText, context: dispatchContext });
+    if (guarded.handled) return;
+    if (guarded.delivery) {
+      delivery = guarded.delivery;
+      dispatchContext = guarded.context;
+      settleEmptyAssignments = false;
     }
     if (delivery.final && !(agentKey !== "project_manager" && planHasRemaining(rootTaskId))) {
       // 只有项目经理的 final 才代表整条任务链结束。其他角色声明 final 只说明
@@ -521,6 +568,7 @@ export function createOrchestrator({
       refs ? `上游产物：\n${refs}` : "",
       priorDeliveries ? `前序机器人交付记录：\n${priorDeliveries}` : "",
       targetKey === "project_manager" ? pmInstruction : "",
+      context.correctionNote || "",
       context.selection ? `用户选择：${context.selection}` : "",
       "",
       upstreamDir && upstreamDir !== artifactsDir ? `上游产物目录：${upstreamDir}` : "",
@@ -626,6 +674,7 @@ export function createOrchestrator({
     const attempt = (task.attempt || 0) + 1;
     failureRecoveries.delete(rootTaskId);
     rootRounds.delete(rootTaskId);
+    for (const key of [...corrections.keys()]) if (rootOf(key.split("#")[0]) === rootTaskId) corrections.delete(key);
     planRuns.delete(rootTaskId);
     pmConsolidations.delete(rootTaskId);
     for (const key of [...dispatchGroups.keys()]) if (rootOf(key.split("->")[0]) === rootTaskId) dispatchGroups.delete(key);

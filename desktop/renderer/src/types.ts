@@ -38,6 +38,8 @@ export type EventRecord = {
   risks?: string[];
   agents?: string[];
   assignments?: Array<{ agentKey?: string; task?: string; reason?: string }>;
+  targets?: string[];
+  detail?: string;
 };
 export type Agent = { key: string; displayName?: string; enabled?: boolean };
 export type DesktopMessage = {

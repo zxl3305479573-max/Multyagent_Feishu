@@ -26,6 +26,7 @@ function ExecutionEvent({ event, agents, onOpenFile }: { event: EventRecord; age
       {event.error && <p className="event-error">{event.error}</p>}
       {typeof event.artifact_count === "number" && event.artifact_count > 0 && <p className="event-artifacts">交付了 {event.artifact_count} 个文件</p>}
       {event.type === "delivery_received" && collectArtifacts(event).length ? <Artifacts event={event} onOpenFile={onOpenFile} /> : null}
+      {event.targets?.length ? <div className="message-tags">{event.targets.map((target) => <span key={target}>派给 {agents.find((agent) => agent.key === target)?.displayName || target}</span>)}</div> : null}
     </div>
   </article>;
 }
