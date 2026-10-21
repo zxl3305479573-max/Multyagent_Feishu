@@ -23,14 +23,18 @@ import { createGitHubClient } from "./tickets/github.js";
 import { createTicketService } from "./tickets/service.js";
 import { getCapabilityRegistry } from "./capabilities/index.js";
 import { applyRuntimeConfig, runtimeConfigPayload } from "./model-config.js";
-import { getRuntimeModelRuntime } from "./pi-agent.js";
+import { completeText, getRuntimeModelRuntime } from "./pi-agent.js";
 import { createShutdown } from "./shutdown.js";
-import { roleConfig } from "./role-config.cjs";
+import { customRolesDir, roleConfig } from "./role-config.cjs";
+import customRoles from "./custom-roles.cjs";
+import { createCustomAgentService } from "./agent-designer.js";
 import { feishuEnabled } from "./feishu-mode.cjs";
 import { rotateEventLog } from "./event-log.js";
 import { activeLock, describeLock, globalLockFile, releaseLock as releaseGatewayLock, writeLock } from "./gateway-lock.cjs";
 
-// 角色定义来自 config/roles/*.json；配置有误时在这里直接报错退出。
+// 角色定义来自 config/roles/*.json 与数据目录下的自建角色；内置配置有误时在这里直接报错退出。
+// 固定自建角色目录的绝对路径，RPC 子进程等从其他工作目录启动时也读同一处。
+process.env.PI_CUSTOM_ROLES_DIR = customRolesDir();
 const config = { agents: roleConfig().agents };
 const runAgent = createRunAgent();
 const allowedChatId = process.env.FEISHU_ALLOWED_CHAT_ID || "";
@@ -324,7 +328,7 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
     eventsFile: eventsFile,
     taskStore,
     orchestrator,
-    agents: config.agents.map(({ key, displayName, enabled }) => ({ key, displayName, enabled })),
+    agents: config.agents.map(({ key, displayName, enabled, custom }) => ({ key, displayName, enabled, ...(custom ? { custom: true } : {}) })),
     recordEvent: publishRecordEvent,
     submitTask,
     createProject,
@@ -334,6 +338,12 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
     restoreHistory,
     tickets: ticketService,
     capabilities: getCapabilityRegistry(),
+    customAgents: createCustomAgentService({
+      store: customRoles.createCustomRoleStore(),
+      loadedRoles: roleConfig().roles.filter((role) => role.custom),
+      builtInRoles: roleConfig().roles.filter((role) => !role.custom),
+      generate: completeText,
+    }),
     runtimeConfig: {
       get: async ({ provider } = {}) => runtimeConfigPayload(await getRuntimeModelRuntime(), { provider }),
       set: async (input) => applyRuntimeConfig(await getRuntimeModelRuntime(), input),

@@ -10,10 +10,14 @@ async function scopedSource(tickets, { sourceId, projectName }) {
   return source;
 }
 
-export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, recordEvent, agents, submitTask, createProject, listProjects, exportProject, cleanupHistory, restoreHistory, tickets = null, capabilities = null, runtimeConfig = null, host, port } = {}) {
+export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, recordEvent, agents, submitTask, createProject, listProjects, exportProject, cleanupHistory, restoreHistory, tickets = null, capabilities = null, customAgents = null, runtimeConfig = null, host, port } = {}) {
   const requireCapabilities = () => {
     if (!capabilities) throw new Error("能力管理不可用");
     return capabilities;
+  };
+  const requireCustomAgents = () => {
+    if (!customAgents) throw new Error("自定义 Agent 功能不可用");
+    return customAgents;
   };
   const requireTickets = () => {
     if (!tickets) throw new Error("工单功能不可用（需要启用项目经理）");
@@ -118,9 +122,31 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
       await recordEvent?.({ type: "capability_updated", kind, name: updated.name, local: local === true, roles: updated.roles, enabled: updated.enabled, channel: "desktop" });
       return { capability: updated };
     },
+    async capabilities_base_assign({ agentKey, tool, enabled } = {}) {
+      const updated = await requireCapabilities().assignBase({ agentKey, tool, enabled: enabled === true });
+      await recordEvent?.({ type: "capability_base_updated", agent: updated.agentKey, capability: updated.name, enabled: updated.enabled, channel: "desktop" });
+      return { capability: updated };
+    },
     async capabilities_remove({ kind, name } = {}) {
       const result = await requireCapabilities().remove({ kind, name });
       await recordEvent?.({ type: "capability_removed", kind, name, channel: "desktop" });
+      return result;
+    },
+    // 自定义 Agent：保存后需重启服务才会加载（角色配置在启动时校验）。
+    async custom_agents_list() {
+      return requireCustomAgents().list();
+    },
+    async custom_agents_design(input = {}) {
+      return requireCustomAgents().design({ requirement: input.requirement, triggers: input.triggers, displayName: input.displayName, current: input.current || null, originalKey: input.originalKey || "" });
+    },
+    async custom_agents_save({ role, originalKey = "" } = {}) {
+      const result = await requireCustomAgents().save({ role, originalKey });
+      await recordEvent?.({ type: "custom_agent_saved", agent: result.role.key, renamed_from: originalKey && originalKey !== result.role.key ? originalKey : null, channel: "desktop" });
+      return result;
+    },
+    async custom_agents_remove({ key } = {}) {
+      const result = await requireCustomAgents().remove({ key });
+      await recordEvent?.({ type: "custom_agent_removed", agent: key, channel: "desktop" });
       return result;
     },
     async tickets_sources({ projectName } = {}) {

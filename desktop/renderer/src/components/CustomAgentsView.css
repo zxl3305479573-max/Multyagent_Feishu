@@ -1,0 +1,16 @@
+/* 自定义 Agent 页：在机器人能力页样式基础上补充编辑器布局（只使用全局颜色变量）。 */
+.custom-agent-editor select { min-height: var(--control-height); padding: 0 9px; border: var(--control-border); border-radius: var(--control-radius); background: var(--surface-raised); color: var(--ink); font: inherit; font-size: 13px; }
+.capability-form > .custom-agent-wide, .capability-form > .custom-agent-section { grid-column: 1 / -1; }
+.custom-agent-section { margin: 6px 0 0; padding-top: 10px; border-top: 1px solid var(--line); color: var(--ink); font-size: 14px; }
+.custom-agent-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.custom-agent-tools label { gap: 6px; }
+.custom-agent-tools label span { color: var(--muted); font-size: 12px; }
+.custom-agent-tools code, .custom-agent-key { padding: 1px 6px; border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 12px; font-weight: 400; }
+.custom-agent-triggers { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.custom-agent-status-active { background: var(--accent-soft); color: var(--accent); }
+.custom-agent-status-pending { color: var(--ink); }
+.custom-agent-status-invalid { color: var(--red); }
+.custom-agent-restart { margin: 0; }
+@media (max-width: 720px) {
+  .capability-form > .custom-agent-wide, .capability-form > .custom-agent-section { grid-column: 1; }
+}

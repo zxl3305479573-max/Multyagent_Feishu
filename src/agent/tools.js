@@ -34,9 +34,11 @@ export function buildTaskPlanRoleLimits(projectName, registry = getCapabilityReg
     .filter((agent) => agent.enabled !== false)
     .map((agent) => {
       const limits = planPolicies[agent.key] || {};
-      const pluginTools = registry?.forRole?.(agent.key)?.tools || [];
+      const capabilities = registry?.forRole?.(agent.key) || {};
+      const pluginTools = capabilities.tools || [];
+      const baseTools = capabilities.baseTools || limits.tools || [];
       return [agent.key, {
-        tools: [...new Set([...(limits.tools || []), ...pluginTools])],
+        tools: [...new Set([...baseTools, ...pluginTools])],
         readPaths: projectPaths(limits.writePaths, projectName),
         writePaths: projectPaths(limits.writePaths, projectName),
         networkAccess: limits.networkAccess === true,

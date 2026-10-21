@@ -75,6 +75,21 @@
     "workflow": {
       "type": "string"
     },
+    "triggers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "触发条件：项目经理据此判断何时派发该角色（自建角色使用）"
+    },
+    "custom": {
+      "type": "boolean",
+      "description": "是否为用户在桌面端自建的角色"
+    },
+    "requirement": {
+      "type": "string",
+      "description": "自建角色的原始需求描述"
+    },
     "tools": {
       "type": "array",
       "minItems": 1,

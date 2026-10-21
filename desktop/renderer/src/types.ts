@@ -67,7 +67,7 @@ export type EventRecord = {
   targets?: string[];
   detail?: string;
 };
-export type Agent = { key: string; displayName?: string; enabled?: boolean };
+export type Agent = { key: string; displayName?: string; enabled?: boolean; custom?: boolean };
 export type DesktopMessage = {
   type: string;
   command?: string;
@@ -86,7 +86,7 @@ export type DesktopSocket = {
   subscribe: (listener: (message: DesktopMessage) => void) => () => void;
   close: () => void;
 };
-export type WorkspaceView = "conversation" | "project" | "settings" | "tickets" | "capabilities";
+export type WorkspaceView = "conversation" | "project" | "settings" | "tickets" | "capabilities" | "custom_agents";
 export type TicketSource = {
   id: string;
   repo: string;

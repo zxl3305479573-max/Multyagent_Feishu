@@ -12,6 +12,8 @@ const { activeLock, describeLock, globalLockFile } = require("../../src/gateway-
 const root = join(__dirname, "..", "..");
 const e2eMode = process.env.PI_DESKTOP_E2E === "1";
 if (e2eMode && process.env.PI_DESKTOP_E2E_USER_DATA) app.setPath("userData", process.env.PI_DESKTOP_E2E_USER_DATA);
+// 自建角色放在数据目录；必须在首次 roleConfig() 之前设定，网关子进程继承同一路径。
+process.env.PI_CUSTOM_ROLES_DIR = join(app.getPath("userData"), "runtime", "custom-roles");
 let win = null; let tray = null; let quitting = false; let gateway = null; let credentials = null; let settings = null; let gatewayStopping = false;
 const hasSingleInstanceLock = e2eMode || app.requestSingleInstanceLock();
 // 运行设置页展示的全部环境配置（分组、类型、默认值、是否密钥）。
@@ -165,7 +167,7 @@ function systemEnvSnapshot() {
 
 async function settingsSnapshot(paths) {
   const [values, secrets] = await Promise.all([settings.read(), credentials.status()]);
-  const managed = { ...managedDefaultsFor(paths), PI_DESKTOP_TOKEN_FILE: paths.tokenFile, PI_DESKTOP_CONTROL: "true" };
+  const managed = { ...managedDefaultsFor(paths), PI_DESKTOP_TOKEN_FILE: paths.tokenFile, PI_DESKTOP_CONTROL: "true", PI_CUSTOM_ROLES_DIR: process.env.PI_CUSTOM_ROLES_DIR };
   return describeSettings({ catalog: envCatalog, values, managed, systemEnv: systemEnvSnapshot(), secrets });
 }
 

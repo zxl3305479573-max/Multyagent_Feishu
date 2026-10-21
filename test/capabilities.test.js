@@ -15,9 +15,9 @@ const ROLES = ["project_manager", "architect", "frontend_developer", "backend_de
 
 const NO_LOCAL = async () => ({ skills: [], plugins: [] });
 
-async function workspace(discoverLocal = NO_LOCAL) {
+async function workspace(discoverLocal = NO_LOCAL, baseTools = {}) {
   const dir = await mkdtemp(join(tmpdir(), "capabilities-"));
-  const registry = createCapabilityRegistry({ root: join(dir, "capabilities"), stateFile: join(dir, "runtime", "capabilities.json"), roleKeys: ROLES, discoverLocal, log: { warn() {} } });
+  const registry = createCapabilityRegistry({ root: join(dir, "capabilities"), stateFile: join(dir, "runtime", "capabilities.json"), roleKeys: ROLES, baseTools, discoverLocal, log: { warn() {} } });
   return { dir, registry, cleanup: () => rm(dir, { recursive: true, force: true }) };
 }
 
@@ -55,6 +55,31 @@ test("GitHub specs are parsed strictly so they cannot escape the repo or inject 
   assert.throws(() => parseGitHubSpec("acme/tools@-main"), /非法路径/);
   assert.throws(() => parseGitHubSpec("acme"), /owner\/repo/);
   assert.throws(() => parseGitHubSpec("acme/tools; rm -rf /"), /owner\/repo/);
+});
+
+test("base tools are listed by default and can be disabled per role without being deleted", async () => {
+  const baseTools = {
+    frontend_developer: ["read", "grep", "write", "bash", "deliver_artifact"],
+    tester: ["read", "bash", "get_task_status"],
+  };
+  const { dir, registry, cleanup } = await workspace(NO_LOCAL, baseTools);
+  try {
+    const listed = await registry.list();
+    const frontend = listed.base.find((item) => item.agentKey === "frontend_developer");
+    assert.deepEqual(frontend.capabilities.map((item) => [item.name, item.enabled]), [
+      ["read", true], ["grep", true], ["write", true], ["bash", true], ["deliver_artifact", true],
+    ]);
+    const before = registry.getVersion();
+    await registry.assignBase({ agentKey: "frontend_developer", tool: "write", enabled: false });
+    assert.ok(registry.getVersion() > before);
+    assert.deepEqual(registry.forRole("frontend_developer").baseTools, ["read", "grep", "bash", "deliver_artifact"]);
+    assert.equal((await registry.list()).base.find((item) => item.agentKey === "frontend_developer").capabilities.find((item) => item.name === "write").enabled, false);
+    const state = JSON.parse(await readFile(join(dir, "runtime", "capabilities.json"), "utf8"));
+    assert.deepEqual(state.base.frontend_developer.disabled, ["write"]);
+    await registry.assignBase({ agentKey: "frontend_developer", tool: "write", enabled: true });
+    assert.ok(registry.forRole("frontend_developer").baseTools.includes("write"));
+    await assert.rejects(registry.assignBase({ agentKey: "frontend_developer", tool: "create_project", enabled: true }), /没有该基础能力/);
+  } finally { await cleanup(); }
 });
 
 test("a local skill folder is validated, copied into the library and assigned to roles", async () => {
@@ -192,6 +217,21 @@ test("the RPC runtime receives the role's skills, plugin extensions and plugin t
   assert.equal(args[args.indexOf("--skill") + 1], "/caps/skills/api-review");
   const status = rpcArgsFor({ agent: { key: "backend_developer" }, context: { statusQuery: true }, extensionPath: "/ext.mjs", capabilities });
   assert.doesNotMatch(status[status.indexOf("--tools") + 1], /count_words/, "status queries do not get plugin tools");
+});
+
+test("the RPC runtime uses the selected base tools and removes execution tools from status queries", () => {
+  const capabilities = {
+    baseTools: ["read", "get_task_status", "deliver_artifact", "agent_cli"],
+    skillPaths: [],
+    extensionPaths: [],
+    tools: [],
+  };
+  const normal = rpcArgsFor({ agent: { key: "backend_developer" }, context: {}, extensionPath: "/ext.mjs", capabilities });
+  const normalTools = normal[normal.indexOf("--tools") + 1].split(",");
+  assert.deepEqual(normalTools, ["read", "get_task_status", "deliver_artifact", "agent_cli"]);
+  const status = rpcArgsFor({ agent: { key: "backend_developer" }, context: { statusQuery: true }, extensionPath: "/ext.mjs", capabilities });
+  const statusTools = status[status.indexOf("--tools") + 1].split(",");
+  assert.deepEqual(statusTools, ["read", "get_task_status"]);
 });
 
 test("assigned plugin tools are included in the project manager's plan limits", async () => {

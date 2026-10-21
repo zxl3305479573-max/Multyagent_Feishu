@@ -9,9 +9,14 @@
 //
 // 同步读取（CommonJS），ESM 模块、RPC 扩展与脚本都可以直接使用。
 const { readdirSync, readFileSync } = require("node:fs");
-const { join } = require("node:path");
+const { join, resolve } = require("node:path");
 
 const DEFAULT_DIR = join(__dirname, "..", "config", "roles");
+// 用户在桌面端自建的角色放在数据目录下（与内置角色分开，升级应用不会覆盖）。
+// 网关以数据目录为工作目录；Electron 主进程与 RPC 子进程通过 PI_CUSTOM_ROLES_DIR 指向同一处。
+function customRolesDir(env = process.env, cwd = process.cwd()) {
+  return resolve(String(env.PI_CUSTOM_ROLES_DIR || "").trim() || join(cwd, "runtime", "custom-roles"));
+}
 const KEY = /^[a-z][a-z0-9_]{1,40}$/;
 const ENV_NAME = /^[A-Z][A-Z0-9_]+$/;
 const KNOWN_TOOLS = new Set(["read", "grep", "find", "ls", "write", "edit", "bash", "powershell", "ask_user", "todo", "subagent", "create_goal", "get_goal", "update_goal", "get_task_status"]);
@@ -34,6 +39,9 @@ function validateRole(role, file) {
   for (const field of ["duty", "goal"]) if (typeof role[field] !== "string" || !role[field].trim()) at(field, "不能为空");
   if (role.workflow !== undefined && typeof role.workflow !== "string") at("workflow", "必须是字符串");
   if (!isStringList(role.rules || [])) at("rules", "必须是字符串数组");
+  if (!isStringList(role.triggers || [])) at("triggers", "必须是字符串数组");
+  if (role.custom !== undefined && typeof role.custom !== "boolean") at("custom", "必须是布尔值");
+  if (role.requirement !== undefined && typeof role.requirement !== "string") at("requirement", "必须是字符串");
   if (!isStringList(role.tools) || !role.tools.length) at("tools", "必须是非空字符串数组");
   else for (const tool of role.tools) if (!KNOWN_TOOLS.has(tool)) at("tools", `包含未知工具 ${tool}`);
   if (!THINKING.has(role.thinking)) at("thinking", `必须是 ${[...THINKING].join("/")}`);
@@ -70,19 +78,32 @@ function permissionConstraints(role) {
   return lines;
 }
 
-function loadRoles({ dir = DEFAULT_DIR } = {}) {
+function readRoleDir(dir, { optional = false } = {}) {
   let files;
   try { files = readdirSync(dir).filter((name) => name.endsWith(".json") && !name.endsWith(".schema.json")); }
-  catch (error) { throw new Error(`无法读取角色配置目录 ${dir}：${error.message}`); }
+  catch (error) {
+    if (optional && error.code === "ENOENT") return [];
+    throw new Error(`无法读取角色配置目录 ${dir}：${error.message}`);
+  }
+  return files.map((name) => {
+    try {
+      const role = JSON.parse(readFileSync(join(dir, name), "utf8"));
+      const errors = validateRole(role, name);
+      if (role?.key && `${role.key}.json` !== name) errors.push(`${name}: 文件名必须与 key 一致（${role.key}.json）`);
+      return { name, role, errors };
+    } catch (error) { return { name, role: null, errors: [`${name}: JSON 解析失败（${error.message}）`] }; }
+  });
+}
+
+// customDir：用户自建角色。与内置角色不同，单个自建角色无效时只跳过并告警，
+// 不能因为桌面端保存的一份配置让整个网关起不来。
+function loadRoles({ dir = DEFAULT_DIR, customDir = null, log = console } = {}) {
+  const entries = readRoleDir(dir);
   const roles = [];
   const errors = [];
-  for (const name of files) {
-    let role;
-    try { role = JSON.parse(readFileSync(join(dir, name), "utf8")); }
-    catch (error) { errors.push(`${name}: JSON 解析失败（${error.message}）`); continue; }
-    errors.push(...validateRole(role, name));
-    if (role?.key && `${role.key}.json` !== name) errors.push(`${name}: 文件名必须与 key 一致（${role.key}.json）`);
-    roles.push(role);
+  for (const entry of entries) {
+    errors.push(...entry.errors);
+    if (entry.role) roles.push(entry.role);
   }
   const keys = new Set();
   for (const role of roles) {
@@ -91,6 +112,14 @@ function loadRoles({ dir = DEFAULT_DIR } = {}) {
   }
   if (!roles.length) errors.push(`${dir} 下没有角色配置`);
   if (errors.length) throw new Error(`角色配置无效：\n  - ${errors.join("\n  - ")}`);
+  if (customDir) {
+    for (const entry of readRoleDir(customDir, { optional: true })) {
+      const problem = entry.errors[0] || (keys.has(entry.role.key) ? `${entry.name}: key ${entry.role.key} 与已有角色重复` : "");
+      if (problem) { log?.warn?.(`[roles] 已跳过自建角色：${problem}`); continue; }
+      keys.add(entry.role.key);
+      roles.push({ ...entry.role, custom: true });
+    }
+  }
   return roles.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
 }
 
@@ -100,6 +129,7 @@ function toAgentDefinitions(roles) {
     key: role.key,
     displayName: role.displayName,
     enabled: role.enabled,
+    ...(role.custom ? { custom: true } : {}),
     appIdEnv: role.feishu.appIdEnv,
     appSecretEnv: role.feishu.appSecretEnv,
     max_concurrent_tasks: role.limits.maxConcurrentTasks,
@@ -115,6 +145,7 @@ function toPolicy(roles) {
     goal: role.goal,
     constraints: [...permissionConstraints(role), ...(role.rules || [])],
     ...(role.workflow ? { workflow: role.workflow } : {}),
+    ...(role.custom ? { custom: true, triggers: role.triggers || [] } : {}),
     tools: role.tools,
     thinking: role.thinking,
     writePaths: role.writePaths || [],
@@ -127,16 +158,15 @@ function toPolicy(roles) {
 }
 
 let cached = null;
+// options.dir 只加载指定目录（测试用）；默认加载内置角色 + 数据目录下的自建角色。
 function roleConfig(options) {
-  if (options?.dir) {
-    const roles = loadRoles(options);
+  const build = (opts) => {
+    const roles = loadRoles(opts);
     return { roles, agents: toAgentDefinitions(roles), policy: { agents: toPolicy(roles) } };
-  }
-  if (!cached) {
-    const roles = loadRoles();
-    cached = { roles, agents: toAgentDefinitions(roles), policy: { agents: toPolicy(roles) } };
-  }
+  };
+  if (options?.dir) return build(options);
+  if (!cached) cached = build({ customDir: customRolesDir() });
   return cached;
 }
 
-module.exports = { loadRoles, validateRole, permissionConstraints, toAgentDefinitions, toPolicy, roleConfig };
+module.exports = { KNOWN_TOOLS, SHELL_MODES, THINKING, loadRoles, validateRole, permissionConstraints, toAgentDefinitions, toPolicy, roleConfig, customRolesDir, DEFAULT_DIR };

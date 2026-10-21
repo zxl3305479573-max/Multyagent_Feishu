@@ -17,6 +17,7 @@ type Props = {
   onOpenSettings: () => void;
   onOpenTickets: () => void;
   onOpenCapabilities: () => void;
+  onOpenCustomAgents: () => void;
   onNewProject: () => void;
   onNewConversation: () => void;
 };
@@ -49,6 +50,7 @@ export function Sidebar(props: Props) {
         {project && <button className="project-context-strip" onClick={props.onOpenProject} aria-label="打开项目上下文" title="项目上下文"><span className="project-context-icon">⌂</span><span className="project-context-details"><span className="project-context-title"><strong>{project}</strong><span>当前项目</span></span><span className="project-context-meta"><span>{projectStats.taskCount} 个任务</span><span>{projectStats.eventCount} 条事件</span></span><span className="project-context-isolated">上下文已隔离 · 管理项目</span></span></button>}
         <button className="settings-nav" onClick={props.onOpenTickets} title="GitHub 工单"><span>☰</span><span className="sidebar-label">工单</span></button>
         <button className="settings-nav" onClick={props.onOpenCapabilities} title="机器人能力"><span>✦</span><span className="sidebar-label">机器人能力</span></button>
+        <button className="settings-nav" onClick={props.onOpenCustomAgents} title="自定义 Agent"><span>⊕</span><span className="sidebar-label">自定义 Agent</span></button>
         <button className="settings-nav" onClick={props.onOpenSettings} title="运行设置"><span>⚙</span><span className="sidebar-label">运行设置</span></button>
       </div>
     </aside>

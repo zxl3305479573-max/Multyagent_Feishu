@@ -83,6 +83,7 @@ test("desktop host exposes capability management and records each change", async
     list: async () => ({ skills: [capability], plugins: [], roles: ["architect"] }),
     install: async (input) => { calls.push(["install", input]); return capability; },
     assign: async (input) => { calls.push(["assign", input]); return { ...capability, ...input }; },
+    assignBase: async (input) => { calls.push(["assignBase", input]); return { agentKey: input.agentKey, name: input.tool, ...input }; },
     remove: async (input) => { calls.push(["remove", input]); return { removed: true }; },
   };
   const host = createDesktopHost({
@@ -98,10 +99,11 @@ test("desktop host exposes capability management and records each change", async
   assert.deepEqual(await handlers.capabilities_list(), { skills: [capability], plugins: [], roles: ["architect"] });
   assert.deepEqual(await handlers.capabilities_install({ kind: "skill", source: { type: "local", path: "C:/skill" }, roles: ["architect"] }), { capability });
   assert.equal((await handlers.capabilities_assign({ kind: "skill", name: "api-review", enabled: false })).capability.enabled, false);
+  assert.equal((await handlers.capabilities_base_assign({ agentKey: "architect", tool: "read", enabled: false })).capability.enabled, false);
   assert.deepEqual(await handlers.capabilities_remove({ kind: "skill", name: "api-review" }), { removed: true });
 
-  assert.deepEqual(calls.map(([action]) => action), ["install", "assign", "remove"]);
-  assert.deepEqual(recorded.map((event) => event.type), ["capability_installed", "capability_updated", "capability_removed"]);
+  assert.deepEqual(calls.map(([action]) => action), ["install", "assign", "assignBase", "remove"]);
+  assert.deepEqual(recorded.map((event) => event.type), ["capability_installed", "capability_updated", "capability_base_updated", "capability_removed"]);
   assert.ok(recorded.every((event) => event.channel === "desktop"));
 });
 

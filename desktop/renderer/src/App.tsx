@@ -9,6 +9,7 @@ import { Composer, ConversationView } from "./components/ConversationView";
 import { NewProjectModal } from "./components/NewProjectModal";
 import { TicketsView } from "./components/TicketsView";
 import { CapabilitiesView } from "./components/CapabilitiesView";
+import { CustomAgentsView } from "./components/CustomAgentsView";
 import type { TaskModes } from "./types";
 
 // 输入框下方模式切换的选择记在本机，下次打开沿用；读写失败（如隐私模式）时用默认值。
@@ -533,11 +534,13 @@ export function App() {
   const headerTitle = workspaceView === "settings" ? "运行设置"
     : workspaceView === "tickets" ? "GitHub 工单"
     : workspaceView === "capabilities" ? "机器人能力"
+    : workspaceView === "custom_agents" ? "自定义 Agent"
     : workspaceView === "project" ? "项目上下文"
       : selectedTask?.title || (selected ? selected : "新建任务");
   const headerSubtitle = workspaceView === "settings" ? "管理全部运行配置"
     : workspaceView === "tickets" ? project || "全部项目"
     : workspaceView === "capabilities" ? "为各个角色添加 Skill 与插件"
+    : workspaceView === "custom_agents" ? "按需求与触发条件设计新的角色"
     : workspaceView === "project" ? project || "全部项目"
       : selectedTask?.project_name || project || "选择项目";
 
@@ -560,6 +563,7 @@ export function App() {
         onOpenSettings={showSettings}
         onOpenTickets={() => setWorkspaceView("tickets")}
         onOpenCapabilities={() => setWorkspaceView("capabilities")}
+        onOpenCustomAgents={() => setWorkspaceView("custom_agents")}
         onNewProject={openNewProject}
         onNewConversation={openNewProjectConversation}
       />
@@ -581,6 +585,7 @@ export function App() {
 
         {workspaceView === "settings" && <SettingsView onSaved={refreshCredentials} onNotice={setNotice} />}
         {workspaceView === "capabilities" && <CapabilitiesView agents={agents} connected={connection === "已连接"} request={request} onNotice={setNotice} />}
+        {workspaceView === "custom_agents" && <CustomAgentsView connected={connection === "已连接"} request={request} onNotice={setNotice} />}
         {workspaceView === "tickets" && <TicketsView project={project} projects={projects} connected={connection === "已连接"} request={request} onNotice={setNotice} onOpenTask={(taskId) => { setSelected(taskId); setWorkspaceView("conversation"); }} />}
         {workspaceView === "project" && <ProjectView
           project={project}

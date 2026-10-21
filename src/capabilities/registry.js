@@ -29,6 +29,27 @@ const MAX_BYTES = 20 * 1024 * 1024;
 const SKIP = new Set([".git", "node_modules", ".DS_Store"]);
 const KINDS = ["skill", "plugin"];
 
+export const BASE_TOOL_CATALOG = Object.freeze({
+  read: { label: "读取文件", description: "查看项目文件内容。" },
+  grep: { label: "搜索内容", description: "在项目中搜索文本或正则。" },
+  find: { label: "查找文件", description: "按名称或模式查找文件。" },
+  ls: { label: "查看目录", description: "列出目录内容。" },
+  write: { label: "创建文件", description: "创建或覆盖允许写入的文件。" },
+  edit: { label: "编辑文件", description: "修改允许写入的现有文件。" },
+  bash: { label: "Shell 命令", description: "在角色权限范围内执行 Shell 命令。" },
+  powershell: { label: "PowerShell", description: "在角色权限范围内执行 PowerShell。" },
+  ask_user: { label: "询问用户", description: "需要补充信息时向用户提问。" },
+  todo: { label: "任务清单", description: "维护执行步骤与待办清单。" },
+  subagent: { label: "子 Agent", description: "启动子 Agent 协助处理复杂任务。" },
+  create_goal: { label: "创建目标", description: "为长任务建立目标记录。" },
+  get_goal: { label: "读取目标", description: "读取已有目标及进度。" },
+  update_goal: { label: "更新目标", description: "更新目标状态与说明。" },
+  get_task_status: { label: "查询任务状态", description: "读取当前任务的持久化状态。" },
+  deliver_artifact: { label: "提交交付", description: "提交结构化结论、产物、验收和下一步。" },
+  agent_cli: { label: "受控命令", description: "执行测试、状态读取、交付校验等受控操作。" },
+  create_project: { label: "创建项目", description: "创建或切换项目工作区。" },
+});
+
 /** GitHub 来源：owner/repo[/子目录][@ref]；拒绝 "."/".." 段和以 - 开头的 ref，避免路径穿越与参数注入。 */
 export function parseGitHubSpec(spec) {
   const match = String(spec || "").trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "").match(GITHUB_SPEC);
@@ -145,6 +166,7 @@ export function createCapabilityRegistry({
   root = resolve(process.cwd(), "capabilities"),
   stateFile = resolve(process.cwd(), "runtime", "capabilities.json"),
   roleKeys = [],
+  baseTools = {},
   git = (args, options) => run("git", args, { timeout: 120_000, windowsHide: true, ...options }),
   now = () => new Date(),
   log = console,
@@ -157,6 +179,8 @@ export function createCapabilityRegistry({
   state.local ||= {};
   state.local.skills ||= {};
   state.local.plugins ||= {};
+  // 基础能力默认全部启用；只持久化被用户取消的工具名。
+  state.base ||= {};
   // 每次变更递增：Agent 加载器按它判断缓存是否过期，改完无需重启网关。
   let version = 0;
   const dirOf = (kind, name) => join(root, kind === "skill" ? "skills" : "plugins", name);
@@ -164,6 +188,19 @@ export function createCapabilityRegistry({
     if (!KINDS.includes(kind)) throw new Error("能力类型只能是 skill 或 plugin");
     return kind === "skill" ? state.skills : state.plugins;
   };
+  const baseToolsFor = (agentKey) => [...new Set(Array.isArray(baseTools[agentKey]) ? baseTools[agentKey] : [])]
+    .filter((tool) => BASE_TOOL_CATALOG[tool]);
+  const disabledBaseTools = (agentKey) => new Set(
+    Array.isArray(state.base[agentKey]?.disabled) ? state.base[agentKey].disabled.map(String) : [],
+  );
+  function baseCapabilities(agentKey) {
+    const disabled = disabledBaseTools(agentKey);
+    return baseToolsFor(agentKey).map((name) => ({
+      name,
+      ...BASE_TOOL_CATALOG[name],
+      enabled: !disabled.has(name),
+    }));
+  }
   async function persist() {
     version += 1;
     await writeFileAtomic(stateFile, `${JSON.stringify(state, null, 2)}\n`);
@@ -301,10 +338,30 @@ export function createCapabilityRegistry({
     return { removed: true };
   }
 
+  async function assignBase({ agentKey, tool, enabled = true } = {}) {
+    const key = String(agentKey || "");
+    const name = String(tool || "");
+    if (!roleKeys.includes(key)) throw new Error("找不到这个机器人角色");
+    if (!baseToolsFor(key).includes(name)) throw new Error("这个角色没有该基础能力");
+    const disabled = disabledBaseTools(key);
+    if (enabled === true) disabled.delete(name);
+    else disabled.add(name);
+    state.base[key] = { disabled: [...disabled].sort() };
+    await persist();
+    return { agentKey: key, name, ...BASE_TOOL_CATALOG[name], enabled: enabled === true };
+  }
+
   async function list() {
     const describe = (kind) => Object.values(bucket(kind)).map((record) => ({ kind, ...record, installed: existsSync(dirOf(kind, record.name)) }));
     const local = await refreshLocal();
-    return { skills: describe("skill"), plugins: describe("plugin"), local, roles: roleKeys, root };
+    return {
+      skills: describe("skill"),
+      plugins: describe("plugin"),
+      local,
+      base: roleKeys.map((agentKey) => ({ agentKey, capabilities: baseCapabilities(agentKey) })),
+      roles: roleKeys,
+      root,
+    };
   }
 
   /** 某个角色当前启用的能力：Skill 目录、插件入口和插件声明的工具名（同步，供 Agent 启动时读取）。 */
@@ -316,13 +373,15 @@ export function createCapabilityRegistry({
     const localActive = (records) => Object.entries(records).filter(([path, record]) => record.enabled && record.roles.includes(agentKey) && existsSync(path));
     const localSkills = localActive(state.local.skills).map(([path]) => path);
     const localPlugins = localActive(state.local.plugins);
+    const enabledBaseTools = baseToolsFor(agentKey).filter((tool) => !disabledBaseTools(agentKey).has(tool));
     return {
       version,
+      ...(baseToolsFor(agentKey).length ? { baseTools: enabledBaseTools } : {}),
       skillPaths: [...skills, ...localSkills],
       extensionPaths: [...plugins.map((record) => resolve(dirOf("plugin", record.name), record.entry)), ...localPlugins.map(([path]) => path)],
       tools: [...new Set([...plugins.flatMap((record) => record.tools), ...localPlugins.flatMap(([, record]) => record.tools || [])])],
     };
   }
 
-  return { install, assign, remove, list, forRole, skillsRoot: () => join(root, "skills"), getVersion: () => version };
+  return { install, assign, assignBase, remove, list, forRole, skillsRoot: () => join(root, "skills"), getVersion: () => version };
 }

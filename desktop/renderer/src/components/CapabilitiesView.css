@@ -41,6 +41,23 @@
 .capability-local-section h3 { margin: 0; font-size: 14px; }
 .capability-badge { padding: 1px 6px; border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 12px; }
 .capability-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
+.base-capability-section { display: grid; gap: 12px; }
+.base-capability-card { display: grid; gap: 10px; padding: 14px; border: var(--control-border); border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-xs); }
+.base-capability-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.base-capability-card > header > div { display: grid; gap: 2px; min-width: 0; }
+.base-capability-card > header strong { color: var(--ink); font-size: 14px; font-weight: 650; }
+.base-capability-card > header small { color: var(--subtle); font-family: var(--mono); font-size: 11px; }
+.base-capability-card > header > span { flex: none; padding: 2px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-size: 11.5px; }
+.base-capability-card > p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.base-capability-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 7px; }
+.base-capability-item { display: flex; gap: 8px; align-items: flex-start; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); cursor: pointer; transition: var(--control-transition); }
+.base-capability-item:hover { border-color: var(--control-hover-border); }
+.base-capability-item.is-enabled { border-color: var(--accent-line); background: #f8faff; }
+.base-capability-item input { width: 15px; height: 15px; flex: none; margin: 2px 0 0; accent-color: var(--accent); }
+.base-capability-item > span { display: grid; gap: 2px; min-width: 0; }
+.base-capability-item strong { color: var(--ink); font-size: 12.5px; font-weight: 600; }
+.base-capability-item code { overflow-wrap: anywhere; color: var(--accent-ink); font-family: var(--mono); font-size: 10.5px; }
+.base-capability-item small { color: var(--muted); font-size: 11.5px; line-height: 1.45; }
 @media (max-width: 720px) {
   .capability-form { grid-template-columns: minmax(0, 1fr); }
   .capability-form > .capability-sources, .capability-form > .capability-local, .capability-form > .capability-roles, .capability-form > .capability-trust, .capability-form > .capability-form-actions { grid-column: 1; }
