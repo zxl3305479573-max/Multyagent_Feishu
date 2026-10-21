@@ -1,0 +1,4 @@
+# 仓库统一使用 LF；二进制资源不做换行转换。
+* text=auto eol=lf
+*.ico binary
+*.png binary

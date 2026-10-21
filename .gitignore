@@ -19,3 +19,5 @@ plain2.txt
 # Atomic-write temp files and backups of corrupt state files.
 .*.tmp
 *.corrupt-*
+# Claude 桌面端的临时产出，不入库。
+/Claude outputs/
