@@ -9,6 +9,20 @@ const { policy, agents: roleAgents } = roleConfig();
 const agentsConfig = { agents: roleAgents };
 
 // 角色相关的系统提示。替换 pi 默认的"编程助手"提示，避免身份被稀释。
+// 用户在桌面端自建的角色：项目经理按触发条件判断是否派发（agentKey 用其 key）。
+export function customRoleCatalog(agents, agentPolicy = policy.agents) {
+  const custom = agents.filter((item) => item.custom && item.enabled !== false);
+  if (!custom.length) return [];
+  const lines = ["", "自定义角色（用户自建；只在满足触发条件时派发，agentKey 使用括号里的标识）："];
+  for (const item of custom) {
+    const cfg = agentPolicy?.[item.key] || {};
+    lines.push(`- ${item.displayName}（${item.key}）：${cfg.duty || ""}`);
+    for (const trigger of cfg.triggers || []) lines.push(`  · 触发条件：${trigger}`);
+  }
+  lines.push("A custom role is not a substitute for the tester's acceptance or the auditor's review; dispatch it in addition to them when its trigger conditions match.");
+  return lines;
+}
+
 export function buildSystemPrompt(agent, projectName) {
   const cfg = policy.agents?.[agent.key] ?? {};
   const duty = cfg.duty || "处理飞书用户发来的任务，给出结果。";
@@ -59,6 +73,7 @@ export function buildSystemPrompt(agent, projectName) {
       "Do not produce architecture diagrams yourself: the `diagram` field belongs to the architect. Summarize and dispatch instead.",
     );
   }
+  if (agent.key === "project_manager") lines.push(...customRoleCatalog(agentsConfig.agents));
   if (agent.key === "architect") {
     lines.push(
       "",

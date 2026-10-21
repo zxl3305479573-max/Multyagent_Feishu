@@ -137,6 +137,7 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
   let activeProject = context.projectName || null;
   const loader = await getLoader(agent, () => activeProject, () => context.taskPermissions);
   const cfg = policy.agents?.[agent.key] ?? {};
+  const capabilities = getCapabilityRegistry().forRole(agent.key);
   const sessionDir = sessionDirFor(agent, context.projectName);
   await mkdir(sessionDir, { recursive: true });
   // session 文件可能因清理/迁移而丢失：存在才复用，否则新建，避免写入时 ENOENT。
@@ -166,26 +167,21 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
     onDeliver: (d) => { delivery = d; },
   });
 
-  const tools = [...(cfg.tools || DEFAULT_TOOLS)];
+  const tools = [...(capabilities.baseTools || cfg.tools || DEFAULT_TOOLS)];
   const customTools = [];
   if (!context.statusQuery) {
     // 插件声明的工具要显式加入可用工具列表，否则即使扩展注册了也不会启用。
-    for (const tool of getCapabilityRegistry().forRole(agent.key).tools) if (!tools.includes(tool)) tools.push(tool);
-    tools.push("deliver_artifact");
-    customTools.push(deliverTool);
-    tools.push("agent_cli");
-    customTools.push(createAgentCliTool({ taskId: context.taskId, getProjectName: () => activeProject, agentKey: agent.key, chatId: context.chatId }));
+    for (const tool of capabilities.tools) if (!tools.includes(tool)) tools.push(tool);
+    if (tools.includes("deliver_artifact")) customTools.push(deliverTool);
+    if (tools.includes("agent_cli")) customTools.push(createAgentCliTool({ taskId: context.taskId, getProjectName: () => activeProject, agentKey: agent.key, chatId: context.chatId }));
   }
-  if (context.statusQuery) {
+  if (context.statusQuery && tools.includes("get_task_status")) {
     customTools.push(createTaskStatusTool({ taskId: context.taskId, chatId: context.chatId }));
-    tools.push("get_task_status");
   }
   if (agent.key === "project_manager") {
-    customTools.push(createProjectTool({ onProject: (name) => { activeProject = name; } }));
-    tools.push("create_project");
-    if (!context.statusQuery) {
+    if (tools.includes("create_project")) customTools.push(createProjectTool({ onProject: (name) => { activeProject = name; } }));
+    if (!context.statusQuery && tools.includes("get_task_status")) {
       customTools.push(createTaskStatusTool({ taskId: context.taskId, chatId: context.chatId }));
-      tools.push("get_task_status");
     }
   }
 
@@ -245,6 +241,44 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
     throw error;
   } finally {
     unregisterSession();
+    session.dispose();
+  }
+}
+
+// 一次性文本生成（不带工具、不落盘会话），用于桌面端“AI 设计自定义 Agent”等辅助功能。
+export async function completeText({ system, prompt }) {
+  const modelRuntime = await getModelRuntime();
+  const selected = selectedModel();
+  const model = modelRuntime.getModel(selected.provider, selected.model);
+  if (!model) throw new Error(`模型不可用: ${selected.provider}/${selected.model}，请先在运行设置中配置模型`);
+  const loader = new DefaultResourceLoader({
+    cwd: process.cwd(),
+    agentDir: getAgentDir(),
+    noSkills: true,
+    noExtensions: true,
+    noContextFiles: true,
+    noPromptTemplates: true,
+    systemPromptOverride: () => system,
+  });
+  await loader.reload();
+  const { session } = await createAgentSession({
+    model,
+    thinkingLevel: "off",
+    modelRuntime,
+    tools: [],
+    customTools: [],
+    sessionManager: SessionManager.inMemory(process.cwd()),
+    resourceLoader: loader,
+  });
+  let reply = "";
+  try {
+    session.subscribe((event) => {
+      if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") reply += event.assistantMessageEvent.delta;
+    });
+    await session.prompt(prompt);
+    if (!reply.trim()) reply = extractText([...session.messages].reverse().find((m) => m.role === "assistant"));
+    return reply;
+  } finally {
     session.dispose();
   }
 }

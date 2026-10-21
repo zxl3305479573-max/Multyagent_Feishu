@@ -13,7 +13,13 @@ import { collectWorktreeChanges, createWorktree } from "./worktree.js";
 export function rpcArgsFor({ agent, context, systemPrompt, extensionPath, capabilities = getCapabilityRegistry().forRole(agent.key) }) {
   const statusQuery = context.statusQuery === true;
   const selected = selectedModel();
-  const tools = rpcToolPlan(agent.key, { statusQuery });
+  const tools = capabilities.baseTools
+    ? [...capabilities.baseTools]
+    : rpcToolPlan(agent.key, { statusQuery });
+  if (statusQuery) {
+    const executionTools = new Set(["deliver_artifact", "agent_cli", "create_project"]);
+    for (let index = tools.length - 1; index >= 0; index -= 1) if (executionTools.has(tools[index])) tools.splice(index, 1);
+  }
   // 用户给该角色添加的插件工具（状态查询不需要执行类工具）。
   if (!statusQuery) for (const tool of capabilities.tools) if (!tools.includes(tool)) tools.push(tool);
   const args = [

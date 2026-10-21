@@ -5,7 +5,21 @@ import { createCapabilityRegistry } from "./registry.js";
 let registry = null;
 
 export function getCapabilityRegistry() {
-  if (!registry) registry = createCapabilityRegistry({ roleKeys: roleConfig().agents.map((agent) => agent.key) });
+  if (!registry) {
+    const config = roleConfig();
+    const roleKeys = config.agents.map((agent) => agent.key);
+    const baseTools = Object.fromEntries(roleKeys.map((key) => {
+      const configured = config.policy.agents?.[key]?.tools || [];
+      return [key, [...new Set([
+        ...configured,
+        "deliver_artifact",
+        "agent_cli",
+        "get_task_status",
+        ...(key === "project_manager" ? ["create_project"] : []),
+      ])]];
+    }));
+    registry = createCapabilityRegistry({ roleKeys, baseTools });
+  }
   return registry;
 }
 

@@ -4,9 +4,9 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import "./CapabilitiesView.css";
 
 type Request = <T = unknown>(command: string, payload?: Record<string, unknown>) => Promise<T>;
-type Kind = "skill" | "plugin";
+type Kind = "base" | "skill" | "plugin";
 type Capability = {
-  kind: Kind;
+  kind: Exclude<Kind, "base">;
   name: string;
   description: string;
   roles: string[];
@@ -18,7 +18,14 @@ type Capability = {
   local?: boolean;
   path?: string;
 };
-type Listing = { skills: Capability[]; plugins: Capability[]; local?: { skills: Capability[]; plugins: Capability[]; error?: string } };
+type BaseCapability = { name: string; label: string; description: string; enabled: boolean };
+type BaseAgent = { agentKey: string; capabilities: BaseCapability[] };
+type Listing = {
+  skills: Capability[];
+  plugins: Capability[];
+  base?: BaseAgent[];
+  local?: { skills: Capability[]; plugins: Capability[]; error?: string };
+};
 type SourceType = "github" | "local" | "inline";
 
 type Props = {
@@ -28,7 +35,7 @@ type Props = {
   onNotice: (text: string) => void;
 };
 
-const KIND_LABEL: Record<Kind, string> = { skill: "Skill", plugin: "插件" };
+const KIND_LABEL: Record<Kind, string> = { base: "基础能力", skill: "Skill", plugin: "插件" };
 const keyOf = (item: Capability) => `${item.kind}:${item.local ? item.path : item.name}`;
 
 // 机器人能力：给各个角色添加 Skill（知识与操作指引）或插件（新工具），按角色启用，改完下一次执行即生效。
@@ -85,6 +92,17 @@ export function CapabilitiesView({ agents, connected, request, onNotice }: Props
     finally { setBusy(""); }
   }
 
+  async function updateBase(agentKey: string, tool: string, enabled: boolean) {
+    if (!connected) { onNotice("本地任务服务未连接，暂时不能修改基础能力"); return; }
+    const key = `base:${agentKey}:${tool}`;
+    setBusy(key);
+    try {
+      await request("capabilities_base_assign", { agentKey, tool, enabled });
+      await load();
+    } catch (error) { onNotice(`更新基础能力失败：${(error as Error).message}`); }
+    finally { setBusy(""); }
+  }
+
   function remove(item: Capability) {
     if (!connected) { onNotice("本地任务服务未连接，暂时不能移除能力"); return; }
     setRemoveTarget(item);
@@ -103,9 +121,11 @@ export function CapabilitiesView({ agents, connected, request, onNotice }: Props
   }
 
   const toggle = (list: string[], key: string) => list.includes(key) ? list.filter((item) => item !== key) : [...list, key];
-  const list = kind === "skill" ? items.skills : items.plugins;
-  const localList = (kind === "skill" ? items.local?.skills : items.local?.plugins) || [];
-  const countOf = (item: Kind) => (item === "skill" ? items.skills.length + (items.local?.skills.length || 0) : items.plugins.length + (items.local?.plugins.length || 0));
+  const list = kind === "skill" ? items.skills : kind === "plugin" ? items.plugins : [];
+  const localList = (kind === "skill" ? items.local?.skills : kind === "plugin" ? items.local?.plugins : []) || [];
+  const countOf = (item: Kind) => item === "base"
+    ? (items.base || []).reduce((sum, role) => sum + role.capabilities.length, 0)
+    : item === "skill" ? items.skills.length + (items.local?.skills.length || 0) : items.plugins.length + (items.local?.plugins.length || 0);
   const canInstall = sourceType === "github" ? Boolean(spec.trim())
     : sourceType === "local" ? Boolean(localPath)
       : Boolean(inline.name && inline.description && inline.body);
@@ -129,19 +149,44 @@ export function CapabilitiesView({ agents, connected, request, onNotice }: Props
     </article>;
   }
 
+  function renderBaseRole(role: BaseAgent) {
+    const agent = roleAgents.find((item) => item.key === role.agentKey);
+    const enabled = role.capabilities.filter((item) => item.enabled).length;
+    return <article className="base-capability-card" key={role.agentKey}>
+      <header><div><strong>{agent?.displayName || role.agentKey}</strong><small>{role.agentKey}</small></div><span>{enabled}/{role.capabilities.length} 项启用</span></header>
+      <p>以下是该机器人默认具备的基础工具，全部默认启用；取消勾选后从下一次执行开始不再提供。</p>
+      <div className="base-capability-grid">
+        {role.capabilities.map((item) => {
+          const key = `base:${role.agentKey}:${item.name}`;
+          return <label key={item.name} className={`base-capability-item ${item.enabled ? "is-enabled" : ""}`}>
+            <input type="checkbox" checked={item.enabled} disabled={busy === key || !connected} onChange={(event) => void updateBase(role.agentKey, item.name, event.target.checked)} />
+            <span><strong>{item.label}</strong><code>{item.name}</code><small>{item.description}</small></span>
+          </label>;
+        })}
+      </div>
+    </article>;
+  }
+
   return (
     <div className="central-view settings-content capabilities-view">
       <div className="capability-tabs" role="tablist">
-        {(["skill", "plugin"] as Kind[]).map((item) => <button key={item} role="tab" aria-selected={kind === item} className={kind === item ? "is-selected" : ""} onClick={() => { setKind(item); resetForm(); if (item === "plugin" && sourceType === "inline") setSourceType("github"); }}>
+        {(["base", "skill", "plugin"] as Kind[]).map((item) => <button key={item} role="tab" aria-selected={kind === item} className={kind === item ? "is-selected" : ""} onClick={() => { setKind(item); resetForm(); if (item === "plugin" && sourceType === "inline") setSourceType("github"); }}>
           {KIND_LABEL[item]}<span>{countOf(item)}</span>
         </button>)}
       </div>
-      <p className="capability-intro">{kind === "skill"
+      <p className="capability-intro">{kind === "base"
+        ? "展示六个机器人当前具备的基础工具。基础能力默认全部启用，也可以取消勾选；变更会在下一次 Agent 执行时生效。"
+        : kind === "skill"
         ? "Skill 是一份操作指引（含 SKILL.md 的文件夹）。分配给角色后，机器人会在需要时自行读取。"
         : "插件为机器人提供新工具（plugin.json + 入口脚本）。插件代码在本机网关中运行，只安装你信任的插件；工具调用仍受策略闸门约束。"}</p>
 
-      {!adding && <button className="capability-add" disabled={!connected} onClick={() => setAdding(true)}>＋ 添加{KIND_LABEL[kind]}</button>}
-      {adding && <section className="capability-form">
+      {kind === "base" && <section className="base-capability-section">
+        {(items.base || []).map(renderBaseRole)}
+        {!items.base?.length && <p className="capability-empty">还没有读取到基础能力。</p>}
+      </section>}
+
+      {kind !== "base" && !adding && <button className="capability-add" disabled={!connected} onClick={() => setAdding(true)}>＋ 添加{KIND_LABEL[kind]}</button>}
+      {kind !== "base" && adding && <section className="capability-form">
         <div className="capability-sources">
           <label><input type="radio" checked={sourceType === "github"} onChange={() => setSourceType("github")} />GitHub</label>
           <label><input type="radio" checked={sourceType === "local"} onChange={() => setSourceType("local")} />本地文件夹</label>
@@ -164,9 +209,9 @@ export function CapabilitiesView({ agents, connected, request, onNotice }: Props
         </div>
       </section>}
 
-      {list.length === 0 && !adding && <p className="capability-empty">能力库里还没有{KIND_LABEL[kind]}。</p>}
+      {kind !== "base" && list.length === 0 && !adding && <p className="capability-empty">能力库里还没有{KIND_LABEL[kind]}。</p>}
       {list.map(renderCard)}
-      {(localList.length > 0 || items.local?.error) && <section className="capability-local-section">
+      {kind !== "base" && (localList.length > 0 || items.local?.error) && <section className="capability-local-section">
         <h3>本机已安装</h3>
         <p className="capability-intro">来自本机 Pi 环境（~/.pi/agent、~/.agents/skills、已安装的 Pi 包等），不会复制。默认不分配给任何机器人，勾选角色后该角色才会加载。</p>
         {items.local?.error && <p className="capability-warning">读取本机能力失败：{items.local.error}</p>}
