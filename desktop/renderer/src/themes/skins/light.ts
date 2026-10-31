@@ -3,10 +3,10 @@ import type { SkinDefinition } from "../types";
 const skin = {
   id: "light", name: "默认浅色", description: "清晰、克制的日间工作界面", colorScheme: "light", preview: ["#ffffff", "#f7f8fa", "#3370ff", "#1f2329"],
   tokens: {
-    "--color-scheme": "light", "--color-primary": "#3370ff", "--color-primary-hover": "#245bdb", "--color-primary-contrast": "#ffffff",
-    "--color-bg": "#ffffff", "--color-surface": "#f7f8fa", "--color-surface-raised": "#ffffff", "--color-surface-sunken": "#f5f6f8",
+    "--color-scheme": "light", "--color-primary": "#3370ff", "--color-primary-hover": "#245bdb", "--color-primary-contrast": "#ffffff", "--color-primary-soft": "#eef3ff", "--color-primary-border": "#c9d8ff",
+    "--color-bg": "#ffffff", "--color-surface": "#f7f8fa", "--color-surface-raised": "#ffffff", "--color-surface-sunken": "#f5f6f8", "--color-surface-hover": "#eceef1",
     "--color-text": "#1f2329", "--color-text-muted": "#646a73", "--color-text-subtle": "#8f959e", "--color-border": "#e5e7eb", "--color-border-strong": "#cfd3d9",
-    "--color-danger": "#d14343", "--color-danger-soft": "#fdeeee", "--color-success": "#1f8f52", "--color-success-soft": "#e8f6ee", "--color-warning": "#b97a12", "--color-warning-soft": "#fdf4e3", "--color-info": "#3370ff", "--color-focus-ring": "#3370ff", "--color-overlay": "rgba(31, 35, 41, .45)",
+    "--color-danger": "#d14343", "--color-danger-soft": "#fdeeee", "--color-success": "#1f8f52", "--color-success-soft": "#e8f6ee", "--color-warning": "#b97a12", "--color-warning-soft": "#fdf4e3", "--color-info": "#3370ff", "--color-focus-ring": "#3370ff", "--color-overlay": "rgba(31, 35, 41, .45)", "--color-code-bg": "#1f2329", "--color-code-border": "#2b3038", "--color-code-text": "#e6e8eb",
     "--radius-sm": "6px", "--radius-md": "8px", "--radius-lg": "12px", "--radius-xl": "16px", "--radius-full": "999px",
     "--shadow-sm": "0 1px 3px rgba(31, 35, 41, .06), 0 1px 2px rgba(31, 35, 41, .04)", "--shadow-md": "0 6px 20px rgba(31, 35, 41, .08)", "--shadow-lg": "0 18px 50px rgba(31, 35, 41, .18)", "--shadow-popover": "0 6px 20px rgba(31, 35, 41, .08)",
     "--font-sans": "Inter, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', -apple-system, BlinkMacSystemFont, sans-serif", "--font-mono": "'Cascadia Mono', ui-monospace, Consolas, monospace", "--font-size-xs": "11px", "--font-size-sm": "12px", "--font-size-md": "13px", "--font-size-lg": "15px", "--font-size-xl": "18px", "--font-size-2xl": "24px", "--line-height-tight": "1.2", "--line-height-normal": "1.5", "--line-height-relaxed": "1.65", "--font-weight-regular": "400", "--font-weight-medium": "500", "--font-weight-semibold": "600", "--font-weight-bold": "700",

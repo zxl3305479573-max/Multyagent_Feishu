@@ -3,11 +3,11 @@
  * 新增 token 时同时更新这里和每个 skins/*.ts；test/skins.test.js 会防止遗漏。
  */
 export const tokenNames = [
-  "--color-scheme", "--color-primary", "--color-primary-hover", "--color-primary-contrast",
-  "--color-bg", "--color-surface", "--color-surface-raised", "--color-surface-sunken",
+  "--color-scheme", "--color-primary", "--color-primary-hover", "--color-primary-contrast", "--color-primary-soft", "--color-primary-border",
+  "--color-bg", "--color-surface", "--color-surface-raised", "--color-surface-sunken", "--color-surface-hover",
   "--color-text", "--color-text-muted", "--color-text-subtle", "--color-border", "--color-border-strong",
   "--color-danger", "--color-danger-soft", "--color-success", "--color-success-soft",
-  "--color-warning", "--color-warning-soft", "--color-info", "--color-focus-ring", "--color-overlay",
+  "--color-warning", "--color-warning-soft", "--color-info", "--color-focus-ring", "--color-overlay", "--color-code-bg", "--color-code-border", "--color-code-text",
   "--radius-sm", "--radius-md", "--radius-lg", "--radius-xl", "--radius-full",
   "--shadow-sm", "--shadow-md", "--shadow-lg", "--shadow-popover",
   "--font-sans", "--font-mono", "--font-size-xs", "--font-size-sm", "--font-size-md", "--font-size-lg", "--font-size-xl", "--font-size-2xl",
