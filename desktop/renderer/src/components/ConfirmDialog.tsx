@@ -24,7 +24,7 @@ export function ConfirmDialog({
   onCancel,
 }: Props) {
   return (
-    <Dialog className="confirm-dialog" onOpenChange={(open) => { if (!open && !busy) onCancel(); }} ariaDescribedBy="confirm-dialog-description">
+    <Dialog className="confirm-dialog" role="alertdialog" onOpenChange={(open) => { if (!open && !busy) onCancel(); }} ariaDescribedBy="confirm-dialog-description">
       <header>
         <div className="confirm-dialog-heading">
           <span className={`confirm-dialog-icon confirm-dialog-icon-${tone}`} aria-hidden="true">!</span>
