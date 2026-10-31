@@ -5,10 +5,13 @@
   --color-primary: #3370ff;
   --color-primary-hover: #245bdb;
   --color-primary-contrast: #fff;
+  --color-primary-soft: #eef3ff;
+  --color-primary-border: #c9d8ff;
   --color-bg: #fff;
   --color-surface: #f7f8fa;
   --color-surface-raised: #fff;
   --color-surface-sunken: #f5f6f8;
+  --color-surface-hover: #eceef1;
   --color-text: #1f2329;
   --color-text-muted: #646a73;
   --color-text-subtle: #8f959e;
@@ -23,6 +26,9 @@
   --color-info: #3370ff;
   --color-focus-ring: #3370ff;
   --color-overlay: rgba(31, 35, 41, .45);
+  --color-code-bg: #1f2329;
+  --color-code-border: #2b3038;
+  --color-code-text: #e6e8eb;
 
   /* Radius */
   --radius-sm: 6px;

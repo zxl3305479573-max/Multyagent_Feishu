@@ -22,10 +22,12 @@ html[data-skin="night"] {
 | `--color-primary` | 主操作、选中状态和品牌强调色。 |
 | `--color-primary-hover` | 主操作悬停色。 |
 | `--color-primary-contrast` | 置于主色上的前景文字/图标色。 |
+| `--color-primary-soft` / `--color-primary-border` | 主色相关的弱强调背景和边界。 |
 | `--color-bg` | 应用最底层背景。 |
 | `--color-surface` | 普通、次级表面。 |
 | `--color-surface-raised` | 卡片、菜单、输入框等抬升表面。 |
 | `--color-surface-sunken` | 侧栏等凹陷表面。 |
+| `--color-surface-hover` | 可交互表面的悬停背景。 |
 | `--color-text` | 默认主要文本。 |
 | `--color-text-muted` | 次要说明文本。 |
 | `--color-text-subtle` | 最弱的辅助文本。 |
@@ -40,6 +42,7 @@ html[data-skin="night"] {
 | `--color-info` | 信息提示色；默认与主色一致。 |
 | `--color-focus-ring` | 键盘焦点外圈。 |
 | `--color-overlay` | 遮罩层背景。 |
+| `--color-code-bg` / `--color-code-border` / `--color-code-text` | 日志、代码块等深色语义表面。 |
 
 ## 圆角与阴影
 
