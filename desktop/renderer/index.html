@@ -1,5 +1,18 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width,initial-scale=1.0" /><title>Agent 工作台</title></head>
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width,initial-scale=1.0" /><title>Agent 工作台</title><script>
+    /* 在 Vite/React 运行前复用上次已解析的变量，避免切换皮肤后的首屏闪烁。 */
+    (function () {
+      try {
+        var choice = localStorage.getItem("multyagent.skin") || "light";
+        var resolved = choice === "system" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : choice === "system" ? "light" : choice;
+        document.documentElement.setAttribute("data-skin", resolved);
+        var css = localStorage.getItem("multyagent.skin.css");
+        if (css && localStorage.getItem("multyagent.skin.css.id") === resolved) {
+          var style = document.createElement("style"); style.id = "multyagent-skin"; style.textContent = css; document.head.appendChild(style);
+        }
+      } catch (_) { /* storage may be unavailable */ }
+    }());
+  </script></head>
   <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
 </html>

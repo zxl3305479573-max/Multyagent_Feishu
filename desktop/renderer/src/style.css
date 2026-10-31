@@ -697,6 +697,21 @@ kbd { margin-left: auto; padding: 2px 5px; border: 1px solid var(--line); border
   .settings-savebar { flex-wrap: wrap; }
 }
 
+/* ---------- 外观 / 皮肤（只使用 shared tokens） ---------- */
+.skin-picker { padding: var(--space-5) 0 var(--space-7); }
+.skin-picker-intro { margin-bottom: var(--space-4); }
+.skin-picker-intro p { margin: 0; color: var(--color-text-muted); font-size: var(--font-size-md); line-height: var(--line-height-relaxed); }
+.skin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--space-3); }
+.skin-card { display: grid; grid-template-columns: auto 1fr; column-gap: var(--space-2); align-content: start; min-height: 132px; padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface-raised); color: var(--color-text); text-align: left; cursor: pointer; box-shadow: var(--shadow-sm); transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast); }
+.skin-card:hover { border-color: var(--color-primary); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.skin-card:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+.skin-card.is-selected { border-color: var(--color-primary); box-shadow: 0 0 0 2px var(--color-primary), var(--shadow-sm); }
+.skin-card strong { align-self: center; color: var(--color-text); font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); }
+.skin-card > span:last-child { grid-column: 1 / -1; margin-top: var(--space-3); color: var(--color-text-muted); font-size: var(--font-size-sm); line-height: var(--line-height-normal); }
+.skin-swatches { display: inline-flex; gap: 2px; width: 52px; height: 28px; padding: 3px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-sunken); overflow: hidden; }
+.skin-swatches i { display: block; flex: 1; min-width: 0; border-radius: 2px; }
+@media (max-width: 720px) { .skin-grid { grid-template-columns: 1fr; } .skin-card { min-height: 104px; } }
+
 /* ---------- 测试的结构化验收卡 ---------- */
 .acceptance-card { display: grid; gap: 8px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--subtle); border-radius: var(--radius); background: var(--surface-raised); }
 .acceptance-card.verdict-pass { border-left-color: var(--green); background: #fbfefc; }

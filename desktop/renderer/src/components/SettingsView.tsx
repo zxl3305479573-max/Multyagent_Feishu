@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { SkinPicker } from "../themes/SkinPicker";
+import { getSavedSkinChoice, type SkinChoice } from "../themes/apply";
 import type { SettingsEntry, SettingsField, SettingsGroup, SettingsSnapshot } from "../types";
 
 type Props = {
@@ -149,10 +151,18 @@ type SettingsPage = {
   groupDescription?: string;
   section: Subsection;
   fields: SettingsField[];
+  kind?: "appearance";
 };
 
 function buildSettingsPages(groups: SettingsGroup[], query: string, provider: string, feishuOff: boolean): SettingsPage[] {
   const pages: SettingsPage[] = [];
+  const appearanceText = "外观 皮肤 跟随系统 默认浅色 深色 暖调柔和 高对比 墨绿森林";
+  if (!query || appearanceText.toLowerCase().includes(query.toLowerCase())) {
+    pages.push({
+      key: "appearance:skins", groupId: "appearance", groupTitle: "外观", groupDescription: "只影响本机工作台显示，不会修改运行设置。",
+      section: { id: "skins", title: "外观 / 皮肤", description: "选择一套完整设计 token；可随时切回默认浅色。", order: 0 }, fields: [], kind: "appearance",
+    });
+  }
   for (const group of groups) {
     const hidden = feishuOff && FEISHU_GROUPS.has(group.id);
     const visible = group.fields.filter((field) => matches(field, query) && (!hidden || field.key === "FEISHU_ENABLED"));
@@ -200,6 +210,7 @@ export function SettingsView({ onSaved, onNotice }: Props) {
   const [query, setQuery] = useState("");
   const [saving, setSaving] = useState<"" | "save" | "restart">("");
   const [activePage, setActivePage] = useState("");
+  const [skinChoice, setSkinChoice] = useState<SkinChoice>(() => getSavedSkinChoice());
   const pageTopRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -291,7 +302,7 @@ export function SettingsView({ onSaved, onNotice }: Props) {
           {navigation.map((group) => <section key={group.title} className="settings-nav-group">
             <h3>{group.title}</h3>
             <div>{group.pages.map((page) => <button key={page.key} type="button" className={currentPage?.key === page.key ? "is-selected" : ""} aria-current={currentPage?.key === page.key ? "page" : undefined} onClick={() => selectPage(page.key)}>
-              <span>{page.section.title}</span><small>{page.fields.length}</small>
+              <span>{page.section.title}</span>{page.kind !== "appearance" && <small>{page.fields.length}</small>}
             </button>)}</div>
           </section>)}
         </aside>
@@ -301,13 +312,15 @@ export function SettingsView({ onSaved, onNotice }: Props) {
             <h2>{currentPage.section.title}</h2>
             {(currentPage.section.description || currentPage.groupDescription) && <p>{currentPage.section.description || currentPage.groupDescription}</p>}
           </header>
-          <div className="settings-rows">{currentPage.fields.map((field) => <FieldRow key={field.key} field={field} entry={snapshot.entries[field.key]} draft={drafts[field.key]} onChange={(value) => setDraft(field.key, value)} />)}</div>
-          <div className={`settings-savebar ${dirtyCount ? "has-changes" : ""}`}>
-            <span>{dirtyCount ? `${dirtyCount} 项未保存` : "没有未保存的更改"}</span>
-            <button type="button" className="quiet-button" onClick={() => setDrafts({})} disabled={!dirtyCount || Boolean(saving)}>放弃更改</button>
-            <button type="button" className="quiet-button" onClick={() => void save(false)} disabled={!dirtyCount || Boolean(saving)}>{saving === "save" ? "保存中…" : "保存"}</button>
-            <button type="button" className="primary-button" onClick={() => void save(true)} disabled={Boolean(saving)}>{saving === "restart" ? "重启中…" : dirtyCount ? "保存并重启服务" : "重启服务"}</button>
-          </div>
+          {currentPage.kind === "appearance" ? <SkinPicker choice={skinChoice} onChange={(choice) => { setSkinChoice(choice); onNotice(choice === "system" ? "已切换为跟随系统外观" : "皮肤已保存并立即生效"); }} /> : <>
+            <div className="settings-rows">{currentPage.fields.map((field) => <FieldRow key={field.key} field={field} entry={snapshot.entries[field.key]} draft={drafts[field.key]} onChange={(value) => setDraft(field.key, value)} />)}</div>
+            <div className={`settings-savebar ${dirtyCount ? "has-changes" : ""}`}>
+              <span>{dirtyCount ? `${dirtyCount} 项未保存` : "没有未保存的更改"}</span>
+              <button type="button" className="quiet-button" onClick={() => setDrafts({})} disabled={!dirtyCount || Boolean(saving)}>放弃更改</button>
+              <button type="button" className="quiet-button" onClick={() => void save(false)} disabled={!dirtyCount || Boolean(saving)}>{saving === "save" ? "保存中…" : "保存"}</button>
+              <button type="button" className="primary-button" onClick={() => void save(true)} disabled={Boolean(saving)}>{saving === "restart" ? "重启中…" : dirtyCount ? "保存并重启服务" : "重启服务"}</button>
+            </div>
+          </>}
         </section>}
       </div>}
     </div>
