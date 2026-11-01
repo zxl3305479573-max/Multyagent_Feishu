@@ -2,7 +2,7 @@
 // 只写文件、不调飞书接口。
 //   node scripts/render-sample-diagram.mjs
 import { writeFileSync } from "node:fs";
-import { renderDiagramPng } from "../src/diagram.js";
+import { renderDiagramPng } from "../src/integrations/diagram.js";
 
 const spec = {
   title: "学生信息管理系统 · 系统架构",

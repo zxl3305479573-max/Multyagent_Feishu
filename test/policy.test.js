@@ -1,9 +1,9 @@
 import test from "node:test";
-import { roleConfig } from "../src/role-config.cjs";
+import { roleConfig } from "../src/agent/role-config.cjs";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { checkNetworkAllowed, checkWriteAllowed, isDeleteCommand, isDenied, isWithin, resolvePath, resolveWritePaths } from "../src/policy.js";
-import { createPolicyFactory } from "../src/pi-agent.js";
+import { checkNetworkAllowed, checkWriteAllowed, isDeleteCommand, isDenied, isWithin, resolvePath, resolveWritePaths } from "../src/agent/policy.js";
+import { createPolicyFactory } from "../src/runtime/pi-agent.js";
 
 const cwd = process.cwd();
 
@@ -178,7 +178,7 @@ test("isDeleteCommand 放行创建/写入/构建类命令", () => {
 });
 
 test("编排层指定的产物目录必须落在该角色的写入白名单内", async () => {
-  const { artifactsDirFor } = await import("../src/artifacts.js");
+  const { artifactsDirFor } = await import("../src/domain/artifacts.js");
   const { policy: config } = roleConfig();
   for (const [role, cfg] of Object.entries(config.agents)) {
     for (const projectName of [null, "student"]) {

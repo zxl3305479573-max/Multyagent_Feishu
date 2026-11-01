@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planProgress, readyPlanAssignments } from "../src/plan-scheduler.js";
+import { planProgress, readyPlanAssignments } from "../src/domain/plan-scheduler.js";
 
 const plan = { stages: [
   { id: "design", assignments: [{ id: "a", dependsOn: [] }, { id: "b", dependsOn: [] }] },

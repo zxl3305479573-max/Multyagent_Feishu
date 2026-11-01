@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { Client } from "@larksuiteoapi/node-sdk";
-import { createCompactLogger, explainBitableError, resolveBitableTarget } from "../src/bitable-sync.js";
+import { createCompactLogger, explainBitableError, resolveBitableTarget } from "../src/integrations/bitable-sync.js";
 
 const args = process.argv.slice(2);
 const readArg = (name) => {

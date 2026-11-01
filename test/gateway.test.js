@@ -4,9 +4,9 @@ import { rmSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildResultCard, createCardActionHandler, createDeduper, createRoleHandler, isApprovalCommand, isStatusQueryCommand, loadProjectSummaryFor, parseControlCommand, parseMessage, parseNewTaskCommand, shouldHandleMessage } from "../src/gateway.js";
-import { appendProjectSummary } from "../src/project-summary.js";
-import { _resetForTest, createTask, findTaskByRoot, updateTask } from "../src/tasks.js";
+import { buildResultCard, createCardActionHandler, createDeduper, createRoleHandler, isApprovalCommand, isStatusQueryCommand, loadProjectSummaryFor, parseControlCommand, parseMessage, parseNewTaskCommand, shouldHandleMessage } from "../src/runtime/gateway.js";
+import { appendProjectSummary } from "../src/domain/project-summary.js";
+import { _resetForTest, createTask, findTaskByRoot, updateTask } from "../src/domain/tasks.js";
 
 const BOT_NAMES = ["项目经理", "架构设计师", "前端开发", "后端开发", "测试", "审计"];
 

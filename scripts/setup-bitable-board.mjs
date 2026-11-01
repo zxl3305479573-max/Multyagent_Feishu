@@ -6,7 +6,7 @@
 // the plan without touching the table.
 import "dotenv/config";
 import { Client } from "@larksuiteoapi/node-sdk";
-import { createCompactLogger, explainBitableError, resolveBitableTarget } from "../src/bitable-sync.js";
+import { createCompactLogger, explainBitableError, resolveBitableTarget } from "../src/integrations/bitable-sync.js";
 import { BOARD_FIELD_SCHEMA, OWNER_LABELS, STAGE_LABELS, STATUS_LABELS } from "../src/domain/bitable-board.js";
 
 const dryRun = process.argv.includes("--dry-run");

@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { rmSync, writeFileSync } from "node:fs";
-import { buildResultCard } from "../src/gateway.js";
-import { createOrchestrator } from "../src/orchestrator.js";
+import { buildResultCard } from "../src/runtime/gateway.js";
+import { createOrchestrator } from "../src/agent/orchestrator.js";
 
 function actionElement(card) {
   return card.body.elements.find((element) => element?.tag === "action");

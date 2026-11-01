@@ -4,10 +4,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator } from "../src/orchestrator.js";
-import { createPendingStores } from "../src/orchestrator/pending-store.js";
+import { createOrchestrator } from "../src/agent/orchestrator.js";
+import { createPendingStores } from "../src/agent/orchestrator/pending-store.js";
 import { TaskStore } from "../src/domain/task-store.js";
-import { configureTaskStore } from "../src/tasks.js";
+import { configureTaskStore } from "../src/domain/tasks.js";
 
 const quiet = { info() {}, warn() {}, error() {} };
 const client = { im: { message: { create: async () => ({ code: 0 }) } } };

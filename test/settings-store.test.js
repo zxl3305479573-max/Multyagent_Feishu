@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildEnvCatalog } from "../src/env-catalog.cjs";
-import { createSettingsStore, describeSettings } from "../src/settings-store.cjs";
+import { buildEnvCatalog } from "../src/runtime/env-catalog.cjs";
+import { createSettingsStore, describeSettings } from "../src/domain/settings-store.cjs";
 
 const roleKeys = ["project_manager", "architect", "frontend_developer", "backend_developer", "tester", "auditor"];
 

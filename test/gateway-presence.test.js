@@ -7,7 +7,7 @@ import {
   isApprovalCommand,
   parseConfirmRoles,
   uploadCardImage,
-} from "../src/gateway.js";
+} from "../src/runtime/gateway.js";
 
 test("final delivery choices are not rendered as dead buttons", () => {
   const card = buildResultCard({
@@ -182,7 +182,7 @@ test("uploadCardImage 返回飞书给的 image_key", async () => {
 });
 
 test("交付带 diagram 时渲染成图并嵌进卡片，上传失败则降级为纯文本卡", async () => {
-  const { sendResultCard } = await import("../src/gateway.js");
+  const { sendResultCard } = await import("../src/runtime/gateway.js");
   const diagram = {
     title: "架构",
     nodes: [{ id: "a", label: "客户端" }, { id: "b", label: "服务端" }],
@@ -273,7 +273,7 @@ test("卡片正文清掉代码围栏、引用符号、表格线与斜体星号�
 });
 
 test("项目经理即使填了 diagram 也不渲染架构图，只有架构师可以", async () => {
-  const { sendResultCard } = await import("../src/gateway.js");
+  const { sendResultCard } = await import("../src/runtime/gateway.js");
   const diagram = { nodes: [{ id: "a", label: "客户端" }, { id: "b", label: "服务端" }], edges: [{ from: "a", to: "b" }] };
   const sent = [];
   let uploads = 0;

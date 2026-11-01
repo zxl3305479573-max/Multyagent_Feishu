@@ -1,0 +1,54 @@
+// 真实 MultyAgent 执行逻辑的集成边界：默认使用内置 Pi，会话也可切换到 RPC 子进程。
+import { buildPrompt, buildSystemPrompt, runAgent as runEmbeddedAgent } from "../../runtime/pi-agent.js";
+import { createAgentRunner } from "../../runtime/agent-runner.js";
+import { mapPiTextEvent } from "../../agent/tool-events.js";
+
+function rpcTraceEvent(event, { taskId, agentKey }) {
+  if (!event || typeof event !== "object") return null;
+  if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") return mapPiTextEvent(event, { taskId, agentKey })[0] || null;
+  const allowed = {
+    task_id: taskId || null,
+    agent: agentKey || null,
+    type: "rpc_event",
+    rpc_type: String(event.type || "unknown"),
+    ...(event.toolName ? { tool: String(event.toolName) } : {}),
+    ...(event.type === "agent_settled" ? { status: "completed" } : {}),
+    ...(event.type === "error" ? { status: "failed" } : {}),
+    ...(event.type === "tool_execution_start" ? { status: "running" } : {}),
+    ...(event.type === "tool_execution_end" ? { status: event.isError === true ? "failed" : "completed" } : {}),
+  };
+  return allowed;
+}
+
+export function createRunAgent({ mode = process.env.PI_AGENT_RUNTIME || "embedded", embedded = runEmbeddedAgent, rpcRun = createAgentRunner() } = {}) {
+  return async function runAgent(agent, prompt, context = {}, options = {}) {
+    // 桌面端可按任务选择运行方式（context.runtime），未指定时沿用全局配置 PI_AGENT_RUNTIME。
+    const effective = context.runtime === "rpc" || context.runtime === "embedded" ? context.runtime : mode;
+    if (effective !== "rpc") return embedded(agent, prompt, context, options);
+    const projectName = context.projectName || "default";
+    const rpcContext = { ...context, projectName };
+    const result = await rpcRun(agent, buildPrompt(prompt, rpcContext), {
+      projectName,
+      taskId: context.taskId,
+      systemPrompt: buildSystemPrompt(agent, context.projectName || null),
+      context: rpcContext,
+      timeoutMs: options.timeoutMs || (Number(agent.max_runtime_seconds) > 0 ? Number(agent.max_runtime_seconds) * 1000 : undefined),
+      env: options.env,
+      onEvent: (event) => {
+        const safe = rpcTraceEvent(event, { taskId: context.taskId, agentKey: agent.key });
+        if (safe) return context.onEvent?.(safe);
+      },
+    });
+    const text = String(result?.text || "").trim();
+    return {
+      text,
+      delivery: result?.delivery || null,
+      projectName: result?.delivery?.projectName || context.projectName || null,
+      rpc: { exit: result?.exit || null },
+    };
+  };
+}
+
+export const runAgent = createRunAgent();
+
+export { rpcTraceEvent };

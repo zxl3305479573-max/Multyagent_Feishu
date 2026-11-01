@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { DefaultResourceLoader, getAgentDir, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
-import { readJsonFileSync, writeFileAtomic } from "../atomic-file.cjs";
+import { readJsonFileSync, writeFileAtomic } from "../domain/atomic-file.cjs";
 
 const run = promisify(execFile);
 const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;

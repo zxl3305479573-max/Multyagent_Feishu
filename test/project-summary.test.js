@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendProjectSummary, readProjectSummary, summaryFileFor } from "../src/project-summary.js";
+import { appendProjectSummary, readProjectSummary, summaryFileFor } from "../src/domain/project-summary.js";
 
 test("summaryFileFor 只允许合法项目名并落在项目 artifacts 目录", () => {
   const file = summaryFileFor({ root: "D:/repo", projectName: "student" });

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectVerbalDispatch, inferDispatchTargets, validateAcceptance } from "../src/orchestrator/guards.js";
+import { detectVerbalDispatch, inferDispatchTargets, validateAcceptance } from "../src/agent/orchestrator/guards.js";
 import { createDeliverTool, droppedAssignments } from "../src/agent/tools.js";
 
 test("dispatch guard flags a PM that claims to have dispatched without assignments", () => {

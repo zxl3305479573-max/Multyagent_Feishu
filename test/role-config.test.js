@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadRoles, roleConfig } from "../src/role-config.cjs";
+import { loadRoles, roleConfig } from "../src/agent/role-config.cjs";
 
 const base = JSON.parse(readFileSync(new URL("../config/roles/tester.json", import.meta.url), "utf8"));
 

@@ -24,7 +24,7 @@
 
 ## 验证 1：驱动 Pi 会话
 
-脚本：`spike/pi-session.mjs`
+脚本：`docs/archive/spike/pi-session.mjs`
 
 ```text
 [model] deepseek/deepseek-v4-pro (thinking=true)
@@ -38,7 +38,7 @@
 
 ## 验证 2：tool_call 强制拦截
 
-脚本：`spike/pi-policy.mjs`
+脚本：`docs/archive/spike/pi-policy.mjs`
 
 ```text
 [tool] read {"path":"D:/33054/Multyagent Feishu/.env"}
@@ -72,7 +72,7 @@
 
 ## 步骤 3：端到端飞书验证（已通过）
 
-基于 spike 结论实现了最小桥接层 `src/pi-agent.js`，替换了 `src/handlers.js` 的占位 `runAgent`：
+基于 spike 结论实现了最小桥接层 `src/runtime/pi-agent.js`，替换了 `src/integrations/feishu/handlers.js` 的占位 `runAgent`：
 
 - 每次任务新建 in-memory session，prompt 后 dispose。
 - 统一只读工具集 `["read", "ls", "grep", "find"]` + 敏感文件拦截（复用验证 2）。

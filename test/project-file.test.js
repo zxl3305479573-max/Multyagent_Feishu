@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveProjectFile } from "../src/project-file.cjs";
-import { describeDeliveryArtifacts } from "../src/artifacts.js";
+import { resolveProjectFile } from "../src/domain/project-file.cjs";
+import { describeDeliveryArtifacts } from "../src/domain/artifacts.js";
 
 test("project files resolve both delivery path formats and reject traversal and external links", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-files-"));

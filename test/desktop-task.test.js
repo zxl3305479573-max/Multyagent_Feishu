@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskStore } from "../src/domain/task-store.js";
-import { createDesktopTaskSubmitter } from "../src/desktop-task.js";
+import { createDesktopTaskSubmitter } from "../src/desktop/desktop-task.js";
 
 test("desktop task submitter creates an isolated project task and sends it through the project manager", async () => {
   const root = await mkdtemp(join(tmpdir(), "desktop-task-"));

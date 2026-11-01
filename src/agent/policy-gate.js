@@ -1,8 +1,8 @@
 // 策略闸门：Pi 会话每次调用工具前都会经过这里。
 // 依次检查任务级工具白名单、敏感文件、删除命令、联网、Shell 写入与 write/edit 落点。
-import { checkNetworkAllowed, checkShellCommand, checkWriteAllowed, isDeleteCommand, resolveWritePaths } from "../policy.js";
+import { checkNetworkAllowed, checkShellCommand, checkWriteAllowed, isDeleteCommand, resolveWritePaths } from "./policy.js";
 import { isAbsolute, relative, resolve } from "node:path";
-import { roleConfig } from "../role-config.cjs";
+import { roleConfig } from "./role-config.cjs";
 import { getCapabilityRegistry } from "../capabilities/index.js";
 import { acquireProjectLock, isBuildCommand, PROJECT_LOCK_STALE_MS } from "../runtime/project-lock.js";
 

@@ -4,7 +4,7 @@
 // the table when you are done inspecting it.
 import "dotenv/config";
 import { Client } from "@larksuiteoapi/node-sdk";
-import { createBitableSync, createCompactLogger, reconcileFields, resolveBitableTarget } from "../src/bitable-sync.js";
+import { createBitableSync, createCompactLogger, reconcileFields, resolveBitableTarget } from "../src/integrations/bitable-sync.js";
 import { KEY_FIELD } from "../src/domain/bitable-board.js";
 
 const appId = process.env.FEISHU_PROJECT_MANAGER_APP_ID;

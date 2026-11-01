@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { checkShellCommand, isDeleteCommand, redirectTargets, splitShellSegments } from "../src/policy.js";
-import { createPolicyFactory } from "../src/pi-agent.js";
+import { checkShellCommand, isDeleteCommand, redirectTargets, splitShellSegments } from "../src/agent/policy.js";
+import { createPolicyFactory } from "../src/runtime/pi-agent.js";
 
 const cwd = process.cwd();
 const dev = { shellMode: "write", writePaths: ["workspace/student/frontend", "workspace/student/artifacts"] };

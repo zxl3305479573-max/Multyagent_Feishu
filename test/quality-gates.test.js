@@ -4,9 +4,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskStore } from "../src/domain/task-store.js";
-import { createOrchestrator } from "../src/orchestrator.js";
-import { configureTaskStore, createTask } from "../src/tasks.js";
-import { buildQualityReport, formatQualityReportSummary } from "../src/quality-report.js";
+import { createOrchestrator } from "../src/agent/orchestrator.js";
+import { configureTaskStore, createTask } from "../src/domain/tasks.js";
+import { buildQualityReport, formatQualityReportSummary } from "../src/agent/quality-report.js";
 import {
   acceptanceFailureRouting,
   createQualityGates,
@@ -18,7 +18,7 @@ import {
   reduceQualityGates,
   validateAcceptanceMatrix,
   validateIntegrationSlice,
-} from "../src/quality-gates.js";
+} from "../src/agent/quality-gates.js";
 
 test("quality policy requires independent acceptance, evidence and audit for every implementation task", () => {
   const policy = qualityPolicyForTask({ team: true, mode: "auto", description: "实现登录页面和会话认证" });

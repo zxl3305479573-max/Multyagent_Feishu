@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { applyRuntimeConfig, buildCustomModelsConfig, currentRuntimeSettings, modelConfigEnv, prepareModelConfig, runtimeConfigPayload, selectedModel } from "../src/model-config.js";
+import { applyRuntimeConfig, buildCustomModelsConfig, currentRuntimeSettings, modelConfigEnv, prepareModelConfig, runtimeConfigPayload, selectedModel } from "../src/runtime/model-config.js";
 
 const customEnv = {
   PI_AGENT_PROVIDER: "ollama",

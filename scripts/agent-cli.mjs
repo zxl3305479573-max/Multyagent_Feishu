@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import { executeAgentCli, parseArgs, parseJson } from "../src/agent-cli.js";
+import { executeAgentCli, parseArgs, parseJson } from "../src/agent/agent-cli.js";
 
 function output(payload, code = 0) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);

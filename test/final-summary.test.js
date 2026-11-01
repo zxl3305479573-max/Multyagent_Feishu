@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { aggregateChildDeliveries, finalizeProjectManagerDelivery, formatChildDeliverySummary } from "../src/orchestrator/final-summary.js";
-import { createOrchestrator } from "../src/orchestrator.js";
+import { aggregateChildDeliveries, finalizeProjectManagerDelivery, formatChildDeliverySummary } from "../src/agent/orchestrator/final-summary.js";
+import { createOrchestrator } from "../src/agent/orchestrator.js";
 
 const history = [
   { taskId: "T-1:frontend.fe-login", agentKey: "frontend_developer", agentName: "1号前端开发", assignmentId: "fe-login", summary: "登录页完成", artifactPaths: ["workspace/demo/artifacts/login.tsx"], artifactItems: [{ path: "workspace/demo/artifacts/login.tsx", description: "登录页面" }] },

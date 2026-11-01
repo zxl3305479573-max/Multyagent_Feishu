@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createGitHubClient } from "../src/tickets/github.js";
-import { matchesThreshold, priorityOf } from "../src/tickets/priority.js";
-import { downloadImages, extractImageUrls } from "../src/tickets/images.js";
-import { buildWritebackComment, createTicketService } from "../src/tickets/service.js";
-import { createCardActionHandler } from "../src/gateway.js";
+import { createGitHubClient } from "../src/domain/tickets/github.js";
+import { matchesThreshold, priorityOf } from "../src/domain/tickets/priority.js";
+import { downloadImages, extractImageUrls } from "../src/domain/tickets/images.js";
+import { buildWritebackComment, createTicketService } from "../src/domain/tickets/service.js";
+import { createCardActionHandler } from "../src/runtime/gateway.js";
 
 test("priority is inferred from common label conventions", () => {
   assert.deepEqual(priorityOf(["bug", "P0"]), { rank: 0, label: "紧急" });

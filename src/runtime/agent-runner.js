@@ -1,9 +1,9 @@
 import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { diagramSkillPaths } from "../pi-agent.js";
+import { diagramSkillPaths } from "./pi-agent.js";
 import { getCapabilityRegistry } from "../capabilities/index.js";
-import { modelConfigEnv, prepareModelConfig, selectedModel } from "../model-config.js";
+import { modelConfigEnv, prepareModelConfig, selectedModel } from "./model-config.js";
 import { defaultPiRpcRunner } from "./pi-rpc-runner.js";
 import { RPC_CONTEXT_ENV, readRpcDelivery, rpcArtifactsDir, rpcDeliveryFile, rpcToolPlan } from "./pi-extension.mjs";
 import { collectWorktreeChanges, createWorktree } from "./worktree.js";

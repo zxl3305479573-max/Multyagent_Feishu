@@ -4,7 +4,7 @@ import js from "@eslint/js";
 import globals from "globals";
 
 export default [
-  { ignores: ["node_modules/", "dist/", "release/", "runtime/", "workspace/", "logs/", ".electron-builder-cache*/", "spike/"] },
+  { ignores: ["node_modules/", "dist/", "release/", "runtime/", "workspace/", "logs/", ".electron-builder-cache*/"] },
   js.configs.recommended,
   {
     files: ["**/*.js", "**/*.mjs"],

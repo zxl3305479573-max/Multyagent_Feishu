@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { parseArgs } from "../src/agent-cli.js";
+import { parseArgs } from "../src/agent/agent-cli.js";
 import {
   applyWorktreePatch,
   collectWorktreeChanges,

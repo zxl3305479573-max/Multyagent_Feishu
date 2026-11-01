@@ -1,4 +1,4 @@
-const { readJsonFile, writeFileAtomic } = require("../../src/atomic-file.cjs");
+const { readJsonFile, writeFileAtomic } = require("../../src/domain/atomic-file.cjs");
 
 // 默认允许的密钥名：飞书应用凭据与模型服务商密钥。桌面端会传入 env-catalog 里登记的密钥清单。
 const DEFAULT_KEY = /^(?:FEISHU_[A-Z0-9_]+_(?:APP_ID|APP_SECRET)|[A-Z0-9_]+_API_KEY|HF_TOKEN|COPILOT_GITHUB_TOKEN)$/;

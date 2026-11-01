@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { sessionDirFor, sessionFileBelongsToDir } from "../src/pi-agent.js";
+import { sessionDirFor, sessionFileBelongsToDir } from "../src/runtime/pi-agent.js";
 
 test("Agent sessions are isolated by both project and role", () => {
   assert.match(sessionDirFor({ key: "frontend_developer" }, "alpha"), /runtime[\\/]sessions[\\/]alpha[\\/]frontend_developer$/);

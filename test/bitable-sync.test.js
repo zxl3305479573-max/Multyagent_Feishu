@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BOARD_FIELD_SCHEMA } from "../src/domain/bitable-board.js";
-import { createBitableSync, createBoardEventSink, createCompactLogger, explainBitableError, reconcileFields, resolveBitableTarget } from "../src/bitable-sync.js";
+import { createBitableSync, createBoardEventSink, createCompactLogger, explainBitableError, reconcileFields, resolveBitableTarget } from "../src/integrations/bitable-sync.js";
 
 const ALL_FIELDS = BOARD_FIELD_SCHEMA.map((field) => field.name);
 

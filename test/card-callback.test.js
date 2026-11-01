@@ -2,8 +2,8 @@
 // 可能跑完整轮 Agent 的推进放后台，用 orchestrator.whenIdle() 等待收尾。
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createCardActionHandler } from "../src/gateway.js";
-import { createOrchestrator } from "../src/orchestrator.js";
+import { createCardActionHandler } from "../src/runtime/gateway.js";
+import { createOrchestrator } from "../src/agent/orchestrator.js";
 
 const ROLES = ["project_manager", "architect", "frontend_developer", "backend_developer", "tester", "auditor"];
 

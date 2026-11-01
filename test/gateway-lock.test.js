@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { activeLock, globalLockFile, readLock, releaseLock, writeLock } from "../src/gateway-lock.cjs";
-import { feishuEnabled } from "../src/feishu-mode.cjs";
+import { activeLock, globalLockFile, readLock, releaseLock, writeLock } from "../src/runtime/gateway-lock.cjs";
+import { feishuEnabled } from "../src/integrations/feishu/feishu-mode.cjs";
 
 const agents = [{ key: "architect", appIdEnv: "ARCH_ID" }, { key: "project_manager", appIdEnv: "PM_ID" }];
 

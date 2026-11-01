@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TRACE_FIELD_SCHEMA } from "../src/domain/trace.js";
-import { createBitableTraceSync, reconcileTraceFields } from "../src/bitable-trace-sync.js";
+import { createBitableTraceSync, reconcileTraceFields } from "../src/integrations/bitable-trace-sync.js";
 
 function makeClient(options = {}) {
   const calls = { fieldCreate: [], create: [], update: [], search: [] };

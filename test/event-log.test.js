@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { forEachEvent, readEventsTail, rotateEventLog } from "../src/event-log.js";
+import { forEachEvent, readEventsTail, rotateEventLog } from "../src/domain/event-log.js";
 
 function fixture(count, extra = (i) => ({})) {
   const dir = mkdtempSync(join(tmpdir(), "event-log-"));

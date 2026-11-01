@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyDataDir } from "../src/data-dir.js";
+import { applyDataDir } from "../src/domain/data-dir.js";
 
 test("PI_DATA_DIR switches the gateway working directory and expands %VAR%", async () => {
   const base = await mkdtemp(join(tmpdir(), "data-dir-"));

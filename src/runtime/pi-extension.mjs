@@ -1,13 +1,13 @@
 // Pi RPC 扩展：把内置模式使用的策略闸门和受控工具搬到 RPC 子进程，
 // 让 PI_AGENT_RUNTIME=embedded 与 rpc 拥有同一套权限边界。
 import { readFile } from "node:fs/promises";
-import { writeFileAtomic } from "../atomic-file.cjs";
+import { writeFileAtomic } from "../domain/atomic-file.cjs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
-import { artifactsDirFor } from "../artifacts.js";
+import { artifactsDirFor } from "../domain/artifacts.js";
 
 const require = createRequire(import.meta.url);
-const { policy } = require("../role-config.cjs").roleConfig();
+const { policy } = require("../agent/role-config.cjs").roleConfig();
 
 export const RPC_CONTEXT_ENV = "PI_AGENT_CONTEXT";
 const DEFAULT_TOOLS = ["read", "ls", "grep", "find"];
@@ -113,7 +113,7 @@ export function createRpcExtension(api, { context, tools, root = process.cwd(), 
 export default async function rpcExtension(api) {
   const context = rpcContextFromEnv();
   if (!context) throw new Error(`${RPC_CONTEXT_ENV} is required for the RPC extension`);
-  const tools = await import("../pi-agent.js");
+  const tools = await import("./pi-agent.js");
   const mcpService = context.statusQuery ? null : new tools.McpService({ file: process.env.PI_MCP_CONFIG_FILE || "runtime/mcp.json" });
   if (mcpService) await mcpService.startAll();
   createRpcExtension(api, { context, tools, mcpService });

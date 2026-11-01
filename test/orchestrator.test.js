@@ -4,11 +4,11 @@ import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator, matchRoutes } from "../src/orchestrator.js";
-import { buildResultCard } from "../src/gateway.js";
-import { artifactsDirFor } from "../src/artifacts.js";
-import { readProjectSummary } from "../src/project-summary.js";
-import { _resetForTest, createTask, setPaused, setTerminated } from "../src/tasks.js";
+import { createOrchestrator, matchRoutes } from "../src/agent/orchestrator.js";
+import { buildResultCard } from "../src/runtime/gateway.js";
+import { artifactsDirFor } from "../src/domain/artifacts.js";
+import { readProjectSummary } from "../src/domain/project-summary.js";
+import { _resetForTest, createTask, setPaused, setTerminated } from "../src/domain/tasks.js";
 
 const routes = [
   { from: "project_manager", to: ["architect"] },
@@ -1071,7 +1071,7 @@ test("失败恢复次数用尽后不再交回项目经理，dispatch_failed 变�
 
 test("手动重试：失败的任务交回项目经理重新决策并重新结算；非失败任务不重试", async () => {
   const { TaskStore } = await import("../src/domain/task-store.js");
-  const { configureTaskStore } = await import("../src/tasks.js");
+  const { configureTaskStore } = await import("../src/domain/tasks.js");
   const dir = await mkdtemp(join(tmpdir(), "retry-"));
   const store = new TaskStore(join(dir, "t.json"));
   configureTaskStore(store);

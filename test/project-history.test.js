@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exportProjectSnapshot, archiveProjectHistory, restoreProjectHistory } from "../src/project-history.js";
+import { exportProjectSnapshot, archiveProjectHistory, restoreProjectHistory } from "../src/domain/project-history.js";
 
 test("project history export keeps only the selected project's tasks, events and artifact references", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-history-"));
