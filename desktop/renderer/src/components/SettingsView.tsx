@@ -151,9 +151,10 @@ type SettingsPage = {
   fields: SettingsField[];
 };
 
-function buildSettingsPages(groups: SettingsGroup[], query: string, provider: string, feishuOff: boolean): SettingsPage[] {
+function buildSettingsPages(groups: SettingsGroup[], query: string, provider: string, feishuOff: boolean, category: string): SettingsPage[] {
   const pages: SettingsPage[] = [];
   for (const group of groups) {
+    if (category !== "all" && group.id !== category) continue;
     const hidden = feishuOff && FEISHU_GROUPS.has(group.id);
     const visible = group.fields.filter((field) => matches(field, query) && (!hidden || field.key === "FEISHU_ENABLED"));
     if (!visible.length) continue;
@@ -198,6 +199,7 @@ export function SettingsView({ onSaved, onNotice }: Props) {
   const [loadError, setLoadError] = useState("");
   const [drafts, setDrafts] = useState<Drafts>({});
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
   const [saving, setSaving] = useState<"" | "save" | "restart">("");
   const [activePage, setActivePage] = useState("");
   const pageTopRef = useRef<HTMLElement>(null);
@@ -211,7 +213,8 @@ export function SettingsView({ onSaved, onNotice }: Props) {
   const provider = drafts.PI_AGENT_PROVIDER || snapshot?.entries.PI_AGENT_PROVIDER?.effective || "deepseek";
   const feishuOff = (drafts.FEISHU_ENABLED ?? snapshot?.entries.FEISHU_ENABLED?.effective ?? "true") === "false";
   const groups = snapshot?.groups || [];
-  const pages = useMemo(() => buildSettingsPages(groups, query, provider, feishuOff), [groups, query, provider, feishuOff]);
+  const pages = useMemo(() => buildSettingsPages(groups, query, provider, feishuOff, category), [groups, query, provider, feishuOff, category]);
+  const filters = useMemo(() => [{ id: "all", label: "全部" }, ...groups.map((group) => ({ id: group.id, label: group.title }))], [groups]);
   const navigation = useMemo(() => {
     const grouped = new Map<string, { title: string; pages: SettingsPage[] }>();
     for (const page of pages) {
@@ -283,6 +286,7 @@ export function SettingsView({ onSaved, onNotice }: Props) {
       <div className="settings-toolbar settings-searchbar">
         <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索配置项、二级标题或环境变量名" aria-label="搜索配置项" />
         <span>{query ? `匹配 ${pages.length} 个二级页面` : `共 ${pages.length} 个二级页面`}</span>
+        <nav aria-label="设置分类筛选">{filters.map((filter) => <button key={filter.id} type="button" className={category === filter.id ? "is-selected" : ""} onClick={() => setCategory(filter.id)}>{filter.label}</button>)}</nav>
       </div>
       {pages.length === 0 && <p className="settings-empty">没有匹配“{query}”的配置项</p>}
       {pages.length > 0 && <div className="settings-layout">
