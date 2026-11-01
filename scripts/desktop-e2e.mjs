@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { WebSocket } from "ws";
 
 const require = createRequire(import.meta.url);
@@ -13,7 +13,6 @@ const root = process.cwd();
 const entry = join(root, "desktop", "electron", "main.cjs");
 const distIndex = join(root, "dist", "desktop", "index.html");
 const outputDir = join(root, "test-results", "desktop-e2e");
-const screenshotPath = join(outputDir, "desktop-settings.png");
 const reportPath = join(outputDir, "report.json");
 
 if (!existsSync(distIndex)) {
@@ -24,7 +23,6 @@ const userData = await mkdtemp(join(tmpdir(), "multyagent-desktop-e2e-"));
 const steps = [];
 let child = null;
 let client = null;
-let screenshotBase64 = "";
 
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 
@@ -132,12 +130,6 @@ async function record(name, fn) {
   steps.push({ name, status: "passed", durationMs: Date.now() - startedAt });
 }
 
-async function captureScreenshot() {
-  const result = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
-  screenshotBase64 = result.data;
-  await writeFile(screenshotPath, Buffer.from(result.data, "base64"));
-}
-
 try {
   child = spawn(electronPath, [
     "--remote-debugging-port=0",
@@ -200,15 +192,13 @@ try {
       const detail = document.querySelector('.settings-detail');
       const before = nav.getBoundingClientRect().top;
       detail.scrollTop = detail.scrollHeight;
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await new Promise((resolve) => setTimeout(resolve, 50));
       return { before, after: nav.getBoundingClientRect().top, detailScrollable: detail.scrollHeight >= detail.clientHeight };
     })()`);
     assert.equal(result.detailScrollable, true);
     assert.ok(Math.abs(result.before - result.after) < 1, `左侧目录发生位移：${result.before} -> ${result.after}`);
     await client.evaluate("document.querySelector('.settings-detail').scrollTop = 0");
   });
-
-  await captureScreenshot();
 
   await record("返回对话页并保留输入框", async () => {
     const clicked = await client.evaluate(`(() => {
@@ -230,19 +220,12 @@ try {
     runner: "Electron Chromium + Chrome DevTools Protocol",
     command: "npm run test:e2e",
     exitCode: 0,
-    screenshot: relative(root, screenshotPath).replaceAll("\\", "/"),
     steps,
   }, null, 2));
   console.log(`PASS 桌面端真实浏览器 E2E：${steps.length} 个步骤`);
-  console.log(`截图：${screenshotPath}`);
   console.log(`报告：${reportPath}`);
 } catch (error) {
   console.error(`FAIL 桌面端真实浏览器 E2E：${error?.message || error}`);
-  try {
-    if (client?.socket?.readyState === WebSocket.OPEN) {
-      await Promise.race([captureScreenshot(), sleep(5_000)]);
-    }
-  } catch {}
   await writeFile(reportPath, JSON.stringify({
     schemaVersion: 1,
     status: "failed",
@@ -251,7 +234,6 @@ try {
     command: "npm run test:e2e",
     exitCode: 1,
     error: String(error?.stack || error),
-    screenshot: screenshotBase64 ? relative(root, screenshotPath).replaceAll("\\", "/") : null,
     steps,
   }, null, 2));
   console.error(`报告：${reportPath}`);
