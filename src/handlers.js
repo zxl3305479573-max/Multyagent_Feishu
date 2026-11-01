@@ -1,9 +1,11 @@
 // 真实 MultyAgent 执行逻辑的集成边界：默认使用内置 Pi，会话也可切换到 RPC 子进程。
 import { buildPrompt, buildSystemPrompt, runAgent as runEmbeddedAgent } from "./pi-agent.js";
 import { createAgentRunner } from "./runtime/agent-runner.js";
+import { mapPiTextEvent } from "./agent/tool-events.js";
 
 function rpcTraceEvent(event, { taskId, agentKey }) {
   if (!event || typeof event !== "object") return null;
+  if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") return mapPiTextEvent(event, { taskId, agentKey })[0] || null;
   const allowed = {
     task_id: taskId || null,
     agent: agentKey || null,
@@ -37,8 +39,9 @@ export function createRunAgent({ mode = process.env.PI_AGENT_RUNTIME || "embedde
         if (safe) return context.onEvent?.(safe);
       },
     });
+    const text = String(result?.text || "").trim();
     return {
-      text: String(result?.text || "").trim(),
+      text,
       delivery: result?.delivery || null,
       projectName: result?.delivery?.projectName || context.projectName || null,
       rpc: { exit: result?.exit || null },

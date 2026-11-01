@@ -10,8 +10,8 @@ export function sanitizeLoggedEvent(event = {}) {
   const safe = {};
   for (const [key, value] of Object.entries(event)) {
     if (NEVER_LOG.has(key)) continue;
-    if (typeof value === "string" && ["command", "error", "summary", "assigned_task", "text", "next"].includes(key)) {
-      const max = key === "text" ? 200 : key === "summary" && event.type === "delivery_received" ? 12000 : 2000;
+    if (typeof value === "string" && ["command", "error", "summary", "assigned_task", "text", "delta", "next"].includes(key)) {
+      const max = key === "text" && event.type === "assistant_text" ? 12000 : key === "text" ? 200 : key === "delta" ? 2000 : key === "summary" && event.type === "delivery_received" ? 12000 : 2000;
       safe[key] = redactTraceText(value, max).slice(0, max);
     } else if (key === "artifact_items" && Array.isArray(value)) {
       safe[key] = value.map((item) => ({

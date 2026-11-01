@@ -38,6 +38,9 @@ export type EventRecord = {
   title?: string;
   summary?: string;
   text?: string;
+  delta?: string;
+  message_id?: string | null;
+  confirmed?: boolean;
   error?: string;
   tool?: string;
   command?: string;
@@ -77,6 +80,7 @@ export type DesktopMessage = {
   projects?: string[];
   agents?: Agent[];
   project?: string | null;
+  mcp?: unknown;
   event?: EventRecord;
   events?: EventRecord[];
   requestId?: string | null;
@@ -173,6 +177,7 @@ export type MemoryItem = {
   role: "user" | "assistant" | string;
   text: string;
   at?: string | null;
+  confirmed?: boolean;
 };
 
 export type WorkspaceFileItem = {
