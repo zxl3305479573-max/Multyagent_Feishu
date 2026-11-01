@@ -173,3 +173,19 @@ test("desktop host exposes read-only task memory and workspace file projections"
   assert.equal(files.files[0].size, 42);
   assert.ok(files.files.every((item) => item.projectName === "demo"));
 });
+
+test("desktop host edits, confirms and deletes persisted task memory", async () => {
+  const task = { task_id: "T-1", conversation_memory: [{ role: "user", text: "旧内容" }, { role: "assistant", text: "保留" }] };
+  const calls = [];
+  const taskStore = {
+    list: async () => [task],
+    getRoot: async () => structuredClone(task),
+    update: async (id, patch) => { calls.push([id, patch]); Object.assign(task, patch); return task; },
+  };
+  const host = createDesktopHost({ token: "desktop-session-token-for-tests", eventsFile: ".tmp/no-events.jsonl", taskStore, orchestrator: {} });
+  await host.commandHandlers.memory_update({ taskId: "T-1", id: "T-1:0", text: "新内容", confirmed: true });
+  assert.equal(calls[0][1].conversation_memory[0].text, "新内容");
+  assert.equal(calls[0][1].conversation_memory[0].confirmed, true);
+  await host.commandHandlers.memory_delete({ taskId: "T-1", id: "T-1:0" });
+  assert.equal(calls[1][1].conversation_memory.length, 1);
+});

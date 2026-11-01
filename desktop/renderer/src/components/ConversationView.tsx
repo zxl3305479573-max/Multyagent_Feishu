@@ -190,6 +190,29 @@ function FinalSummary({ event }: { event: EventRecord }) {
   </section>;
 }
 
+function AssistantTexts({ events }: { events: EventRecord[] }) {
+  const byExecution = new Map<string, EventRecord[]>();
+  for (const event of events) {
+    if (event.type !== "assistant_text_delta" && event.type !== "assistant_text") continue;
+    const key = `${event.task_id || "task"}:${event.agent || "agent"}:${event.message_id || "message"}`;
+    byExecution.set(key, [...(byExecution.get(key) || []), event]);
+  }
+  return <>{[...byExecution.entries()].map(([key, items]) => {
+    const deltas = items.filter((event) => event.type === "assistant_text_delta").map((event) => event.delta || "").join("");
+    const final = [...items].reverse().find((event) => event.type === "assistant_text")?.text;
+    const text = final || deltas;
+    if (!text) return null;
+    const agent = items.at(-1)?.agent;
+    return <article className="message agent-message assistant-text-message" data-testid="assistant-message" key={key}>
+      <AgentAvatar state="thinking" label="Agent" className="message-avatar" />
+      <div className="message-body">
+        <div className="message-author">{agent || "Agent"}{!final && <span className="assistant-streaming">正在输入…</span>}</div>
+        <p className="assistant-text-content">{text}</p>
+      </div>
+    </article>;
+  })}</>;
+}
+
 function UserMessage({ event, task, userName, userInitial }: { event: EventRecord; task: Task; userName: string; userInitial: string }) {
   return <article className="message user-message">
     <div className="message-avatar user-avatar" title={userName} aria-label={userName}>{userInitial}</div>
@@ -372,7 +395,7 @@ export function ConversationView({ selected, selectedTask, project, agents, user
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [selected, scrollToBottomRequest, userEvents.length]);
+  }, [selected, scrollToBottomRequest, userEvents.length, taskEvents.length]);
   const approvalGroupKey = approval
     ? groups.find((group) => group.agentKey === approval.agent && group.events.some((event) => event.type === "approval_required" && (!approval.taskId || event.task_id === approval.taskId)))?.key || null
     : null;
@@ -412,6 +435,10 @@ export function ConversationView({ selected, selectedTask, project, agents, user
           : <div className="conversation-empty">{skin.assets.emptyConversation ? <img className="conversation-empty-visual" src={skin.assets.emptyConversation} alt="" aria-hidden="true" /> : <span className="neutral-empty-visual" aria-hidden="true">A</span>}<span>暂无任务记录</span></div>)}
         {userEvents.map((event, turn) => <React.Fragment key={event.event_id || `request-${turn}`}>
           <UserMessage event={event} task={selectedTask} userName={userName} userInitial={userInitial} />
+          <AssistantTexts events={taskEvents.slice(
+            taskEvents.indexOf(event) + 1,
+            userEvents[turn + 1] ? taskEvents.indexOf(userEvents[turn + 1]) : undefined,
+          )} />
           {renderExecutionTurn(turn)}
         </React.Fragment>)}
         {[...new Set(groups.filter((group) => group.turn >= userEvents.length).map((group) => group.turn))].map((turn) => <React.Fragment key={`turn-${turn}`}>{renderExecutionTurn(turn)}</React.Fragment>)}

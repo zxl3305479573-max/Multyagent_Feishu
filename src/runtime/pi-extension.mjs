@@ -61,7 +61,7 @@ export function rpcArtifactsDir({ root = process.cwd(), taskId, projectName, art
   return artifactsDir ? resolve(root, artifactsDir) : resolve(root, artifactsDirFor(taskId, projectName));
 }
 
-export function createRpcExtension(api, { context, tools, root = process.cwd() } = {}) {
+export function createRpcExtension(api, { context, tools, root = process.cwd(), mcpService = null } = {}) {
   if (!context) throw new Error("RPC context is required");
   if (!tools) throw new Error("RPC tool factories are required");
   let activeProject = context.projectName || null;
@@ -76,6 +76,11 @@ export function createRpcExtension(api, { context, tools, root = process.cwd() }
 
   // 任务级权限（切片的写入白名单等）随 RPC 上下文传入，与内置模式同样生效。
   tools.createPolicyFactory(agent, getProjectName, () => context.taskPermissions || null)(api);
+
+  if (!context.statusQuery && mcpService) {
+    for (const tool of tools.mcpToolsForRole(context.agentKey, mcpService)) api.registerTool(tool);
+    api.on("session_shutdown", () => mcpService.stopAll());
+  }
 
   if (!context.statusQuery) {
     api.registerTool(tools.createDeliverTool({
@@ -109,5 +114,7 @@ export default async function rpcExtension(api) {
   const context = rpcContextFromEnv();
   if (!context) throw new Error(`${RPC_CONTEXT_ENV} is required for the RPC extension`);
   const tools = await import("../pi-agent.js");
-  createRpcExtension(api, { context, tools });
+  const mcpService = context.statusQuery ? null : new tools.McpService({ file: process.env.PI_MCP_CONFIG_FILE || "runtime/mcp.json" });
+  if (mcpService) await mcpService.startAll();
+  createRpcExtension(api, { context, tools, mcpService });
 }

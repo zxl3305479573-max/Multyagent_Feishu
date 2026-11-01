@@ -1,5 +1,7 @@
 import { createDesktopControlServer } from "./desktop-control.js";
 import { forEachEvent } from "./event-log.js";
+import { readdir, stat } from "node:fs/promises";
+import { relative, resolve } from "node:path";
 
 const rootOf = (taskId) => String(taskId || "").split(":")[0];
 
@@ -11,7 +13,7 @@ async function scopedSource(tickets, { sourceId, projectName }) {
   return source;
 }
 
-export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, recordEvent, agents, submitTask, createProject, listProjects, exportProject, cleanupHistory, restoreHistory, tickets = null, capabilities = null, customAgents = null, runtimeConfig = null, host, port } = {}) {
+export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, recordEvent, agents, submitTask, createProject, listProjects, listProjectRoots, exportProject, cleanupHistory, restoreHistory, tickets = null, capabilities = null, customAgents = null, runtimeConfig = null, mcp = null, host, port } = {}) {
   const requireCapabilities = () => {
     if (!capabilities) throw new Error("能力管理不可用");
     return capabilities;
@@ -27,6 +29,10 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
   const requireRuntimeConfig = () => {
     if (!runtimeConfig) throw new Error("模型切换不可用");
     return runtimeConfig;
+  };
+  const requireMcp = () => {
+    if (!mcp) throw new Error("MCP 功能不可用");
+    return mcp;
   };
   if (!taskStore || !orchestrator) throw new TypeError("desktop host requires taskStore and orchestrator");
   const commandHandlers = {
@@ -109,9 +115,34 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
           role: entry.role === "assistant" ? "assistant" : "user",
           text: String(entry.text).slice(0, 3000),
           at: entry.at || task.updated_at || task.created_at || null,
+          confirmed: entry.confirmed === true,
         })))
         .sort((left, right) => Date.parse(right.at || "") - Date.parse(left.at || ""));
       return { items: items.slice(0, 1000) };
+    },
+    async memory_update({ taskId, id, text, confirmed } = {}) {
+      const task = await taskStore.getRoot?.(taskId) || await taskStore.get?.(rootOf(taskId));
+      const index = Number(String(id || "").split(":").at(-1));
+      if (!task || !Number.isInteger(index) || index < 0 || !task.conversation_memory?.[index] || typeof task.conversation_memory[index] !== "object") throw new Error("找不到这条记忆");
+      const memory = [...task.conversation_memory];
+      const entry = { ...memory[index] };
+      if (text !== undefined) {
+        const nextText = String(text || "").trim().slice(0, 3000);
+        if (!nextText) throw new Error("记忆内容不能为空");
+        entry.text = nextText;
+      }
+      if (confirmed !== undefined) entry.confirmed = confirmed === true;
+      memory[index] = entry;
+      await taskStore.update(task.task_id, { conversation_memory: memory });
+      return { updated: true };
+    },
+    async memory_delete({ taskId, id } = {}) {
+      const task = await taskStore.getRoot?.(taskId) || await taskStore.get?.(rootOf(taskId));
+      const index = Number(String(id || "").split(":").at(-1));
+      if (!task || !Number.isInteger(index) || index < 0 || index >= (task.conversation_memory?.length || 0)) throw new Error("找不到这条记忆");
+      const memory = task.conversation_memory.filter((_, position) => position !== index);
+      await taskStore.update(task.task_id, { conversation_memory: memory });
+      return { deleted: true };
     },
     // Read-only projection over the append-only event log. It never opens or mutates files.
     async workspace_files({ projectName } = {}) {
@@ -147,6 +178,34 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
           });
         }
       });
+      if (typeof listProjectRoots === "function") {
+        const roots = await listProjectRoots(projectName);
+        let projectFileCount = 0;
+        for (const project of roots || []) {
+          if (projectFileCount >= 5000) break;
+          if (!project.storagePath) continue;
+          const root = resolve(String(project.storagePath));
+          const walk = async (dir) => {
+            let entries;
+            try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+            for (const entry of entries) {
+              if (projectFileCount >= 5000) return;
+              if (entry.name === ".git" || entry.name === "node_modules") continue;
+              const absolute = resolve(dir, entry.name);
+              if (entry.isDirectory()) await walk(absolute);
+              else if (entry.isFile()) {
+                const rel = relative(root, absolute).replaceAll("\\", "/");
+                const path = `workspace/${project.name}/${rel}`;
+                const key = `${project.name}:${path}`;
+                const info = await stat(absolute).catch(() => null);
+                if (!files.has(key)) files.set(key, { path, projectName: project.name, taskId: null, eventType: "directory_listing", description: "项目目录中的文件", size: info?.size, timestamp: info?.mtime?.toISOString() || null });
+                projectFileCount += 1;
+              }
+            }
+          };
+          if (root) await walk(root);
+        }
+      }
       return {
         files: [...files.values()]
           .sort((left, right) => Date.parse(right.timestamp || "") - Date.parse(left.timestamp || ""))
@@ -190,6 +249,19 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
       await recordEvent?.({ type: "capability_removed", kind, name, channel: "desktop" });
       return result;
     },
+    async mcp_list() { return requireMcp().list(); },
+    async mcp_save(input = {}) {
+      const server = await requireMcp().save(input);
+      await recordEvent?.({ type: "mcp_server_saved", server_id: server.id, channel: "desktop" });
+      return { server };
+    },
+    async mcp_set_enabled({ id, enabled } = {}) {
+      const server = await requireMcp().setEnabled(id, enabled === true);
+      await recordEvent?.({ type: "mcp_server_toggled", server_id: server.id, enabled: server.enabled, channel: "desktop" });
+      return { server };
+    },
+    async mcp_reconnect({ id } = {}) { return { server: await requireMcp().connect(id) }; },
+    async mcp_remove({ id } = {}) { return requireMcp().remove(id); },
     // 自定义 Agent：保存后需重启服务才会加载（角色配置在启动时校验）。
     async custom_agents_list() {
       return requireCustomAgents().list();

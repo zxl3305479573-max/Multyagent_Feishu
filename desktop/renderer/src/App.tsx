@@ -185,7 +185,7 @@ export function App() {
   const taskDuration = taskStartedAt ? Math.max(0, (settledAt ? Date.parse(settledAt) : now) - Date.parse(taskStartedAt)) : null;
   const agentExecutionGroups = useMemo<AgentExecutionGroup[]>(() => {
     const groups = splitConversationTurns(taskEvents).flatMap((turn) => {
-      return groupAgentExecutionInstances(turn.events.filter((event) => event.type !== "final_summary")).map(({ agentKey, executionId, events: groupEvents }) => {
+      return groupAgentExecutionInstances(turn.events.filter((event) => !["final_summary", "assistant_text_delta", "assistant_text"].includes(event.type || ""))).map(({ agentKey, executionId, events: groupEvents }) => {
         const sortedEvents = groupEvents.sort((a, b) => eventTime(a) - eventTime(b));
         const finalResult = finalResultOf(sortedEvents);
         const timing = executionTiming(sortedEvents, now, settledAt);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, createProjectTool, diagramSkillPaths, extractText, mapPiToolEvent, normalizeAssignments, sanitizeAgentReply } from "../src/pi-agent.js";
+import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, createProjectTool, diagramSkillPaths, extractText, mapPiTextEvent, mapPiToolEvent, normalizeAssignments, sanitizeAgentReply } from "../src/pi-agent.js";
 import { appendProjectSummary } from "../src/project-summary.js";
 import { describeToolCall } from "../src/agent/tool-events.js";
 
@@ -221,6 +221,13 @@ test("Pi 工具事件映射为命令、文件变化和测试状态，不包含�
   assert.equal(result[1].file_path, "src/auth.js");
   assert.equal(JSON.stringify(result).includes("secret file contents"), false);
   assert.equal(JSON.stringify(result).includes("file content must not be logged"), false);
+});
+
+test("Pi text_delta 映射为桌面增量事件", () => {
+  assert.deepEqual(mapPiTextEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "你好" } }, {
+    taskId: "T-1:pm", parentTaskId: "T-1", agentKey: "project_manager", messageId: "m-1",
+  }), [{ task_id: "T-1:pm", parent_task_id: "T-1", agent: "project_manager", type: "assistant_text_delta", message_id: "m-1", delta: "你好" }]);
+  assert.deepEqual(mapPiTextEvent({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "hidden" } }, { taskId: "T-1" }), []);
 });
 
 test("每次工具调用都有简短说明且不泄露参数中的密钥", () => {

@@ -66,3 +66,17 @@ export function mapPiToolEvent(event = {}, context = {}, previous = {}) {
   }
   return [];
 }
+
+export function mapPiTextEvent(event = {}, context = {}) {
+  if (event.type !== "message_update" || event.assistantMessageEvent?.type !== "text_delta") return [];
+  const delta = String(event.assistantMessageEvent.delta || "");
+  if (!delta) return [];
+  return [{
+    task_id: context.taskId || null,
+    parent_task_id: context.parentTaskId || null,
+    agent: context.agentKey || null,
+    type: "assistant_text_delta",
+    message_id: context.messageId || context.correlationId || null,
+    delta,
+  }];
+}

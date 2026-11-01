@@ -31,13 +31,17 @@ import { createPolicyFactory } from "./agent/policy-gate.js";
 import { getCapabilityRegistry } from "./capabilities/index.js";
 import { configuredThinking, prepareModelConfig, selectedModel } from "./model-config.js";
 import { buildPrompt, buildSystemPrompt, DEFAULT_TOOLS, extractText, sanitizeAgentReply } from "./agent/prompts.js";
-import { mapPiToolEvent } from "./agent/tool-events.js";
+import { mapPiTextEvent, mapPiToolEvent } from "./agent/tool-events.js";
 import { buildTaskPlanRoleLimits, createAgentCliTool, createDeliverTool, createProjectTool, createTaskStatusTool } from "./agent/tools.js";
+import { getMcpService, mcpToolsForRole } from "./mcp/index.js";
 
 // 对外接口保持不变：策略闸门、提示构造、事件映射和受控工具已拆到 src/agent/ 下，这里统一转出。
 export { createPolicyFactory, SENSITIVE_PATTERNS } from "./agent/policy-gate.js";
 export { buildPrompt, buildSystemPrompt, extractText, sanitizeAgentReply } from "./agent/prompts.js";
 export { mapPiToolEvent } from "./agent/tool-events.js";
+export { mapPiTextEvent } from "./agent/tool-events.js";
+export { McpService } from "./mcp/service.js";
+export { mcpToolsForRole } from "./mcp/index.js";
 export { createAgentCliTool, createDeliverTool, createProjectTool, createTaskStatusTool, normalizeAssignments } from "./agent/tools.js";
 
 // The diagram-design skill is intentionally scoped to the planning/design
@@ -184,6 +188,7 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
       customTools.push(createTaskStatusTool({ taskId: context.taskId, chatId: context.chatId }));
     }
   }
+  if (!context.statusQuery) customTools.push(...mcpToolsForRole(agent.key, getMcpService()));
 
   const { session } = await createAgentSession({
     model,
@@ -209,7 +214,10 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
   try {
     session.subscribe((event) => {
       if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
-        reply += event.assistantMessageEvent.delta;
+        const delta = String(event.assistantMessageEvent.delta || "");
+        reply += delta;
+        const mapped = mapPiTextEvent(event, { ...context, agentKey: context.agentKey || agent.key });
+        if (mapped.length) emitTrace(mapped);
       }
       if (event.type === "tool_execution_start") toolInputs.set(event.toolCallId, event.args || {});
       emitTrace(mapPiToolEvent(event, context, toolInputs.get(event.toolCallId) || {}));
@@ -225,8 +233,16 @@ export async function runAgent(agent, text, context, { sessionFile } = {}) {
       const last = [...session.messages].reverse().find((m) => m.role === "assistant");
       reply = extractText(last);
     }
+    const finalText = sanitizeAgentReply(reply) || "（Agent 未返回文本结果）";
+    await context.onEvent?.({
+      type: "assistant_text",
+      task_id: context.taskId || null,
+      message_id: context.messageId || context.correlationId || null,
+      agent: context.agentKey || agent.key,
+      text: finalText,
+    });
     return {
-      text: sanitizeAgentReply(reply) || "（Agent 未返回文本结果）",
+      text: finalText,
       sessionFile: session.sessionFile || sessionFile || null,
       delivery,
       projectName: activeProject || null,
