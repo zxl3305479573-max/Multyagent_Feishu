@@ -12,6 +12,8 @@ export type SkinAssets = {
   toolRobotIcon?: string;
   logo?: string;
   emptyState?: string;
+  emptyConversation?: string;
+  emptyTasks?: string;
   moods?: SkinMoodAssets;
   robots?: SkinRobotAssets;
   favicon?: SkinFaviconAssets;
