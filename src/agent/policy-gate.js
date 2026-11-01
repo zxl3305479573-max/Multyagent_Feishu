@@ -28,6 +28,38 @@ export const SENSITIVE_PATTERNS = [
   /\.git\/config/i,
 ];
 
+export function checkMcpToolCall(toolName, input = {}, { allowedTools = null, cwd = process.cwd(), allowedPaths = null } = {}) {
+  if (!String(toolName || "").startsWith("mcp_")) return null;
+  if (allowedTools && !allowedTools.has(toolName)) return { block: true, reason: "MCP 工具不在当前 Agent 的连接工具列表中" };
+  const raw = JSON.stringify(input || {});
+  if (SENSITIVE_PATTERNS.some((re) => re.test(raw))) return { block: true, reason: "策略禁止 MCP 工具访问敏感文件或凭据" };
+  const hasCredentialField = (value) => {
+    if (!value || typeof value !== "object") return false;
+    return Object.entries(value).some(([key, child]) => /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret)/i.test(key)
+      || hasCredentialField(child));
+  };
+  if (hasCredentialField(input)) return { block: true, reason: "策略禁止向 MCP 工具传递密钥字段" };
+  if (Array.isArray(allowedPaths)) {
+    const requested = [];
+    const visit = (value, key = "") => {
+      if (value && typeof value === "object") {
+        for (const [childKey, child] of Object.entries(value)) visit(child, childKey);
+      } else if (typeof value === "string" && /^(?:path|file|filename|uri|directory)$/i.test(key)) requested.push(value);
+    };
+    visit(input);
+    for (const value of requested) {
+      const target = resolve(cwd, value);
+      const inside = allowedPaths.some((root) => {
+        const base = resolve(cwd, root);
+        const part = relative(base, target);
+        return part === "" || (!part.startsWith("..") && !isAbsolute(part));
+      });
+      if (!inside) return { block: true, reason: "MCP 工具路径超出当前角色允许范围" };
+    }
+  }
+  return null;
+}
+
 // 每个角色一个策略工厂：闭包捕获该角色的写路径白名单/黑名单。
 export function createPolicyFactory(agent, projectNameOrGetter, taskPermissionsGetter = null, { acquireLock = acquireProjectLock } = {}) {
   const cfg = policy.agents?.[agent.key] ?? {};
@@ -50,6 +82,17 @@ export function createPolicyFactory(agent, projectNameOrGetter, taskPermissionsG
       if (Array.isArray(taskPermissions.toolAllowlist) && taskPermissions.toolAllowlist.length && !taskPermissions.toolAllowlist.includes(event.toolName)) {
         return { block: true, reason: `当前任务白名单不允许工具：${event.toolName}` };
       }
+      const currentProject = getProjectName();
+      const rolePaths = resolveWritePaths(cfg.writePaths || [], currentProject);
+      const taskPaths = taskPermissions.fileReadAllowlist || taskPermissions.fileWriteAllowlist;
+      const allowedPaths = Array.isArray(taskPaths) && taskPaths.length
+        ? rolePaths.filter((root) => taskPaths.some((taskRoot) => {
+          const relativePath = relative(resolve(ctx?.cwd || process.cwd(), taskRoot), resolve(ctx?.cwd || process.cwd(), root));
+          return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+        }))
+        : rolePaths;
+      const mcpPolicy = checkMcpToolCall(event.toolName, event.input, { cwd: ctx?.cwd || process.cwd(), allowedPaths });
+      if (mcpPolicy) return mcpPolicy;
       // 1. 敏感文件拦截（全局，所有工具）
       const raw = [event.input?.path, event.input?.command, event.input?.pattern]
         .filter(Boolean)

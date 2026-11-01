@@ -178,6 +178,7 @@ function buildEnvCatalog({ roles = roleConfig().roles } = {}) {
         { key: "PI_CHECKPOINTS_FILE", label: "暂停检查点文件", type: "path", managedDefault: true, advanced: true },
         { key: "PI_PLAN_RUNS_FILE", label: "计划进度文件", type: "path", managedDefault: true, advanced: true },
         { key: "PI_PROJECTS_FILE", label: "项目登记文件", type: "path", default: "runtime/projects.json", advanced: true },
+        { key: "PI_MCP_CONFIG_FILE", label: "MCP 配置文件", type: "path", default: "runtime/mcp.json", advanced: true },
         { key: "PI_LEGACY_TASKS_FILE", label: "旧版任务文件（迁移用）", type: "path", managedDefault: true, advanced: true },
         { key: "PI_TASKS_FILE", label: "任务状态文件（旧名）", type: "path", advanced: true, description: "旧版本变量名，优先级低于“任务状态文件”。" },
         { key: "PI_LOCK_FILE", label: "单实例锁文件", type: "path", managedDefault: true, advanced: true },

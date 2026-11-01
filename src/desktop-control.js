@@ -103,7 +103,7 @@ export function createDesktopControlServer({
       }
       const scopedProject = clientProjects.get(client);
       // 新建项目、机器人能力和自定义 Agent 属于全局配置，不受当前项目作用域限制。
-      if (scopedProject && message.command !== "create_project" && !/^(?:capabilities_|custom_agents_)/.test(String(message.command || ""))) {
+      if (scopedProject && message.command !== "create_project" && !/^(?:capabilities_|custom_agents_|mcp_)/.test(String(message.command || ""))) {
         const requestedProject = message.projectName || message.project || null;
         const task = message.taskId ? await taskFor(message.taskId) : null;
         const effectiveProject = requestedProject || task?.project_name || null;
