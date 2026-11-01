@@ -3,7 +3,7 @@
  * 新增 token 时同时更新这里和每个 skins/*.ts；test/skins.test.js 会防止遗漏。
  */
 export const tokenNames = [
-  "--color-scheme", "--color-primary", "--color-primary-hover", "--color-primary-contrast", "--color-primary-soft", "--color-primary-border",
+  "--color-scheme", "--color-primary", "--color-primary-hover", "--color-primary-contrast", "--color-primary-soft", "--color-primary-border", "--color-action", "--color-action-hover", "--color-action-contrast",
   "--color-bg", "--color-surface", "--color-surface-raised", "--color-surface-sunken", "--color-surface-hover",
   "--color-text", "--color-text-muted", "--color-text-subtle", "--color-border", "--color-border-strong",
   "--color-danger", "--color-danger-soft", "--color-success", "--color-success-soft",

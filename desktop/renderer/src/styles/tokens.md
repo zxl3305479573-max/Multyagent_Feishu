@@ -23,6 +23,7 @@ html[data-skin="night"] {
 | `--color-primary-hover` | 主操作悬停色。 |
 | `--color-primary-contrast` | 置于主色上的前景文字/图标色。 |
 | `--color-primary-soft` / `--color-primary-border` | 主色相关的弱强调背景和边界。 |
+| `--color-action` / `--color-action-hover` / `--color-action-contrast` | 深色主操作（胶囊按钮）及其悬停、前景色；蓝色 `--color-primary` 仍只承担选中、链接和焦点强调。 |
 | `--color-bg` | 应用最底层背景。 |
 | `--color-surface` | 普通、次级表面。 |
 | `--color-surface-raised` | 卡片、菜单、输入框等抬升表面。 |
