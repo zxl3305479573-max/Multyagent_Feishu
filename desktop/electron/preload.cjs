@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld("desktop", {
     save: (changes) => ipcRenderer.invoke("desktop:settings:save", changes),
   },
   restartGateway: () => ipcRenderer.invoke("desktop:gateway:restart"),
+  gatewayStatus: () => ipcRenderer.invoke("desktop:gateway:status"),
   selectDirectory: () => ipcRenderer.invoke("desktop:select-directory"),
   openFile: (filePath, projectName) => ipcRenderer.invoke("desktop:open-file", filePath, projectName),
   show: () => ipcRenderer.invoke("desktop:window:show"),
