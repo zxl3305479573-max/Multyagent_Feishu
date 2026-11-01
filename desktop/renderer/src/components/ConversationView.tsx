@@ -7,6 +7,7 @@ import { RuntimeModelPicker } from "./RuntimeModelPicker";
 import { ModeBar } from "./ModeBar";
 import type { RuntimeConfig, TaskModes } from "../types";
 import { useSkinPack } from "../themes/SkinContext";
+import { createSkinAnimationAdapter, moodStateForTaskStatus } from "../themes/animation";
 
 // 规划模式下等待确认的内容：最近一条 approval_required 之后还没有派发、结算或失败等后续事件。
 const SETTLING_AFTER_APPROVAL = new Set(["dispatch_started", "task_settle", "task_failed", "task_terminated", "task_cancelled", "selection_failed", "control_applied"]);
@@ -79,11 +80,13 @@ function Acceptance({ event, onOpenFile }: { event: EventRecord; onOpenFile: Ope
 
 function ExecutionEvent({ event, agents, onOpenFile }: { event: EventRecord; agents: Agent[]; onOpenFile: OpenFile }) {
   const skin = useSkinPack();
+  const animation = createSkinAnimationAdapter(skin);
   const summary = event.summary || eventLabels[event.type || ""] || "任务状态已更新";
   const isError = event.status === "failed" || event.type?.includes("failed") || event.type === "error";
   const isPlan = Boolean(event.type?.includes("plan") || event.type === "approval_required");
+  const moodState = isError ? "error" : event.type === "approval_required" ? "confirm" : isPlan ? "planning" : event.status === "completed" ? "success" : "thinking";
   return <article className={`message agent-message agent-execution-event ${isError ? "message-error" : ""} ${skin.id === "pear" && isPlan ? "pear-plan-card" : ""}`}>
-    {skin.id === "pear" && skin.assets?.aiAvatar && <img className="pear-message-avatar" src={skin.assets.aiAvatar} alt="Pear Agent" />}
+    {skin.id === "pear" && (animation.mood(moodState) || skin.assets?.aiAvatar) && <img className="pear-message-avatar" src={animation.mood(moodState) || skin.assets?.aiAvatar} alt="Pear Agent" />}
     <div className="message-body">
       <div className="message-author">{isPlan && skin.id === "pear" ? "任务计划" : eventLabels[event.type || ""] || event.type || "事件"}<time>{formatTime(event.timestamp)}</time></div>
       <p>{summary}</p>
@@ -224,10 +227,11 @@ function groupExecutionItems(items: AgentExecutionItem[]): ExecutionBlock[] {
 
 function ToolRun({ executions, agents, onOpenFile }: { executions: ToolExecutionData[]; agents: Agent[]; onOpenFile: OpenFile }) {
   const skin = useSkinPack();
+  const animation = createSkinAnimationAdapter(skin);
   const statuses = executions.map((execution) => toolExecutionStatus(execution.events));
   const runStatus = statuses.includes("failed") ? "failed" : statuses.includes("running") ? "running" : "completed";
   const runRobot = skin.id === "pear"
-    ? (runStatus === "failed" ? skin.assets?.robots?.error : runStatus === "running" ? skin.assets?.robots?.working : skin.assets?.robots?.idle) || skin.assets?.toolRobotIcon
+    ? animation.robot(runStatus === "failed" ? "error" : runStatus === "running" ? "working" : "idle")
     : undefined;
   const failedCount = statuses.filter((status) => status === "failed").length;
   const names = [...new Set(executions.map((execution) => execution.tool))];
@@ -237,7 +241,7 @@ function ToolRun({ executions, agents, onOpenFile }: { executions: ToolExecution
       const status = toolExecutionStatus(execution.events);
       const description = execution.events.find((event) => event.type === "tool_call")?.summary || "调用工具";
       const executionRobot = skin.id === "pear"
-        ? (status === "failed" ? skin.assets?.robots?.error : status === "running" ? skin.assets?.robots?.loading : skin.assets?.robots?.idle) || skin.assets?.toolRobotIcon
+        ? animation.robot(status === "failed" ? "error" : status === "running" ? "loading" : "idle")
         : undefined;
       return <details className={`tool-execution tool-${status}`} key={`tool-${execution.events[0]?.event_id || index}`}>
         <summary>{executionRobot && <img className="pear-tool-robot pear-tool-robot-inline" src={executionRobot} alt="" aria-hidden="true" />}<span className="tool-execution-chevron">›</span><span className="tool-execution-title">{execution.tool}</span><span className="tool-execution-description">{description}</span><span className="tool-execution-status">{statusLabels[status] || status}</span><span className="tool-execution-count">{execution.events.length} 个步骤</span></summary>
@@ -259,11 +263,14 @@ function ExecutionProcess({ group, agents, onOpenFile }: { group: AgentExecution
 type ExecutionBundle = AgentExecutionBundle<AgentExecutionGroup>;
 
 function SubagentExecution({ group, agents, approval, approverName, approving, onApprove, onOpenFile }: { group: AgentExecutionGroup; agents: Agent[]; approval: PendingApproval | null; approverName: string; approving?: boolean; onApprove?: (taskId: string) => void; onOpenFile: OpenFile }) {
+  const skin = useSkinPack();
+  const animation = createSkinAnimationAdapter(skin);
+  const mood = skin.id === "pear" ? animation.mood(moodStateForTaskStatus(group.status)) : undefined;
   return <details className={`subagent-execution subagent-${group.status}`}>
     <summary>
       <span className="message-avatar subagent-avatar">{group.displayName.slice(1, 2)}</span>
       <span className="subagent-summary-main">
-        <span className="subagent-summary-title"><strong>{group.displayName}</strong><span className={`agent-execution-status status-${group.status}`}>{statusLabels[group.status] || group.status}</span></span>
+        <span className="subagent-summary-title"><strong>{group.displayName}</strong>{mood && <img className="pear-mood" src={mood} alt="" aria-hidden="true" />}<span className={`agent-execution-status status-${group.status}`}>{statusLabels[group.status] || group.status}</span></span>
         {group.assignedTask && <small>{group.assignedTask}</small>}
       </span>
       <span className="subagent-summary-meta">{group.toolCount} 次工具 · {group.fileCount} 个文件 · {formatDuration(group.durationMs)}</span>
@@ -278,6 +285,8 @@ function SubagentExecution({ group, agents, approval, approverName, approving, o
 }
 
 function ExecutionGroup({ bundle, agents, approval, approvalGroupKey, approverName, approving, onApprove, onOpenFile }: { bundle: ExecutionBundle; agents: Agent[]; approval: PendingApproval | null; approvalGroupKey: string | null; approverName: string; approving?: boolean; onApprove?: (taskId: string) => void; onOpenFile: OpenFile }) {
+  const skin = useSkinPack();
+  const animation = createSkinAnimationAdapter(skin);
   const instances = bundle.instances;
   const statuses = instances.map((group) => group.status);
   const status = statuses.includes("failed") ? "failed"
@@ -290,11 +299,12 @@ function ExecutionGroup({ bundle, agents, approval, approvalGroupKey, approverNa
   const duration = instances.reduce((sum, group) => sum + (group.durationMs || 0), 0);
   const tasks = [...new Set(instances.map((group) => group.assignedTask).filter(Boolean))];
   const singleInstance = instances.length === 1 ? instances[0] : null;
+  const mood = skin.id === "pear" ? animation.mood(moodStateForTaskStatus(status)) : undefined;
   return <section className="agent-execution-group">
     <header className="agent-execution-overview">
       <span className="message-avatar agent-avatar">{bundle.displayName.slice(0, 1)}</span>
       <div className="agent-execution-overview-copy">
-        <div className="agent-execution-overview-title"><strong>{bundle.displayName}</strong><span className={`agent-execution-status status-${status}`}>{statusLabels[status] || status}</span></div>
+        <div className="agent-execution-overview-title"><strong>{bundle.displayName}</strong>{mood && <img className="pear-mood" src={mood} alt="" aria-hidden="true" />}<span className={`agent-execution-status status-${status}`}>{statusLabels[status] || status}</span></div>
         <p>{tasks.join("；") || `${instances.length} 个执行实例`}</p>
         <div className="agent-execution-meta">
           <span>{instances.length} 个执行实例</span>
@@ -336,6 +346,8 @@ type ConversationProps = {
 };
 
 export function ConversationView({ selected, selectedTask, project, agents, userDisplayName, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, scrollToBottomRequest = 0, onOpenFile, approving = false, onApprove }: ConversationProps) {
+  const skin = useSkinPack();
+  const animation = createSkinAnimationAdapter(skin);
   const userName = userDisplayName.trim() || "我";
   const userInitial = Array.from(userName)[0] || "我";
   const approval = selectedTask && onApprove ? pendingApproval(taskEvents) : null;
@@ -366,9 +378,11 @@ export function ConversationView({ selected, selectedTask, project, agents, user
   };
   const lastUserInputIndex = taskEvents.reduce((last, event, index) => ["task_created", "task_reused"].includes(event.type || "") ? index : last, -1);
   const finalSummary = taskEvents.slice(lastUserInputIndex + 1).reverse().find((event) => event.type === "final_summary");
+  const taskMood = skin.id === "pear" ? animation.mood(moodStateForTaskStatus(snapshotStatus(selectedTask))) : undefined;
   return <div className="conversation-scroll" key={selected || "empty"} ref={scrollRef}>
     {!selectedTask ? (
       <div className="welcome-state">
+        {skin.id === "pear" && skin.assets?.welcomeIllustration && <img className="pear-conversation-empty" src={skin.assets.welcomeIllustration} alt="Pear Agent" />}
         <span className="welcome-mark">A</span>
         <h2>接下来要完成什么？</h2>
         <p>描述目标和约束，项目经理会规划任务并分配给合适的 Agent。</p>
@@ -376,11 +390,11 @@ export function ConversationView({ selected, selectedTask, project, agents, user
       </div>
     ) : (
       <div className="conversation-content">
-        <div className="conversation-task-overview"><strong>{selectedTask.title || "当前任务"}</strong><span>{selectedTask.project_name || project} · {taskStatus(selectedTask)}{taskStartedAt ? ` · 开始 ${formatTime(taskStartedAt)} · 总耗时 ${formatDuration(taskDuration)}` : ""}</span></div>
+        <div className="conversation-task-overview"><strong>{selectedTask.title || "当前任务"}</strong><span>{taskMood && <img className="pear-mood" src={taskMood} alt="" aria-hidden="true" />}{selectedTask.project_name || project} · {taskStatus(selectedTask)}{taskStartedAt ? ` · 开始 ${formatTime(taskStartedAt)} · 总耗时 ${formatDuration(taskDuration)}` : ""}</span></div>
         <QualityGateStrip gates={selectedTask.status_snapshot?.quality_gates} />
         {taskEvents.length === 0 && (taskEventsLoading
           ? <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>
-          : <div className="conversation-empty">暂无任务记录</div>)}
+          : <div className={`conversation-empty ${skin.id === "pear" ? "pear-conversation-empty-state" : ""}`}>{skin.id === "pear" && skin.assets?.emptyConversation && <img src={skin.assets.emptyConversation} alt="" aria-hidden="true" />}<span>暂无任务记录</span></div>)}
         {userEvents.map((event, turn) => <React.Fragment key={event.event_id || `request-${turn}`}>
           <UserMessage event={event} task={selectedTask} userName={userName} userInitial={userInitial} />
           {renderExecutionTurn(turn)}

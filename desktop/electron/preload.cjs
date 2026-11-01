@@ -32,5 +32,6 @@ contextBridge.exposeInMainWorld("desktop", {
   selectDirectory: () => ipcRenderer.invoke("desktop:select-directory"),
   openFile: (filePath, projectName) => ipcRenderer.invoke("desktop:open-file", filePath, projectName),
   show: () => ipcRenderer.invoke("desktop:window:show"),
+  setSkin: (skinId) => ipcRenderer.invoke("desktop:window:set-skin", skinId),
   quit: () => ipcRenderer.invoke("desktop:app:quit"),
 });

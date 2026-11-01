@@ -16,11 +16,13 @@ import robotIdle from "./assets/robots/robot-idle.webp";
 import robotLoading from "./assets/robots/robot-loading.webp";
 import robotWorking from "./assets/robots/robot-working.webp";
 import welcome from "./assets/typing.webp";
+import pointing from "./assets/pointing.webp";
 
 const skin = {
   id: "pear", name: "Pear Agent", description: "雪梨的奶油科技工作台（阶段 1）", colorScheme: "light", preview: ["#FFFCF4", "#FFF5C9", "#79C9F4", "#34405B"],
   assets: {
     aiAvatar: avatar, welcomeIllustration: welcome, toolRobotIcon: robot, logo, emptyState,
+    emptyConversation: pointing, emptyTasks: pointing,
     moods: { happy: moodHappy, thinking: moodThinking, puzzled: moodPuzzled, surprised: moodSurprised, sleepy: moodSleepy },
     robots: { idle: robotIdle, working: robotWorking, loading: robotLoading, error: robotError },
     favicon: { png32: favicon32, png64: favicon64, png256: favicon256 },

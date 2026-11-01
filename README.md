@@ -471,3 +471,7 @@ npm run test:e2e   # 需先 npm run desktop:build；生成 test-results/desktop-
 - [基于 Pi Agent 的多智能体架构设计](docs/superpowers/specs/2026-09-14-pi-multiagent-feishu-architecture.md)
 - [多维表格看板设计](docs/superpowers/specs/2026-09-22-bitable-task-board-design.md) · [控制面与 Trace 设计](docs/superpowers/specs/2026-09-23-bitable-control-trace-design.md)
 - [桌面工作台设计](docs/superpowers/specs/2026-09-30-codex-style-desktop-workspace-design.md)
+
+## Pear Agent 视觉素材补充
+
+需要雪梨给图：梨子角色三视图（正面、侧面、背面），以及打字、挥手、庆祝等动作姿势；当前缺少独立的团队空状态插画。现阶段空状态复用 pointing/typing，状态表现复用五种 moods 与机器人静态图。

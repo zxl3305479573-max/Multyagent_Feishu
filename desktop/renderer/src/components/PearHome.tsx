@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import type { AgentExecutionGroup, EventRecord, Task } from "../types";
 import { snapshotStatus, taskStatus } from "../format";
 import { useSkinPack } from "../themes/SkinContext";
-import { taskStatusMood, taskStatusToken } from "../themes/task-status";
+import { createSkinAnimationAdapter, moodStateForTaskStatus } from "../themes/animation";
+import { taskStatusToken } from "../themes/task-status";
 
 type Props = { selectedTask?: Task; events: EventRecord[]; groups: AgentExecutionGroup[]; onQuickEntry: (prompt: string) => void; children: ReactNode };
 
@@ -13,8 +14,9 @@ export function PearHome({ selectedTask, events, groups, onQuickEntry, children 
   const toolCalls = groups.reduce((total, group) => total + group.toolCount, 0);
   const toolRobotState = groups.some((group) => group.status === "failed") ? "error"
     : groups.some((group) => ["running", "in_progress"].includes(group.status)) ? "working" : "idle";
-  const toolRobot = skin.id === "pear" ? skin.assets?.robots?.[toolRobotState] || skin.assets?.toolRobotIcon : undefined;
-  const mood = skin.id === "pear" ? skin.assets?.moods?.[taskStatusMood(status)] : undefined;
+  const animation = createSkinAnimationAdapter(skin);
+  const toolRobot = skin.id === "pear" ? animation.robot(toolRobotState) : undefined;
+  const mood = skin.id === "pear" ? animation.mood(moodStateForTaskStatus(status)) : undefined;
   const logs = events.filter((event) => event.summary || event.text).slice(-4).reverse();
   return <div className="pear-home">
     <section className="pear-home-main" aria-label="Pear Agent 欢迎区">

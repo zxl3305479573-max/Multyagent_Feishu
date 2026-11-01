@@ -14,7 +14,7 @@ const e2eMode = process.env.PI_DESKTOP_E2E === "1";
 if (e2eMode && process.env.PI_DESKTOP_E2E_USER_DATA) app.setPath("userData", process.env.PI_DESKTOP_E2E_USER_DATA);
 // 自建角色放在数据目录；必须在首次 roleConfig() 之前设定，网关子进程继承同一路径。
 process.env.PI_CUSTOM_ROLES_DIR = join(app.getPath("userData"), "runtime", "custom-roles");
-let win = null; let tray = null; let quitting = false; let gateway = null; let credentials = null; let settings = null; let gatewayStopping = false;
+let win = null; let tray = null; let activeSkinId = null; let quitting = false; let gateway = null; let credentials = null; let settings = null; let gatewayStopping = false;
 const hasSingleInstanceLock = e2eMode || app.requestSingleInstanceLock();
 // 运行设置页展示的全部环境配置（分组、类型、默认值、是否密钥）。
 const envCatalog = buildEnvCatalog();
@@ -78,6 +78,23 @@ function handle(channel, fn) {
 function trayIcon() {
   const image = nativeImage.createFromPath(join(__dirname, "assets", "tray.png"));
   return image.isEmpty() ? nativeImage.createEmpty() : image;
+}
+
+function pearIcon(size) {
+  const image = nativeImage.createFromPath(join(root, "desktop", "renderer", "src", "themes", "skins", "pear", "assets", "favicon", `favicon-${size}.png`));
+  return image.isEmpty() ? null : image;
+}
+
+function setSkinIcons(skinId) {
+  activeSkinId = skinId;
+  const isPear = skinId === "pear";
+  const windowIcon = (isPear ? pearIcon(256) : null) || nativeImage.createFromPath(join(__dirname, "assets", "icon.png"));
+  const trayImage = (isPear ? pearIcon(32) || pearIcon(64) : null) || trayIcon();
+  win?.setIcon(windowIcon);
+  if (tray) {
+    tray.setImage(trayImage);
+    tray.setToolTip(isPear ? "Pear Agent" : "MultyAgent Agent 工作台");
+  }
 }
 
 async function createWindow() {
@@ -247,10 +264,14 @@ async function start() {
     await gateway.restart(env); await waitForGateway(); win?.webContents.reload(); return { restarted: true };
   });
   handle("desktop:window:show", () => showWindow());
+  handle("desktop:window:set-skin", (_event, skinId) => {
+    if (skinId !== null && skinId !== "pear") throw new Error("unsupported skin");
+    setSkinIcons(skinId);
+  });
   handle("desktop:app:quit", () => { quitting = true; app.quit(); });
   await createWindow();
   if (!e2eMode) {
-    tray = new Tray(trayIcon()); tray.setToolTip("MultyAgent Agent 工作台");
+    tray = new Tray(trayIcon()); setSkinIcons(activeSkinId); tray.setToolTip(activeSkinId === "pear" ? "Pear Agent" : "MultyAgent Agent 工作台");
     tray.setContextMenu(Menu.buildFromTemplate([{ label: "显示工作台", click: showWindow }, { type: "separator" }, { label: "退出", click: () => { quitting = true; app.quit(); } }])); tray.on("click", showWindow);
   }
 }

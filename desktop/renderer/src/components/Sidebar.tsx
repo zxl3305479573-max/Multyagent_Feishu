@@ -43,7 +43,10 @@ export function Sidebar(props: Props) {
       <label className="project-picker"><span className="sidebar-label">当前项目</span><select aria-label="选择项目" value={project} onChange={(event) => props.onSelectProject(event.target.value)}><option value="">全部项目</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
       <div className="sidebar-section-heading"><span>最近任务 <b>{tasks.length}</b></span><button className="icon-button" aria-label="刷新任务" title="刷新任务" onClick={props.onRefresh}>↻</button></div>
       <nav className="task-nav" aria-label="最近任务">
-        {tasks.length === 0 ? <div className="sidebar-empty">{project ? "当前项目暂无任务" : "暂无历史任务"}</div> : tasks.map((task) => {
+        {tasks.length === 0 ? <div className={`sidebar-empty ${skin.id === "pear" ? "pear-sidebar-empty" : ""}`}>
+          {skin.id === "pear" && skin.assets?.emptyTasks && <img src={skin.assets.emptyTasks} alt="" aria-hidden="true" />}
+          <span>{project ? "当前项目暂无任务" : "暂无历史任务"}</span>
+        </div> : tasks.map((task) => {
           const status = snapshotStatus(task);
           const mood = skin.id === "pear" ? skin.assets?.moods?.[taskStatusMood(status)] : undefined;
           return <button key={task.task_id} className={`nav-task ${task.task_id === selected ? "is-selected" : ""}`} onClick={() => props.onSelectTask(task.task_id || "")} title={task.title || task.task_id || "未命名任务"}>
