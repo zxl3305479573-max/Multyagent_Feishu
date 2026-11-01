@@ -110,6 +110,28 @@ export function TicketsView({ project, projects, connected, request, onNotice, o
   }
 
   const updatePull = (patch: Partial<TicketSource["pull"]>) => setDraft((current) => current && { ...current, pull: { ...current.pull, ...patch } });
+  const ticketColumns = [
+    { id: "needs", title: "需要处理", statuses: ["new", "awaiting_confirmation"] },
+    { id: "running", title: "进行中", statuses: ["dispatched"] },
+    { id: "done", title: "已完成", statuses: ["completed", "failed", "cancelled", "ignored"] },
+  ];
+
+  const ticketCard = (ticket: Ticket) => <article key={ticket.number} className={`ticket-row priority-${ticket.priority.rank}`}>
+    <div className="ticket-row-main">
+      <span className="ticket-priority">{ticket.priority.label}</span>
+      <strong>#{ticket.number} {ticket.title}</strong>
+      <span className={`ticket-status status-${ticket.status}`}>{STATUS[ticket.status] || ticket.status}</span>
+    </div>
+    {ticket.labels.length > 0 && <div className="message-tags">{ticket.labels.map((label) => <span key={label}>{label}</span>)}</div>}
+    {ticket.body && <p className="ticket-body">{ticket.body}</p>}
+    <div className="ticket-row-actions">
+      {ticket.taskId && <button className="quiet-button" onClick={() => onOpenTask(ticket.taskId!)}>查看任务</button>}
+      {ticket.status !== "dispatched" && <>
+        <input placeholder="补充说明（可选）" value={notes[ticket.number] || ""} onChange={(event) => setNotes({ ...notes, [ticket.number]: event.target.value })} />
+        <button className="project-action-button" disabled={Boolean(busy)} onClick={() => void dispatch(ticket)}>{busy === `dispatch-${ticket.number}` ? "派发中…" : ticket.status === "new" || ticket.status === "awaiting_confirmation" ? "交给项目经理" : "重新交给项目经理"}</button>
+      </>}
+    </div>
+  </article>;
 
   return (
     <div className="central-view settings-content tickets-view">
@@ -149,22 +171,15 @@ export function TicketsView({ project, projects, connected, request, onNotice, o
           </div>
         </div>
         {tickets.length === 0 && busy !== "inbox" && <p className="ticket-empty">没有打开的工单。</p>}
-        {tickets.map((ticket) => <article key={ticket.number} className={`ticket-row priority-${ticket.priority.rank}`}>
-          <div className="ticket-row-main">
-            <span className="ticket-priority">{ticket.priority.label}</span>
-            <strong>#{ticket.number} {ticket.title}</strong>
-            <span className={`ticket-status status-${ticket.status}`}>{STATUS[ticket.status] || ticket.status}</span>
-          </div>
-          {ticket.labels.length > 0 && <div className="message-tags">{ticket.labels.map((label) => <span key={label}>{label}</span>)}</div>}
-          {ticket.body && <p className="ticket-body">{ticket.body}</p>}
-          <div className="ticket-row-actions">
-            {ticket.taskId && <button className="quiet-button" onClick={() => onOpenTask(ticket.taskId!)}>查看任务</button>}
-            {ticket.status !== "dispatched" && <>
-              <input placeholder="补充说明（可选）" value={notes[ticket.number] || ""} onChange={(event) => setNotes({ ...notes, [ticket.number]: event.target.value })} />
-              <button className="project-action-button" disabled={Boolean(busy)} onClick={() => void dispatch(ticket)}>{busy === `dispatch-${ticket.number}` ? "派发中…" : ticket.status === "new" || ticket.status === "awaiting_confirmation" ? "交给项目经理" : "重新交给项目经理"}</button>
-            </>}
-          </div>
-        </article>)}
+        {tickets.length > 0 && <div className="ticket-board">
+          {ticketColumns.map((column) => {
+            const items = tickets.filter((ticket) => column.statuses.includes(ticket.status));
+            return <section key={column.id} className={`ticket-board-column ticket-board-${column.id}`}>
+              <header><span>{column.title}</span><b>{items.length}</b></header>
+              <div>{items.map(ticketCard)}</div>
+            </section>;
+          })}
+        </div>}
       </section>}
       {!active && !draft && <p className="ticket-empty">还没有工单源。添加一个 GitHub 仓库，把 Issues 接到项目经理。</p>}
       {removeTarget && <ConfirmDialog
