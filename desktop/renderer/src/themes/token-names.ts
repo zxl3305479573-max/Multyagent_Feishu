@@ -8,6 +8,8 @@ export const tokenNames = [
   "--color-text", "--color-text-muted", "--color-text-subtle", "--color-border", "--color-border-strong",
   "--color-danger", "--color-danger-soft", "--color-success", "--color-success-soft",
   "--color-warning", "--color-warning-soft", "--color-info", "--color-focus-ring", "--color-overlay", "--color-code-bg", "--color-code-border", "--color-code-text",
+  "--status-pending", "--status-planning", "--status-running", "--status-waiting-approval", "--status-completed", "--status-failed", "--status-cancelled",
+  "--status-pending-bg", "--status-planning-bg", "--status-running-bg", "--status-waiting-approval-bg", "--status-completed-bg", "--status-failed-bg", "--status-cancelled-bg",
   "--radius-sm", "--radius-md", "--radius-lg", "--radius-xl", "--radius-full",
   "--shadow-sm", "--shadow-md", "--shadow-lg", "--shadow-popover",
   "--font-sans", "--font-mono", "--font-size-xs", "--font-size-sm", "--font-size-md", "--font-size-lg", "--font-size-xl", "--font-size-2xl",

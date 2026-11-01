@@ -32,6 +32,20 @@
   --color-code-bg: #242526;
   --color-code-border: #3b3b39;
   --color-code-text: #f4f1ed;
+  --status-pending: #7a7771;
+  --status-planning: #6c61ad;
+  --status-running: #3e6ee8;
+  --status-waiting-approval: #b47b20;
+  --status-completed: #25845b;
+  --status-failed: #ca4d4a;
+  --status-cancelled: #85817b;
+  --status-pending-bg: #f0eeea;
+  --status-planning-bg: #f0edff;
+  --status-running-bg: #edf2ff;
+  --status-waiting-approval-bg: #fff6e5;
+  --status-completed-bg: #eaf7f0;
+  --status-failed-bg: #fff0ef;
+  --status-cancelled-bg: #ebe8e3;
 
   /* Radius */
   --radius-sm: 8px;
