@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const tokenCss = await readFile(join(root, "desktop/renderer/src/styles/tokens.css"), "utf8");
 const contract = [...tokenCss.matchAll(/^\s*(--[\w-]+):/gm)].map((match) => match[1]);
 const skinsDir = join(root, "desktop/renderer/src/themes/skins");
