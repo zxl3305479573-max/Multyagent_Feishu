@@ -154,16 +154,17 @@ type SettingsPage = {
   kind?: "appearance";
 };
 
-function buildSettingsPages(groups: SettingsGroup[], query: string, provider: string, feishuOff: boolean): SettingsPage[] {
+function buildSettingsPages(groups: SettingsGroup[], query: string, provider: string, feishuOff: boolean, category: string): SettingsPage[] {
   const pages: SettingsPage[] = [];
   const appearanceText = "外观 皮肤 跟随系统 默认浅色 深色 暖调柔和 高对比 墨绿森林";
-  if (!query || appearanceText.toLowerCase().includes(query.toLowerCase())) {
+  if ((category === "all" || category === "appearance") && (!query || appearanceText.toLowerCase().includes(query.toLowerCase()))) {
     pages.push({
       key: "appearance:skins", groupId: "appearance", groupTitle: "外观", groupDescription: "只影响本机工作台显示，不会修改运行设置。",
       section: { id: "skins", title: "外观 / 皮肤", description: "选择一套完整设计 token；可随时切回默认浅色。", order: 0 }, fields: [], kind: "appearance",
     });
   }
   for (const group of groups) {
+    if (category !== "all" && group.id !== category) continue;
     const hidden = feishuOff && FEISHU_GROUPS.has(group.id);
     const visible = group.fields.filter((field) => matches(field, query) && (!hidden || field.key === "FEISHU_ENABLED"));
     if (!visible.length) continue;
@@ -208,6 +209,7 @@ export function SettingsView({ onSaved, onNotice }: Props) {
   const [loadError, setLoadError] = useState("");
   const [drafts, setDrafts] = useState<Drafts>({});
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
   const [saving, setSaving] = useState<"" | "save" | "restart">("");
   const [activePage, setActivePage] = useState("");
   const [skinChoice, setSkinChoice] = useState<SkinChoice>(() => getSavedSkinChoice());
@@ -222,7 +224,8 @@ export function SettingsView({ onSaved, onNotice }: Props) {
   const provider = drafts.PI_AGENT_PROVIDER || snapshot?.entries.PI_AGENT_PROVIDER?.effective || "deepseek";
   const feishuOff = (drafts.FEISHU_ENABLED ?? snapshot?.entries.FEISHU_ENABLED?.effective ?? "true") === "false";
   const groups = snapshot?.groups || [];
-  const pages = useMemo(() => buildSettingsPages(groups, query, provider, feishuOff), [groups, query, provider, feishuOff]);
+  const pages = useMemo(() => buildSettingsPages(groups, query, provider, feishuOff, category), [groups, query, provider, feishuOff, category]);
+  const filters = useMemo(() => [{ id: "all", label: "全部" }, { id: "appearance", label: "外观" }, ...groups.map((group) => ({ id: group.id, label: group.title }))], [groups]);
   const navigation = useMemo(() => {
     const grouped = new Map<string, { title: string; pages: SettingsPage[] }>();
     for (const page of pages) {
@@ -294,6 +297,7 @@ export function SettingsView({ onSaved, onNotice }: Props) {
       <div className="settings-toolbar settings-searchbar">
         <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索配置项、二级标题或环境变量名" aria-label="搜索配置项" />
         <span>{query ? `匹配 ${pages.length} 个二级页面` : `共 ${pages.length} 个二级页面`}</span>
+        <nav aria-label="设置分类筛选">{filters.map((filter) => <button key={filter.id} type="button" className={category === filter.id ? "is-selected" : ""} onClick={() => setCategory(filter.id)}>{filter.label}</button>)}</nav>
       </div>
       {pages.length === 0 && <p className="settings-empty">没有匹配“{query}”的配置项</p>}
       {pages.length > 0 && <div className="settings-layout">

@@ -1,0 +1,34 @@
+import type { ReactNode } from "react";
+import type { AgentExecutionGroup, EventRecord, Task } from "../types";
+import { snapshotStatus, taskStatus } from "../format";
+import { useSkinPack } from "../themes/SkinContext";
+import { taskStatusToken } from "../themes/task-status";
+
+type Props = { selectedTask?: Task; events: EventRecord[]; groups: AgentExecutionGroup[]; onQuickEntry: (prompt: string) => void; children: ReactNode };
+
+export function PearHome({ selectedTask, events, groups, onQuickEntry, children }: Props) {
+  const skin = useSkinPack();
+  const brand = skin.brand!;
+  const status = taskStatusToken(snapshotStatus(selectedTask));
+  const toolCalls = groups.reduce((total, group) => total + group.toolCount, 0);
+  const logs = events.filter((event) => event.summary || event.text).slice(-4).reverse();
+  return <div className="pear-home">
+    <section className="pear-home-main" aria-label="Pear Agent 欢迎区">
+      <div className="pear-welcome">
+        {skin.assets?.welcomeIllustration && <img src={skin.assets.welcomeIllustration} alt="Pear Agent 吉祥物与笔记本" />}
+        <div><p>{brand.slogan}</p><h2>{brand.welcomeText}</h2><span>把目标交给 Pear Agent，从思考到交付一路协作。</span></div>
+      </div>
+      <div className="pear-quick-entries" aria-label="快捷任务入口">{brand.quickEntries?.map((entry) => <button key={entry.id} type="button" onClick={() => onQuickEntry(entry.prompt)}>
+        <i aria-hidden="true">{entry.icon}</i><strong>{entry.label}</strong><span>{entry.description}</span>
+      </button>)}</div>
+      <div className="pear-composer-slot">{children}</div>
+    </section>
+    {skin.layout?.taskPanel && <aside className="pear-task-panel" aria-label="当前任务进度">
+      <header><span>任务面板</span><i className={`pear-status pear-status-${status}`}>{selectedTask ? taskStatus(selectedTask) : "等待任务"}</i></header>
+      {selectedTask ? <><strong>{selectedTask.title || "当前任务"}</strong><p>{selectedTask.description || "任务已创建，等待更多执行信息。"}</p>
+        <dl><div><dt>进度</dt><dd>{groups.length ? `${groups.filter((group) => group.status === "completed").length}/${groups.length} 个 Agent` : "准备中"}</dd></div><div><dt>工具调用</dt><dd>{toolCalls} 次</dd></div></dl>
+        <section className="pear-task-logs"><h3>最新日志</h3>{logs.length ? logs.map((event, index) => <p key={event.event_id || index}>{event.summary || event.text}</p>) : <p>尚未收到执行日志</p>}</section>
+      </> : <div className="pear-task-empty">选择快捷入口或描述任务，执行状态、工具调用和日志会显示在这里。</div>}
+    </aside>}
+  </div>;
+}

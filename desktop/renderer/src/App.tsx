@@ -10,7 +10,9 @@ import { NewProjectModal } from "./components/NewProjectModal";
 import { TicketsView } from "./components/TicketsView";
 import { CapabilitiesView } from "./components/CapabilitiesView";
 import { CustomAgentsView } from "./components/CustomAgentsView";
+import { PearHome } from "./components/PearHome";
 import type { TaskModes } from "./types";
+import { useSkinPack } from "./themes/SkinContext";
 
 // 输入框下方模式切换的选择记在本机，下次打开沿用；读写失败（如隐私模式）时用默认值。
 const MODES_KEY = "desktop.taskModes";
@@ -86,6 +88,7 @@ function applyEventsToTasks(tasks: Task[], events: EventRecord[]): Task[] {
 }
 
 export function App() {
+  const skin = useSkinPack();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
@@ -543,6 +546,7 @@ export function App() {
     : workspaceView === "custom_agents" ? "按需求与触发条件设计新的角色"
     : workspaceView === "project" ? project || "全部项目"
       : selectedTask?.project_name || project || "选择项目";
+  const pearHome = workspaceView === "conversation" && !selectedTask && skin.id === "pear" && Boolean(skin.layout?.homeThreeColumn);
 
   return (
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""} ${mobileNavOpen ? "mobile-nav-open" : ""}`}>
@@ -596,7 +600,16 @@ export function App() {
           onSelectProject={(value) => { setProject(value); setSelected(""); }}
           onCommand={projectCommand}
         />}
-        {workspaceView === "conversation" && <ConversationView
+        {pearHome && <PearHome selectedTask={selectedTask} events={taskEvents} groups={agentExecutionGroups} onQuickEntry={setDescription}>
+          <Composer
+            value={description} onChange={setDescription} onSubmit={submitTask} hasTask={false}
+            canSubmit={Boolean(description.trim()) && Boolean(taskProject.trim()) && connection === "已连接"}
+            runtimeConnected={connection === "已连接"} runtimeConfig={runtimeConfig} runtimeBusy={runtimeConfigBusy}
+            onLoadProvider={loadRuntimeModels} onRuntimeChange={(input) => void changeRuntimeConfig(input)} onThinkingChange={changeThinking}
+            executionState="idle" controlBusy={false} onControl={(command) => sendControl(command)} modes={modes} modeAgents={agents} onModesChange={updateModes}
+          />
+        </PearHome>}
+        {workspaceView === "conversation" && !pearHome && <ConversationView
           selected={selected}
           selectedTask={selectedTask}
           project={project}
@@ -613,7 +626,7 @@ export function App() {
           onApprove={(taskId) => void approveTask(taskId)}
         />}
 
-        {workspaceView === "conversation" && <Composer
+        {workspaceView === "conversation" && !pearHome && <Composer
           value={description}
           onChange={setDescription}
           onSubmit={submitTask}

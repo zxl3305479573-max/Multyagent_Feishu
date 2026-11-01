@@ -1,5 +1,6 @@
 import type { Task } from "../types";
 import { snapshotStatus, taskStatus } from "../format";
+import { useSkinPack } from "../themes/SkinContext";
 
 type Props = {
   collapsed: boolean;
@@ -28,9 +29,11 @@ export function connectionClass(connection: string) {
 
 export function Sidebar(props: Props) {
   const { collapsed, project, projects, tasks, selected, connection, projectStats } = props;
+  const skin = useSkinPack();
+  const brandName = skin.brand?.displayName || "Agent 工作台";
   return (
     <aside className="sidebar" aria-label="项目和历史">
-      <div className="brand-row"><span className="brand-mark">A</span><span className="brand-name">Agent 工作台</span><button className="icon-button sidebar-collapse" aria-label={collapsed ? "展开侧栏" : "收起侧栏"} title={collapsed ? "展开侧栏" : "收起侧栏"} onClick={props.onToggleCollapsed}>{collapsed ? "›" : "‹"}</button></div>
+      <div className="brand-row"><span className="brand-mark">{skin.assets?.logo ? <img src={skin.assets.logo} alt="" /> : "A"}</span><span className="brand-name">{brandName}</span><button className="icon-button sidebar-collapse" aria-label={collapsed ? "展开侧栏" : "收起侧栏"} title={collapsed ? "展开侧栏" : "收起侧栏"} onClick={props.onToggleCollapsed}>{collapsed ? "›" : "‹"}</button></div>
       <div className="sidebar-create-actions">
         <button className="project-action-button" onClick={props.onNewProject} title="新建项目"><span>＋</span><span className="sidebar-label">新建项目</span></button>
         <button className="project-action-button" onClick={props.onNewConversation} title="新建项目对话"><span>＋</span><span className="sidebar-label">新建项目对话</span></button>

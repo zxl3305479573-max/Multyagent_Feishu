@@ -6,6 +6,7 @@ import { collectArtifacts, groupExecutionInstancesByAgent, toolExecutionStatus, 
 import { RuntimeModelPicker } from "./RuntimeModelPicker";
 import { ModeBar } from "./ModeBar";
 import type { RuntimeConfig, TaskModes } from "../types";
+import { useSkinPack } from "../themes/SkinContext";
 
 // 规划模式下等待确认的内容：最近一条 approval_required 之后还没有派发、结算或失败等后续事件。
 const SETTLING_AFTER_APPROVAL = new Set(["dispatch_started", "task_settle", "task_failed", "task_terminated", "task_cancelled", "selection_failed", "control_applied"]);
@@ -77,11 +78,14 @@ function Acceptance({ event, onOpenFile }: { event: EventRecord; onOpenFile: Ope
 }
 
 function ExecutionEvent({ event, agents, onOpenFile }: { event: EventRecord; agents: Agent[]; onOpenFile: OpenFile }) {
+  const skin = useSkinPack();
   const summary = event.summary || eventLabels[event.type || ""] || "任务状态已更新";
   const isError = event.status === "failed" || event.type?.includes("failed") || event.type === "error";
-  return <article className={`message agent-message agent-execution-event ${isError ? "message-error" : ""}`}>
+  const isPlan = Boolean(event.type?.includes("plan") || event.type === "approval_required");
+  return <article className={`message agent-message agent-execution-event ${isError ? "message-error" : ""} ${skin.id === "pear" && isPlan ? "pear-plan-card" : ""}`}>
+    {skin.id === "pear" && skin.assets?.aiAvatar && <img className="pear-message-avatar" src={skin.assets.aiAvatar} alt="Pear Agent" />}
     <div className="message-body">
-      <div className="message-author">{eventLabels[event.type || ""] || event.type || "事件"}<time>{formatTime(event.timestamp)}</time></div>
+      <div className="message-author">{isPlan && skin.id === "pear" ? "任务计划" : eventLabels[event.type || ""] || event.type || "事件"}<time>{formatTime(event.timestamp)}</time></div>
       <p>{summary}</p>
       {(event.target || event.tool) && <div className="message-tags">{event.target && <span>分配给 {agents.find((agent) => agent.key === event.target)?.displayName || event.target}</span>}{event.tool && <span>工具 · {event.tool}</span>}</div>}
       {event.command && <pre className="event-code">{event.command}</pre>}
@@ -219,12 +223,13 @@ function groupExecutionItems(items: AgentExecutionItem[]): ExecutionBlock[] {
 }
 
 function ToolRun({ executions, agents, onOpenFile }: { executions: ToolExecutionData[]; agents: Agent[]; onOpenFile: OpenFile }) {
+  const skin = useSkinPack();
   const statuses = executions.map((execution) => toolExecutionStatus(execution.events));
   const runStatus = statuses.includes("failed") ? "failed" : statuses.includes("running") ? "running" : "completed";
   const failedCount = statuses.filter((status) => status === "failed").length;
   const names = [...new Set(executions.map((execution) => execution.tool))];
   return <details className={`tool-run tool-run-${runStatus}`}>
-    <summary><span className="tool-run-chevron">›</span><span className="tool-run-title">工具调用 · {executions.length} 次</span><span className="tool-run-names">{names.join("、")}</span><span className="tool-run-status">{runStatus === "failed" ? `${failedCount} 次失败` : statusLabels[runStatus] || runStatus}</span></summary>
+    <summary>{skin.id === "pear" && skin.assets?.toolRobotIcon && <img className="pear-tool-robot" src={skin.assets.toolRobotIcon} alt="" />}<span className="tool-run-chevron">›</span><span className="tool-run-title">工具调用 · {executions.length} 次</span><span className="tool-run-names">{names.join("、")}</span><span className="tool-run-status">{runStatus === "failed" ? `${failedCount} 次失败` : statusLabels[runStatus] || runStatus}</span></summary>
     <div className="tool-run-content">{executions.map((execution, index) => {
       const status = toolExecutionStatus(execution.events);
       const description = execution.events.find((event) => event.type === "tool_call")?.summary || "调用工具";
