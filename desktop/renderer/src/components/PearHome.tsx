@@ -3,6 +3,7 @@ import type { AgentExecutionGroup, EventRecord, Task } from "../types";
 import { snapshotStatus, taskStatus } from "../format";
 import { useSkinPack } from "../themes/SkinContext";
 import { taskStatusToken } from "../themes/task-status";
+import pointingIllustration from "../themes/skins/pear/assets/pointing.webp";
 
 type Props = { selectedTask?: Task; events: EventRecord[]; groups: AgentExecutionGroup[]; onQuickEntry: (prompt: string) => void; children: ReactNode };
 
@@ -25,10 +26,10 @@ export function PearHome({ selectedTask, events, groups, onQuickEntry, children 
     </section>
     {skin.layout?.taskPanel && <aside className="pear-task-panel" aria-label="当前任务进度">
       <header><span>任务面板</span><i className={`pear-status pear-status-${status}`}>{selectedTask ? taskStatus(selectedTask) : "等待任务"}</i></header>
-      {selectedTask ? <><strong>{selectedTask.title || "当前任务"}</strong><p>{selectedTask.description || "任务已创建，等待更多执行信息。"}</p>
-        <dl><div><dt>进度</dt><dd>{groups.length ? `${groups.filter((group) => group.status === "completed").length}/${groups.length} 个 Agent` : "准备中"}</dd></div><div><dt>工具调用</dt><dd>{toolCalls} 次</dd></div></dl>
-        <section className="pear-task-logs"><h3>最新日志</h3>{logs.length ? logs.map((event, index) => <p key={event.event_id || index}>{event.summary || event.text}</p>) : <p>尚未收到执行日志</p>}</section>
-      </> : <div className="pear-task-empty">选择快捷入口或描述任务，执行状态、工具调用和日志会显示在这里。</div>}
+      <section className="pear-task-section"><h3>当前任务</h3>{selectedTask ? <><strong>{selectedTask.title || "当前任务"}</strong><p>{selectedTask.description || "任务已创建，等待更多执行信息。"}</p></> : <div className="pear-task-empty">{skin.id === "pear" && <img src={pointingIllustration} alt="" />}<span>选择快捷入口或描述任务后，这里会开始记录执行进度。</span></div>}</section>
+      <section className="pear-task-section"><h3>进度</h3><dl><div><dt>Agent</dt><dd>{groups.length ? `${groups.filter((group) => group.status === "completed").length}/${groups.length} 完成` : "等待开始"}</dd></div><div><dt>状态</dt><dd>{selectedTask ? taskStatus(selectedTask) : "待创建"}</dd></div></dl></section>
+      <section className="pear-task-section"><h3>工具调用</h3><div className="pear-task-metric"><b>{toolCalls}</b><span>次工具调用</span></div></section>
+      <section className="pear-task-section pear-task-logs"><h3>日志</h3>{logs.length ? logs.map((event, index) => <p key={event.event_id || index}>{event.summary || event.text}</p>) : <p>尚未收到执行日志</p>}</section>
     </aside>}
   </div>;
 }

@@ -19,10 +19,9 @@
    skins/<id>/
    ├── index.ts
    └── assets/
-       ├── avatar.svg
-       ├── welcome.svg
-       ├── robot.svg
-       └── logo.svg
+       ├── avatar.webp
+       ├── typing.webp
+       └── robot.webp
    ```
 2. 修改小写、短横线分隔的 `id`、中文 `name`、`description`、`colorScheme` 和四个 `preview` 色块。
 3. 为 `tokens` 填写 `tokens.css` 中每一个变量，保存即可被自动发现。
@@ -37,7 +36,27 @@
 - `brand`: `displayName`、`slogan`、`welcomeText`、`quickEntries`。每条 quick entry 有 `id`、`label`、可选 `description` / `icon`，以及写入 composer 的 `prompt`。
 - `layout`: `homeThreeColumn`、`taskPanel`、`extendable` 布尔开关。
 
-组件通过 `useSkinPack()` 读取当前包；未提供的字段必须回退到原产品 UI 和 “Agent 工作台” 名称。`pear/assets` 当前是可替换的占位 SVG：替换同名文件即可，若改用 PNG/WebP，只需改 `index.ts` 的 import。
+组件通过 `useSkinPack()` 读取当前包；未提供的字段必须回退到原产品 UI 和 “Agent 工作台” 名称。素材使用 Vite URL 导入；未交付的品牌素材不绘制角色替代品，应省略该 slot 或使用清晰命名的中性 `placeholder-*.svg`。
+
+## Pear Agent IP 素材
+
+`pear` 阶段 1 使用雪梨交付的真实 IP 图（源仓库为 Super-Sydney `origin/main`）。下表中的 WebP 均已在导入前优化：
+
+| Slot | 包内文件 | 来源 |
+| --- | --- | --- |
+| `aiAvatar` | `skins/pear/assets/avatar.webp` | Super-Sydney `origin/main` `desktop/assets/ip-presets/sydney/avatar.png`，优化为 WebP |
+| `logo` | `skins/pear/assets/avatar.webp` | Super-Sydney `origin/main` `desktop/assets/ip-presets/sydney/avatar.png`，优化为 WebP |
+| `welcomeIllustration` | `skins/pear/assets/typing.webp` | Super-Sydney `origin/main` `desktop/assets/ip-presets/sydney/typing.png`，优化为 WebP |
+| `toolRobotIcon` | `skins/pear/assets/robot.webp` | Super-Sydney `origin/main` `desktop/assets/ip-presets/sydney/team.png` 中持铅笔机器人裁切，优化为 WebP |
+| 任务面板空状态 | `skins/pear/assets/pointing.webp` | Super-Sydney `origin/main` `desktop/assets/ip-presets/sydney/pointing.png`，优化为 WebP |
+
+### 缺失素材
+
+- 三视图（正面／侧面／背面）：尚未提供；阶段 1 UI 未使用，建议透明背景原图。
+- 状态表情（开心／思考／疑惑／惊讶／困倦）：任务状态徽标或后续状态卡可用；建议 64–96px、透明背景。
+- 机器人状态（idle／working／loading／error）：工具调用和执行状态可用；建议 48–64px、透明背景。
+- favicon：应用图标与浏览器页签可用；建议 32／64／256px PNG。
+- 额外空状态插画：项目、历史、失败等空状态可用；建议约 240–320px、透明背景。
 
 ## 首屏与偏好
 
