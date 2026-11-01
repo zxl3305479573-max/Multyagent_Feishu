@@ -21,7 +21,10 @@
    └── assets/
        ├── avatar.webp
        ├── typing.webp
-       └── robot.webp
+       ├── robot.webp
+       ├── moods/
+       ├── robots/
+       └── favicon/
    ```
 2. 修改小写、短横线分隔的 `id`、中文 `name`、`description`、`colorScheme` 和四个 `preview` 色块。
 3. 为 `tokens` 填写 `tokens.css` 中每一个变量，保存即可被自动发现。
@@ -32,7 +35,7 @@
 
 `SkinDefinition` 的基础字段是 `id`、`name`、`description`、`colorScheme`、四个 `preview` 色块和可选 `tokens`。已有颜色皮肤继续提供完整 token 集合。skin pack 还可选提供：
 
-- `assets`: `aiAvatar`、`welcomeIllustration`、`toolRobotIcon`、`logo`、`emptyState`，均为由 Vite 导入的 URL。
+- `assets`: `aiAvatar`、`welcomeIllustration`、`toolRobotIcon`、`logo`、`emptyState`，以及可选 `moods`、`robots`、`favicon`，均为由 Vite 导入的 URL。`moods` 支持 `happy` / `thinking` / `puzzled` / `surprised` / `sleepy`；`robots` 支持 `idle` / `working` / `loading` / `error`；`favicon` 支持 `png32` / `png64` / `png256`。
 - `brand`: `displayName`、`slogan`、`welcomeText`、`quickEntries`。每条 quick entry 有 `id`、`label`、可选 `description` / `icon`，以及写入 composer 的 `prompt`。
 - `layout`: `homeThreeColumn`、`taskPanel`、`extendable` 布尔开关。
 
@@ -49,13 +52,27 @@
 | `welcomeIllustration` | `skins/pear/assets/typing.webp` | Super-Sydney `origin/main` `desktop/assets/ip-presets/sydney/typing.png`，优化为 WebP |
 | `toolRobotIcon` | `skins/pear/assets/robot.webp` | Super-Sydney `origin/main` `desktop/assets/ip-presets/sydney/team.png` 中持铅笔机器人裁切，优化为 WebP |
 | 任务面板空状态 | `skins/pear/assets/pointing.webp` | Super-Sydney `origin/main` `desktop/assets/ip-presets/sydney/pointing.png`，优化为 WebP |
+| `moods.*` | `skins/pear/assets/moods/mood-*.webp` | Pear 已交付状态表情，任务状态的紧凑视觉补充 |
+| `robots.*` | `skins/pear/assets/robots/robot-*.webp` | Pear 已交付工具执行状态机器人 |
+| `favicon.*` | `skins/pear/assets/favicon/favicon-{32,64,256}.png` | Pear 已交付页签图标 |
+
+Pear 仅在素材可用时绘制这些扩展：侧栏最近任务保留既有 `.status-dot` 和状态文字，并在其旁显示 `moods`；任务面板状态 chip 同样显示表情。工具调用的汇总行使用状态机器人，单项等待结果时使用 loading 机器人，缺少某一状态资源时回退到 `toolRobotIcon`。其他皮肤不显示这些新增图像。
+
+| 任务状态 token | 心情 |
+| --- | --- |
+| `pending` | `sleepy` |
+| `planning` | `thinking` |
+| `running` | `thinking` |
+| `waiting-approval` | `puzzled` |
+| `completed` | `happy` |
+| `failed` | `surprised` |
+| `cancelled` | `sleepy` |
+
+`SkinProvider` 在 Pear 激活时将 `favicon.png32` 写入主 `rel="icon"`，并提供 64px 变体；已有的 `apple-touch-icon` 使用 256px 变体。离开含 favicon 的 skin 时会恢复进入 Pear 前的链接属性并删除临时链接。Electron 原生窗口图标仍由主进程在创建窗口时决定，未通过 IPC 改动。
 
 ### 缺失素材
 
 - 三视图（正面／侧面／背面）：尚未提供；阶段 1 UI 未使用，建议透明背景原图。
-- 状态表情（开心／思考／疑惑／惊讶／困倦）：任务状态徽标或后续状态卡可用；建议 64–96px、透明背景。
-- 机器人状态（idle／working／loading／error）：工具调用和执行状态可用；建议 48–64px、透明背景。
-- favicon：应用图标与浏览器页签可用；建议 32／64／256px PNG。
 - 额外空状态插画：项目、历史、失败等空状态可用；建议约 240–320px、透明背景。
 
 ## 首屏与偏好

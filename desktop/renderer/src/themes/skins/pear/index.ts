@@ -2,12 +2,29 @@ import type { SkinDefinition } from "../../types";
 import avatar from "./assets/avatar.webp";
 import logo from "./assets/avatar.webp";
 import emptyState from "./assets/pointing.webp";
+import favicon256 from "./assets/favicon/favicon-256.png";
+import favicon32 from "./assets/favicon/favicon-32.png";
+import favicon64 from "./assets/favicon/favicon-64.png";
+import moodHappy from "./assets/moods/mood-happy.webp";
+import moodPuzzled from "./assets/moods/mood-puzzled.webp";
+import moodSleepy from "./assets/moods/mood-sleepy.webp";
+import moodSurprised from "./assets/moods/mood-surprised.webp";
+import moodThinking from "./assets/moods/mood-thinking.webp";
 import robot from "./assets/robot.webp";
+import robotError from "./assets/robots/robot-error.webp";
+import robotIdle from "./assets/robots/robot-idle.webp";
+import robotLoading from "./assets/robots/robot-loading.webp";
+import robotWorking from "./assets/robots/robot-working.webp";
 import welcome from "./assets/typing.webp";
 
 const skin = {
   id: "pear", name: "Pear Agent", description: "雪梨的奶油科技工作台（阶段 1）", colorScheme: "light", preview: ["#FFFCF4", "#FFF5C9", "#79C9F4", "#34405B"],
-  assets: { aiAvatar: avatar, welcomeIllustration: welcome, toolRobotIcon: robot, logo, emptyState },
+  assets: {
+    aiAvatar: avatar, welcomeIllustration: welcome, toolRobotIcon: robot, logo, emptyState,
+    moods: { happy: moodHappy, thinking: moodThinking, puzzled: moodPuzzled, surprised: moodSurprised, sleepy: moodSleepy },
+    robots: { idle: robotIdle, working: robotWorking, loading: robotLoading, error: robotError },
+    favicon: { png32: favicon32, png64: favicon64, png256: favicon256 },
+  },
   brand: { displayName: "Pear Agent", slogan: "Think · Act · Deliver", welcomeText: "嗨，今天想完成什么任务？", quickEntries: [
     { id: "code", label: "编程开发", description: "实现、排错与代码审查", icon: "⌘", prompt: "请帮我开发这个功能：\n目标：\n技术约束：\n验收标准：" },
     { id: "research", label: "信息研究", description: "检索、比较与提炼结论", icon: "⌕", prompt: "请研究以下问题，并给出可信来源、对比结论与下一步建议：\n" },

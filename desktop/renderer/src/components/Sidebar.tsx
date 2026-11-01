@@ -1,6 +1,7 @@
 import type { Task } from "../types";
 import { snapshotStatus, taskStatus } from "../format";
 import { useSkinPack } from "../themes/SkinContext";
+import { taskStatusMood } from "../themes/task-status";
 
 type Props = {
   collapsed: boolean;
@@ -42,12 +43,14 @@ export function Sidebar(props: Props) {
       <label className="project-picker"><span className="sidebar-label">当前项目</span><select aria-label="选择项目" value={project} onChange={(event) => props.onSelectProject(event.target.value)}><option value="">全部项目</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
       <div className="sidebar-section-heading"><span>最近任务 <b>{tasks.length}</b></span><button className="icon-button" aria-label="刷新任务" title="刷新任务" onClick={props.onRefresh}>↻</button></div>
       <nav className="task-nav" aria-label="最近任务">
-        {tasks.length === 0 ? <div className="sidebar-empty">{project ? "当前项目暂无任务" : "暂无历史任务"}</div> : tasks.map((task) => (
-          <button key={task.task_id} className={`nav-task ${task.task_id === selected ? "is-selected" : ""}`} onClick={() => props.onSelectTask(task.task_id || "")} title={task.title || task.task_id || "未命名任务"}>
+        {tasks.length === 0 ? <div className="sidebar-empty">{project ? "当前项目暂无任务" : "暂无历史任务"}</div> : tasks.map((task) => {
+          const status = snapshotStatus(task);
+          const mood = skin.id === "pear" ? skin.assets?.moods?.[taskStatusMood(status)] : undefined;
+          return <button key={task.task_id} className={`nav-task ${task.task_id === selected ? "is-selected" : ""}`} onClick={() => props.onSelectTask(task.task_id || "")} title={task.title || task.task_id || "未命名任务"}>
             <span className="nav-task-icon">{(task.title || task.task_id || "A").slice(0, 1).toUpperCase()}</span><span className="nav-task-title">{task.title || task.task_id || "未命名任务"}</span>
-            <span className="nav-task-meta"><span>{task.project_name || "未归属项目"}</span><span className={`status-dot status-${snapshotStatus(task)}`} />{taskStatus(task)}</span>
-          </button>
-        ))}
+            <span className="nav-task-meta"><span>{task.project_name || "未归属项目"}</span><span className={`status-dot status-${status}`} />{mood && <img className="pear-mood" src={mood} alt="" aria-hidden="true" />}{taskStatus(task)}</span>
+          </button>;
+        })}
       </nav>
       <div className="sidebar-bottom">
         <div className={`connection-line ${connectionClass(connection)}`}><span className="connection-dot" />{connection}</div>

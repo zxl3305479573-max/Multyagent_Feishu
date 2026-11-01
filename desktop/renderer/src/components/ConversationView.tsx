@@ -226,15 +226,21 @@ function ToolRun({ executions, agents, onOpenFile }: { executions: ToolExecution
   const skin = useSkinPack();
   const statuses = executions.map((execution) => toolExecutionStatus(execution.events));
   const runStatus = statuses.includes("failed") ? "failed" : statuses.includes("running") ? "running" : "completed";
+  const runRobot = skin.id === "pear"
+    ? (runStatus === "failed" ? skin.assets?.robots?.error : runStatus === "running" ? skin.assets?.robots?.working : skin.assets?.robots?.idle) || skin.assets?.toolRobotIcon
+    : undefined;
   const failedCount = statuses.filter((status) => status === "failed").length;
   const names = [...new Set(executions.map((execution) => execution.tool))];
   return <details className={`tool-run tool-run-${runStatus}`}>
-    <summary>{skin.id === "pear" && skin.assets?.toolRobotIcon && <img className="pear-tool-robot" src={skin.assets.toolRobotIcon} alt="" />}<span className="tool-run-chevron">›</span><span className="tool-run-title">工具调用 · {executions.length} 次</span><span className="tool-run-names">{names.join("、")}</span><span className="tool-run-status">{runStatus === "failed" ? `${failedCount} 次失败` : statusLabels[runStatus] || runStatus}</span></summary>
+    <summary>{runRobot && <img className="pear-tool-robot" src={runRobot} alt="" aria-hidden="true" />}<span className="tool-run-chevron">›</span><span className="tool-run-title">工具调用 · {executions.length} 次</span><span className="tool-run-names">{names.join("、")}</span><span className="tool-run-status">{runStatus === "failed" ? `${failedCount} 次失败` : statusLabels[runStatus] || runStatus}</span></summary>
     <div className="tool-run-content">{executions.map((execution, index) => {
       const status = toolExecutionStatus(execution.events);
       const description = execution.events.find((event) => event.type === "tool_call")?.summary || "调用工具";
+      const executionRobot = skin.id === "pear"
+        ? (status === "failed" ? skin.assets?.robots?.error : status === "running" ? skin.assets?.robots?.loading : skin.assets?.robots?.idle) || skin.assets?.toolRobotIcon
+        : undefined;
       return <details className={`tool-execution tool-${status}`} key={`tool-${execution.events[0]?.event_id || index}`}>
-        <summary><span className="tool-execution-chevron">›</span><span className="tool-execution-title">{execution.tool}</span><span className="tool-execution-description">{description}</span><span className="tool-execution-status">{statusLabels[status] || status}</span><span className="tool-execution-count">{execution.events.length} 个步骤</span></summary>
+        <summary>{executionRobot && <img className="pear-tool-robot pear-tool-robot-inline" src={executionRobot} alt="" aria-hidden="true" />}<span className="tool-execution-chevron">›</span><span className="tool-execution-title">{execution.tool}</span><span className="tool-execution-description">{description}</span><span className="tool-execution-status">{statusLabels[status] || status}</span><span className="tool-execution-count">{execution.events.length} 个步骤</span></summary>
         <div className="tool-execution-content">{execution.events.map((event, eventIndex) => <ExecutionEvent key={event.event_id || `${event.type}-${eventIndex}`} event={event} agents={agents} onOpenFile={onOpenFile} />)}</div>
       </details>;
     })}</div>
