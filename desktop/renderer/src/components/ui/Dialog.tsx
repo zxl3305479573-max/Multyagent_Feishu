@@ -8,7 +8,7 @@ export function Dialog({ children, open = true, onOpenChange, className = "", ar
   return <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="ui-dialog-overlay" />
-      <DialogPrimitive.Content className={`ui-dialog-content project-modal ${className}`} aria-describedby={ariaDescribedBy} role={role}>{children}</DialogPrimitive.Content>
+      <DialogPrimitive.Content className={`ui-dialog-content project-modal ${className}`} aria-describedby={ariaDescribedBy} role={role} onOpenAutoFocus={(event) => { event.preventDefault(); (event.target as HTMLElement | null)?.focus(); }}>{children}</DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   </DialogPrimitive.Root>;
 }

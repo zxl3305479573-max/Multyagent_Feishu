@@ -412,9 +412,10 @@ export function Composer({ value, onChange, onSubmit, hasTask, canSubmit, runtim
     <form className="composer" onSubmit={onSubmit}>
       <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={hasTask ? "继续当前任务…" : "描述你想完成的任务…"} rows={3} aria-label="任务描述" />
       <div className="composer-send-row">
-        <ModeBar value={modes} agents={modeAgents} lockTarget={lockTarget} disabled={!runtimeConnected} onChange={onModesChange} />
-        <RuntimeModelPicker config={runtimeConfig} connected={runtimeConnected} busy={runtimeBusy} onLoadProvider={onLoadProvider} onSelect={onRuntimeChange} onThinking={onThinkingChange} />
-        <button
+        <div className="composer-controls-left"><ModeBar value={modes} agents={modeAgents} lockTarget={lockTarget} disabled={!runtimeConnected} onChange={onModesChange} /></div>
+        <div className="composer-controls-right">
+          <RuntimeModelPicker config={runtimeConfig} connected={runtimeConnected} busy={runtimeBusy} onLoadProvider={onLoadProvider} onSelect={onRuntimeChange} onThinking={onThinkingChange} />
+          <button
           className={`send-button ${executionState === "running" ? "send-button-running" : executionState === "paused" ? "send-button-paused" : ""}`}
           type={controlsTask ? "button" : "submit"}
           disabled={controlsTask ? !runtimeConnected || controlBusy : !canSubmit}
@@ -425,7 +426,8 @@ export function Composer({ value, onChange, onSubmit, hasTask, canSubmit, runtim
           {executionState === "running"
             ? <><span className="send-progress-ring" aria-hidden="true" /><span className="send-pause-icon" aria-hidden="true"><i /><i /></span></>
             : executionState === "paused" ? <span className="send-play-icon" aria-hidden="true">▶</span> : "↑"}
-        </button>
+          </button>
+        </div>
       </div>
     </form>
   </div>;

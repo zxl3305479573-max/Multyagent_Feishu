@@ -44,6 +44,8 @@ html[data-skin="night"] {
 | `--color-focus-ring` | 键盘焦点外圈。 |
 | `--color-overlay` | 遮罩层背景。 |
 | `--color-code-bg` / `--color-code-border` / `--color-code-text` | 日志、代码块等深色语义表面。 |
+| `--status-pending` / `--status-planning` / `--status-running` / `--status-waiting-approval` / `--status-completed` / `--status-failed` / `--status-cancelled` | 任务视图层状态的前景色；不改变后端存储的状态值。 |
+| 上述每个 token 的 `-bg` 变体 | 相应任务状态的浅色背景。 |
 
 ## 圆角与阴影
 
