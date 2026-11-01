@@ -66,6 +66,8 @@ export type EventRecord = {
   skip_reason?: string | null;
   targets?: string[];
   detail?: string;
+  slices?: Array<{ id: string; agent: string; title: string; status: "pending" | "running" | "completed" | "failed" | "interrupted" }>;
+  cleared?: boolean;
 };
 export type Agent = { key: string; displayName?: string; enabled?: boolean; custom?: boolean };
 export type DesktopMessage = {
@@ -86,7 +88,18 @@ export type DesktopSocket = {
   subscribe: (listener: (message: DesktopMessage) => void) => () => void;
   close: () => void;
 };
-export type WorkspaceView = "conversation" | "project" | "settings" | "tickets" | "capabilities" | "custom_agents";
+export type WorkspaceView =
+  | "conversation"
+  | "project"
+  | "settings"
+  | "tickets"
+  | "capabilities"
+  | "custom_agents"
+  | "memory"
+  | "files"
+  | "history"
+  | "permissions"
+  | "monitor";
 export type TicketSource = {
   id: string;
   repo: string;
@@ -152,6 +165,35 @@ export type RuntimeConfig = {
 
 export type CredentialStatus = { encryptionAvailable: boolean; keys: Array<{ key: string; readable: boolean }> };
 
+export type MemoryItem = {
+  id: string;
+  taskId: string;
+  projectName?: string | null;
+  taskTitle: string;
+  role: "user" | "assistant" | string;
+  text: string;
+  at?: string | null;
+};
+
+export type WorkspaceFileItem = {
+  path: string;
+  projectName?: string | null;
+  taskId?: string | null;
+  eventType?: string | null;
+  description?: string;
+  size?: number;
+  timestamp?: string | null;
+};
+
+export type GatewayStatus = {
+  running: boolean;
+  healthy: boolean;
+  pid: number | null;
+  port: number | null;
+  startedAt: string | null;
+  error?: string;
+};
+
 export type SettingsFieldType = "text" | "path" | "number" | "select" | "boolean" | "roles" | "secret";
 export type SettingsField = {
   key: string;
@@ -201,6 +243,7 @@ declare global {
       selectDirectory?: () => Promise<string>;
       openFile?: (filePath: string, projectName?: string) => Promise<{ opened: boolean; error?: string }>;
       setSkin?: (skinId: "pear" | null) => Promise<void>;
+      gatewayStatus?: () => Promise<GatewayStatus>;
       quit?: () => Promise<unknown>;
     };
   }

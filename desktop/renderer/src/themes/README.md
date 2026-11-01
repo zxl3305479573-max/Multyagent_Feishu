@@ -1,6 +1,6 @@
 # 换肤系统
 
-皮肤可以只是对 [`../styles/tokens.css`](../styles/tokens.css) 的全量 CSS 变量覆盖，也可以是携带品牌和布局信息的 skin pack。注册表同时自动发现 `skins/<id>.ts` 和 `skins/<id>/index.ts`，添加皮肤不需要改注册代码。
+皮肤可以只是对 [`../styles/tokens.css`](../styles/tokens.css) 的全量 CSS 变量覆盖，也可以是携带品牌、文案与素材的 skin pack。所有皮肤共用同一套三栏工作台布局；注册表同时自动发现 `skins/<id>.ts` 和 `skins/<id>/index.ts`，添加皮肤不需要改注册代码。
 
 ## 内置皮肤
 
@@ -27,7 +27,7 @@
        └── favicon/
    ```
 2. 修改小写、短横线分隔的 `id`、中文 `name`、`description`、`colorScheme` 和四个 `preview` 色块。
-3. 为 `tokens` 填写 `tokens.css` 中每一个变量，保存即可被自动发现。
+3. 为 `tokens` 填写 `tokens.css` 中每一个变量，保存即可被自动发现。未提供品牌或素材的皮肤会自动合并 [`defaults.ts`](./defaults.ts) 中的中性默认值。
 
 `test/skins.test.js` 会用 `tokens.css` 的实际变量清单检查每个皮肤，漏项、额外项都会失败。`token-names.ts` 同时为 TypeScript 提供同一份受约束的键类型。
 
@@ -36,10 +36,16 @@
 `SkinDefinition` 的基础字段是 `id`、`name`、`description`、`colorScheme`、四个 `preview` 色块和可选 `tokens`。已有颜色皮肤继续提供完整 token 集合。skin pack 还可选提供：
 
 - `assets`: `aiAvatar`、`welcomeIllustration`、`toolRobotIcon`、`logo`、`emptyState`，以及可选 `moods`、`robots`、`favicon`，均为由 Vite 导入的 URL。`moods` 支持 `happy` / `thinking` / `puzzled` / `surprised` / `sleepy`；`robots` 支持 `idle` / `working` / `loading` / `error`；`favicon` 支持 `png32` / `png64` / `png256`。
-- `brand`: `displayName`、`slogan`、`welcomeText`、`quickEntries`。每条 quick entry 有 `id`、`label`、可选 `description` / `icon`，以及写入 composer 的 `prompt`。
-- `layout`: `homeThreeColumn`、`taskPanel`、`extendable` 布尔开关。
+- `brand`: `displayName`、`slogan`、`welcomeText`、`welcomeDescription`、`quickEntries`。每条 quick entry 有 `id`、`label`、可选 `description` / `icon`，以及写入 composer 的 `prompt`。
 
-组件通过 `useSkinPack()` 读取当前包；未提供的字段必须回退到原产品 UI 和 “Agent 工作台” 名称。素材使用 Vite URL 导入；未交付的品牌素材不绘制角色替代品，应省略该 slot 或使用清晰命名的中性 `placeholder-*.svg`。
+皮肤不再声明布局开关。`HomeWorkspace`、`TaskPanel`、计划卡、状态色、空状态、AI 消息头像、心情与机器人槽位都由同一组通用组件渲染；组件只通过 `useSkinPack()` 读取已经合并默认值的 tokens、素材和文案。非 Pear 皮肤没有 IP 素材时显示 CSS 字母头像/中性占位，不会绘制角色替代品。
+
+## 统一布局
+
+- 三栏首页：左侧导航、中间欢迎语/快捷入口/输入框、右侧任务面板。
+- 任务页：中间保留对话与输入框，右侧继续展示当前任务、进度、步骤时间线、工具调用和日志。
+- `TaskPanel` 由真实任务事件推导进度与时间线；`status-*` token 驱动全部状态颜色。
+- 宽度约 1024px 时右栏移到内容下方，侧栏在 720px 以下变为抽屉。
 
 ## Pear Agent IP 素材
 
@@ -68,12 +74,14 @@ Pear 仅在素材可用时绘制这些扩展：侧栏最近任务保留既有 `.
 | `failed` | `surprised` |
 | `cancelled` | `sleepy` |
 
-`SkinProvider` 在 Pear 激活时将 `favicon.png32` 写入主 `rel="icon"`，并提供 64px 变体；已有的 `apple-touch-icon` 使用 256px 变体。离开含 favicon 的 skin 时会恢复进入 Pear 前的链接属性并删除临时链接。Electron 原生窗口图标仍由主进程在创建窗口时决定，未通过 IPC 改动。
+`SkinProvider` 在含 favicon 的皮肤激活时写入主 `rel="icon"`，并提供 64px 变体；已有的 `apple-touch-icon` 使用 256px 变体。离开含 favicon 的皮肤时会恢复原链接属性并删除临时链接。Electron 原生窗口/托盘图标通过既有 `desktop:window:set-skin` IPC 切换：Pear 使用 Pear favicon，其他皮肤使用默认图标。
 
-### 缺失素材
+### 需要雪梨给图
 
-- 三视图（正面／侧面／背面）：尚未提供；阶段 1 UI 未使用，建议透明背景原图。
-- 额外空状态插画：项目、历史、失败等空状态可用；建议约 240–320px、透明背景。
+- 三视图（正面／侧面／背面）：建议每张 1200×1600px，透明 PNG/WebP。
+- 打字、挥手、庆祝 pose：建议每张 1000×1400px，透明 PNG/WebP。
+- 团队空状态插画：建议 1200×900px，透明 PNG/WebP。
+- 阶段四页面插画（记忆、技能、文件、历史、权限、监控）：建议每张 1200×800px，透明 PNG/WebP；未交付前使用统一中性占位。
 
 ## 首屏与偏好
 

@@ -10,9 +10,14 @@ import { NewProjectModal } from "./components/NewProjectModal";
 import { TicketsView } from "./components/TicketsView";
 import { CapabilitiesView } from "./components/CapabilitiesView";
 import { CustomAgentsView } from "./components/CustomAgentsView";
-import { PearHome } from "./components/PearHome";
+import { HomeWorkspace } from "./components/HomeWorkspace";
+import { TaskPanel } from "./components/TaskPanel";
+import { MemoryCenterView } from "./components/MemoryCenterView";
+import { FileManagerView } from "./components/FileManagerView";
+import { TaskHistoryView } from "./components/TaskHistoryView";
+import { PermissionsView } from "./components/PermissionsView";
+import { RuntimeMonitorView } from "./components/RuntimeMonitorView";
 import type { TaskModes } from "./types";
-import { useSkinPack } from "./themes/SkinContext";
 
 // 输入框下方模式切换的选择记在本机，下次打开沿用；读写失败（如隐私模式）时用默认值。
 const MODES_KEY = "desktop.taskModes";
@@ -88,7 +93,6 @@ function applyEventsToTasks(tasks: Task[], events: EventRecord[]): Task[] {
 }
 
 export function App() {
-  const skin = useSkinPack();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
@@ -123,17 +127,17 @@ export function App() {
   const [now, setNow] = useState(Date.now());
   const pendingSubmission = useRef<PendingSubmission | null>(null);
   const [modes, setModes] = useState<TaskModes>(loadModes);
-  const [approving, setApproving] = useState(false);
-  // 规划模式：确认后由编排层继续派发或执行；结果通过事件流回到对话里。
-  const approveTask = async (taskId: string) => {
-    setApproving(true);
+  const [approvalBusy, setApprovalBusy] = useState<"approve" | "reject" | null>(null);
+  // 规划模式：确认或驳回都由既有 approve_task 命令处理，结果通过事件流回到对话里。
+  const resolveApproval = async (taskId: string, choice: "approve" | "reject") => {
+    setApprovalBusy(choice);
     try {
-      await request("approve_task", { taskId });
-      setNotice("已确认，正在执行…");
+      await request("approve_task", { taskId, choice });
+      setNotice(choice === "approve" ? "已确认，正在执行…" : "已驳回，正在交回项目经理…");
     } catch (error) {
-      setNotice(`确认失败：${(error as Error).message}`);
+      setNotice(`${choice === "approve" ? "确认" : "驳回"}失败：${(error as Error).message}`);
     } finally {
-      setApproving(false);
+      setApprovalBusy(null);
     }
   };
   const updateModes = (next: TaskModes) => {
@@ -536,23 +540,34 @@ export function App() {
 
   const headerTitle = workspaceView === "settings" ? "运行设置"
     : workspaceView === "tickets" ? "GitHub 工单"
-    : workspaceView === "capabilities" ? "机器人能力"
+    : workspaceView === "capabilities" ? "技能中心"
     : workspaceView === "custom_agents" ? "自定义 Agent"
+    : workspaceView === "memory" ? "记忆中心"
+    : workspaceView === "files" ? "文件管理"
+    : workspaceView === "history" ? "任务历史"
+    : workspaceView === "permissions" ? "权限管理"
+    : workspaceView === "monitor" ? "运行监控"
     : workspaceView === "project" ? "项目上下文"
       : selectedTask?.title || (selected ? selected : "新建任务");
   const headerSubtitle = workspaceView === "settings" ? "管理全部运行配置"
     : workspaceView === "tickets" ? project || "全部项目"
-    : workspaceView === "capabilities" ? "为各个角色添加 Skill 与插件"
+    : workspaceView === "capabilities" ? "Agent Toolbox · 为角色添加 Skill 与插件"
     : workspaceView === "custom_agents" ? "按需求与触发条件设计新的角色"
+    : workspaceView === "memory" ? "查看任务中真实保存的对话记忆"
+    : workspaceView === "files" ? "汇总任务产物与文件事件"
+    : workspaceView === "history" ? "浏览持久化任务记录"
+    : workspaceView === "permissions" ? "查看角色工具、目录与网络边界"
+    : workspaceView === "monitor" ? "网关健康、任务状态与最近事件"
     : workspaceView === "project" ? project || "全部项目"
       : selectedTask?.project_name || project || "选择项目";
-  const pearHome = workspaceView === "conversation" && !selectedTask && skin.id === "pear" && Boolean(skin.layout?.homeThreeColumn);
+  const homeView = workspaceView === "conversation" && !selectedTask;
 
   return (
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""} ${mobileNavOpen ? "mobile-nav-open" : ""}`}>
       {mobileNavOpen && <button className="sidebar-backdrop" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />}
       <Sidebar
         collapsed={sidebarCollapsed}
+        activeView={workspaceView}
         onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
         project={project}
         projects={projects}
@@ -564,10 +579,15 @@ export function App() {
         connection={connection}
         projectStats={projectStats}
         onOpenProject={() => { setWorkspaceView("project"); setSelected(""); }}
+        onOpenMemory={() => { setWorkspaceView("memory"); setSelected(""); }}
+        onOpenFiles={() => { setWorkspaceView("files"); setSelected(""); }}
+        onOpenHistory={() => { setWorkspaceView("history"); setSelected(""); }}
+        onOpenPermissions={() => { setWorkspaceView("permissions"); setSelected(""); }}
+        onOpenMonitor={() => { setWorkspaceView("monitor"); setSelected(""); }}
         onOpenSettings={showSettings}
-        onOpenTickets={() => setWorkspaceView("tickets")}
-        onOpenCapabilities={() => setWorkspaceView("capabilities")}
-        onOpenCustomAgents={() => setWorkspaceView("custom_agents")}
+        onOpenTickets={() => { setWorkspaceView("tickets"); setSelected(""); }}
+        onOpenCapabilities={() => { setWorkspaceView("capabilities"); setSelected(""); }}
+        onOpenCustomAgents={() => { setWorkspaceView("custom_agents"); setSelected(""); }}
         onNewProject={openNewProject}
         onNewConversation={openNewProjectConversation}
       />
@@ -590,6 +610,25 @@ export function App() {
         {workspaceView === "settings" && <SettingsView onSaved={refreshCredentials} onNotice={setNotice} />}
         {workspaceView === "capabilities" && <CapabilitiesView agents={agents} connected={connection === "已连接"} request={request} onNotice={setNotice} />}
         {workspaceView === "custom_agents" && <CustomAgentsView connected={connection === "已连接"} request={request} onNotice={setNotice} />}
+        {workspaceView === "memory" && <MemoryCenterView project={project} connected={connection === "已连接"} request={request} onNotice={setNotice} />}
+        {workspaceView === "files" && <FileManagerView project={project} connected={connection === "已连接"} request={request} onNotice={setNotice} />}
+        {workspaceView === "history" && <TaskHistoryView tasks={visibleTasks} project={project} onOpenTask={(taskId) => { setSelected(taskId); setWorkspaceView("conversation"); }} />}
+        {workspaceView === "permissions" && <PermissionsView
+          agents={agents}
+          tasks={visibleTasks}
+          connected={connection === "已连接"}
+          request={request}
+          onNotice={setNotice}
+          onOpenTask={(taskId) => { setSelected(taskId); setWorkspaceView("conversation"); }}
+        />}
+        {workspaceView === "monitor" && <RuntimeMonitorView
+          tasks={visibleTasks}
+          events={events}
+          project={project}
+          connection={connection}
+          runtimeConfig={runtimeConfig}
+          onOpenSettings={showSettings}
+        />}
         {workspaceView === "tickets" && <TicketsView project={project} projects={projects} connected={connection === "已连接"} request={request} onNotice={setNotice} onOpenTask={(taskId) => { setSelected(taskId); setWorkspaceView("conversation"); }} />}
         {workspaceView === "project" && <ProjectView
           project={project}
@@ -600,7 +639,7 @@ export function App() {
           onSelectProject={(value) => { setProject(value); setSelected(""); }}
           onCommand={projectCommand}
         />}
-        {pearHome && <PearHome selectedTask={selectedTask} events={taskEvents} groups={agentExecutionGroups} onQuickEntry={setDescription}>
+        {homeView && <HomeWorkspace selectedTask={undefined} events={[]} groups={[]} onQuickEntry={setDescription}>
           <Composer
             value={description} onChange={setDescription} onSubmit={submitTask} hasTask={false}
             canSubmit={Boolean(description.trim()) && Boolean(taskProject.trim()) && connection === "已连接"}
@@ -608,44 +647,51 @@ export function App() {
             onLoadProvider={loadRuntimeModels} onRuntimeChange={(input) => void changeRuntimeConfig(input)} onThinkingChange={changeThinking}
             executionState="idle" controlBusy={false} onControl={(command) => sendControl(command)} modes={modes} modeAgents={agents} onModesChange={updateModes}
           />
-        </PearHome>}
-        {workspaceView === "conversation" && !pearHome && <ConversationView
-          selected={selected}
-          selectedTask={selectedTask}
-          project={project}
-          agents={agents}
-          userDisplayName={userDisplayName}
-          taskEvents={taskEvents}
-          taskEventsLoading={taskEventsLoading}
-          groups={agentExecutionGroups}
-          taskStartedAt={taskStartedAt}
-          taskDuration={taskDuration}
-          scrollToBottomRequest={scrollToBottomRequest}
-          onOpenFile={(event) => void openEventFile(event)}
-          approving={approving}
-          onApprove={(taskId) => void approveTask(taskId)}
-        />}
-
-        {workspaceView === "conversation" && !pearHome && <Composer
-          value={description}
-          onChange={setDescription}
-          onSubmit={submitTask}
-          hasTask={Boolean(selectedTask)}
-          canSubmit={Boolean(description.trim()) && Boolean(selectedTask || taskProject.trim()) && connection === "已连接"}
-          runtimeConnected={connection === "已连接"}
-          runtimeConfig={runtimeConfig}
-          runtimeBusy={runtimeConfigBusy}
-          onLoadProvider={loadRuntimeModels}
-          onRuntimeChange={(input) => void changeRuntimeConfig(input)}
-          onThinkingChange={changeThinking}
-          executionState={currentStatus === "paused" ? "paused" : isTaskActive ? "running" : "idle"}
-          controlBusy={pendingCommand !== null}
-          onControl={(command) => sendControl(command)}
-          modes={modes}
-          modeAgents={agents}
-          lockTarget={selectedTask ? (selectedTask.agent && selectedTask.agent !== "project_manager" ? selectedTask.agent : "team") : null}
-          onModesChange={updateModes}
-        />}
+        </HomeWorkspace>}
+        {workspaceView === "conversation" && selectedTask && <div className="workspace-layout conversation-workspace">
+          <div className="workspace-center conversation-workspace-main">
+            <ConversationView
+              selected={selected}
+              selectedTask={selectedTask}
+              project={project}
+              agents={agents}
+              userDisplayName={userDisplayName}
+              taskEvents={taskEvents}
+              taskEventsLoading={taskEventsLoading}
+              groups={agentExecutionGroups}
+              taskStartedAt={taskStartedAt}
+              taskDuration={taskDuration}
+              scrollToBottomRequest={scrollToBottomRequest}
+              onOpenFile={(event) => void openEventFile(event)}
+              approvalBusy={approvalBusy}
+              onApprove={(taskId) => void resolveApproval(taskId, "approve")}
+              onReject={(taskId) => void resolveApproval(taskId, "reject")}
+              retrying={pendingCommand === "retry"}
+              onRetry={() => sendControl("retry")}
+            />
+            <Composer
+              value={description}
+              onChange={setDescription}
+              onSubmit={submitTask}
+              hasTask
+              canSubmit={Boolean(description.trim()) && connection === "已连接"}
+              runtimeConnected={connection === "已连接"}
+              runtimeConfig={runtimeConfig}
+              runtimeBusy={runtimeConfigBusy}
+              onLoadProvider={loadRuntimeModels}
+              onRuntimeChange={(input) => void changeRuntimeConfig(input)}
+              onThinkingChange={changeThinking}
+              executionState={currentStatus === "paused" ? "paused" : isTaskActive ? "running" : "idle"}
+              controlBusy={pendingCommand !== null}
+              onControl={(command) => sendControl(command)}
+              modes={modes}
+              modeAgents={agents}
+              lockTarget={selectedTask.agent && selectedTask.agent !== "project_manager" ? selectedTask.agent : "team"}
+              onModesChange={updateModes}
+            />
+          </div>
+          <TaskPanel selectedTask={selectedTask} events={taskEvents} groups={agentExecutionGroups} />
+        </div>}
       </section>
 
       {projectModalOpen && <NewProjectModal

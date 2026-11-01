@@ -19,8 +19,13 @@ export type SkinAssets = {
   favicon?: SkinFaviconAssets;
 };
 export type SkinQuickEntry = { id: string; label: string; description?: string; icon?: ReactNode; prompt: string };
-export type SkinBrand = { displayName?: string; slogan?: string; welcomeText?: string; quickEntries?: SkinQuickEntry[] };
-export type SkinLayout = { homeThreeColumn?: boolean; taskPanel?: boolean; extendable?: boolean };
+export type SkinBrand = {
+  displayName?: string;
+  slogan?: string;
+  welcomeText?: string;
+  welcomeDescription?: string;
+  quickEntries?: SkinQuickEntry[];
+};
 
 export type SkinDefinition = {
   id: string;
@@ -32,7 +37,12 @@ export type SkinDefinition = {
   tokens?: SkinTokens;
   assets?: SkinAssets;
   brand?: SkinBrand;
-  layout?: SkinLayout;
+};
+
+/** A skin after neutral product defaults have been merged in. */
+export type ResolvedSkinDefinition = SkinDefinition & {
+  assets: SkinAssets;
+  brand: Required<Pick<SkinBrand, "displayName" | "slogan" | "welcomeText" | "welcomeDescription" | "quickEntries">>;
 };
 
 /** 为后续的强调色、字体与密度偏好预留的可叠加层，不改变基础皮肤契约。 */

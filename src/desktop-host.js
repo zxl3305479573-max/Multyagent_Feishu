@@ -1,4 +1,5 @@
 import { createDesktopControlServer } from "./desktop-control.js";
+import { forEachEvent } from "./event-log.js";
 
 const rootOf = (taskId) => String(taskId || "").split(":")[0];
 
@@ -94,6 +95,63 @@ export function createDesktopHost({ token, eventsFile, taskStore, orchestrator, 
     async restore_history(input) {
       if (typeof restoreHistory !== "function") throw new Error("history restore is unavailable");
       return restoreHistory(input || {});
+    },
+    async memory_list({ projectName } = {}) {
+      const tasks = await taskStore.list();
+      const scoped = projectName ? tasks.filter((task) => task?.project_name === projectName) : tasks;
+      const items = scoped.flatMap((task) => (Array.isArray(task?.conversation_memory) ? task.conversation_memory : [])
+        .filter((entry) => entry && typeof entry.text === "string" && entry.text.trim())
+        .map((entry, index) => ({
+          id: `${task.task_id}:${index}`,
+          taskId: task.task_id,
+          projectName: task.project_name || null,
+          taskTitle: task.title || String(task.description || "").split(/\r?\n/, 1)[0].slice(0, 240) || task.task_id,
+          role: entry.role === "assistant" ? "assistant" : "user",
+          text: String(entry.text).slice(0, 3000),
+          at: entry.at || task.updated_at || task.created_at || null,
+        })))
+        .sort((left, right) => Date.parse(right.at || "") - Date.parse(left.at || ""));
+      return { items: items.slice(0, 1000) };
+    },
+    // Read-only projection over the append-only event log. It never opens or mutates files.
+    async workspace_files({ projectName } = {}) {
+      const tasks = await taskStore.list();
+      const taskProjects = new Map(tasks.map((task) => [task.task_id, task.project_name]));
+      const files = new Map();
+      await forEachEvent(eventsFile, (event) => {
+        const rootTaskId = rootOf(event.task_id || event.parent_task_id);
+        const eventProject = event.project_name || taskProjects.get(rootTaskId) || null;
+        if (projectName && eventProject !== projectName) return;
+        const artifactItems = new Map((Array.isArray(event.artifact_items) ? event.artifact_items : [])
+          .filter((item) => item?.path)
+          .map((item) => [String(item.path).replaceAll("\\", "/"), item]));
+        const paths = [
+          ...(event.file_path ? [event.file_path] : []),
+          ...(Array.isArray(event.artifact_paths) ? event.artifact_paths : []),
+          ...(Array.isArray(event.artifact_items) ? event.artifact_items.map((item) => item?.path) : []),
+          ...(Array.isArray(event.evidence) ? event.evidence.filter((item) => ["file", "screenshot"].includes(item?.kind)).map((item) => item.path) : []),
+        ].filter(Boolean);
+        for (const path of paths) {
+          const normalized = String(path).replaceAll("\\", "/");
+          const key = `${eventProject || ""}:${normalized}`;
+          const item = artifactItems.get(normalized);
+          const previous = files.get(key);
+          files.set(key, {
+            path: normalized,
+            projectName: eventProject,
+            taskId: rootTaskId || null,
+            eventType: event.type || null,
+            description: item?.description || previous?.description || event.summary || "",
+            size: Number.isFinite(item?.size) ? item.size : previous?.size,
+            timestamp: event.timestamp || previous?.timestamp || null,
+          });
+        }
+      });
+      return {
+        files: [...files.values()]
+          .sort((left, right) => Date.parse(right.timestamp || "") - Date.parse(left.timestamp || ""))
+          .slice(0, 1000),
+      };
     },
     async runtime_config({ provider } = {}) {
       return requireRuntimeConfig().get({ provider });

@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createDesktopHost } from "../src/desktop-host.js";
 
 test("desktop host connects lifecycle controls to the existing task and orchestrator services", async () => {
@@ -128,4 +131,45 @@ test("desktop host exposes runtime model selection without restarting the gatewa
   assert.deepEqual(switched, { ...current, provider: "local", model: "coder", thinking: "high" });
   assert.deepEqual(calls, [["get", { provider: "openai" }], ["set", { provider: "local", model: "coder", thinking: "high" }]]);
   assert.deepEqual(recorded, [{ type: "runtime_model_changed", provider: "local", model: "coder", thinking: "high", channel: "desktop" }]);
+});
+
+test("desktop host exposes read-only task memory and workspace file projections", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "desktop-host-readonly-"));
+  const eventsFile = join(dir, "events.jsonl");
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(eventsFile, [
+    { event_id: "e1", type: "task_created", task_id: "T-1", project_name: "demo", timestamp: "2026-01-01T00:00:01.000Z" },
+    { event_id: "e2", type: "file_change", task_id: "T-1:frontend", file_path: "artifacts\\app.tsx", summary: "文件已创建", timestamp: "2026-01-01T00:00:02.000Z" },
+    { event_id: "e3", type: "delivery_received", task_id: "T-1:frontend", artifact_paths: ["artifacts/result.md"], artifact_items: [{ path: "artifacts/result.md", description: "验收报告", size: 42 }], timestamp: "2026-01-01T00:00:03.000Z" },
+    { event_id: "e4", type: "file_change", task_id: "T-2", project_name: "other", file_path: "artifacts/other.md" },
+  ].map(JSON.stringify).join("\n") + "\n");
+  const tasks = [
+    {
+      task_id: "T-1",
+      project_name: "demo",
+      title: "实现登录",
+      conversation_memory: [
+        { role: "user", text: "实现登录页", at: "2026-01-01T00:00:01.000Z" },
+        { role: "assistant", text: "登录页已完成", at: "2026-01-01T00:00:03.000Z" },
+      ],
+    },
+    { task_id: "T-2", project_name: "other", conversation_memory: [{ role: "user", text: "另一个项目" }] },
+  ];
+  const host = createDesktopHost({
+    token: "desktop-session-token-for-tests",
+    eventsFile,
+    taskStore: { list: async () => tasks },
+    orchestrator: {},
+  });
+
+  const memory = await host.commandHandlers.memory_list({ projectName: "demo" });
+  assert.deepEqual(memory.items.map((item) => [item.taskId, item.role, item.text]), [
+    ["T-1", "assistant", "登录页已完成"],
+    ["T-1", "user", "实现登录页"],
+  ]);
+  const files = await host.commandHandlers.workspace_files({ projectName: "demo" });
+  assert.deepEqual(files.files.map((item) => item.path), ["artifacts/result.md", "artifacts/app.tsx"]);
+  assert.equal(files.files[0].description, "验收报告");
+  assert.equal(files.files[0].size, 42);
+  assert.ok(files.files.every((item) => item.projectName === "demo"));
 });

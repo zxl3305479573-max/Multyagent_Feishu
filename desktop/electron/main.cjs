@@ -14,7 +14,7 @@ const e2eMode = process.env.PI_DESKTOP_E2E === "1";
 if (e2eMode && process.env.PI_DESKTOP_E2E_USER_DATA) app.setPath("userData", process.env.PI_DESKTOP_E2E_USER_DATA);
 // 自建角色放在数据目录；必须在首次 roleConfig() 之前设定，网关子进程继承同一路径。
 process.env.PI_CUSTOM_ROLES_DIR = join(app.getPath("userData"), "runtime", "custom-roles");
-let win = null; let tray = null; let activeSkinId = null; let quitting = false; let gateway = null; let credentials = null; let settings = null; let gatewayStopping = false;
+let win = null; let tray = null; let activeSkinId = null; let quitting = false; let gateway = null; let credentials = null; let settings = null; let gatewayStopping = false; let gatewayStartedAt = null;
 const hasSingleInstanceLock = e2eMode || app.requestSingleInstanceLock();
 // 运行设置页展示的全部环境配置（分组、类型、默认值、是否密钥）。
 const envCatalog = buildEnvCatalog();
@@ -140,6 +140,35 @@ async function waitForGateway() {
   throw new Error("网关重启超时，未能重新连接");
 }
 
+async function gatewayStatus(tokenFile) {
+  let port = null;
+  let error = "";
+  try {
+    const session = JSON.parse(await readFile(tokenFile, "utf8"));
+    port = Number(session.port) || null;
+  } catch (readError) {
+    error = String(readError?.message || readError);
+  }
+  let healthy = false;
+  if (port) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      healthy = response.ok;
+      if (!response.ok) error = `health ${response.status}`;
+    } catch (healthError) {
+      error = String(healthError?.message || healthError);
+    }
+  }
+  return {
+    running: Boolean(gateway?.child),
+    healthy,
+    pid: gateway?.child?.pid || null,
+    port,
+    startedAt: gatewayStartedAt,
+    ...(error ? { error } : {}),
+  };
+}
+
 // 交给网关子进程的环境：系统环境变量 < 桌面端托管的默认路径 < 运行设置 < 加密凭据。
 // 令牌文件等托管项始终以桌面端为准。
 async function gatewayEnv(paths) {
@@ -226,7 +255,7 @@ async function start() {
     gateway = createGatewayProcess({ entry: join(root, "src", "index.js"), cwd: runtimeRoot, env: initialEnv });
     gatewayError = foreignGatewayError(initialEnv);
     if (gatewayError) console.error(`[desktop] ${gatewayError}`);
-    else gateway.start();
+    else { gateway.start(); gatewayStartedAt = new Date().toISOString(); }
     // The renderer reads the session token immediately on load. Wait until the
     // gateway has published its token and health endpoint so first launch does
     // not look disconnected and force a manual service restart.
@@ -261,8 +290,9 @@ async function start() {
     const env = await gatewayEnv(paths);
     gatewayError = foreignGatewayError(env);
     if (gatewayError) { win?.webContents.reload(); throw new Error(gatewayError); }
-    await gateway.restart(env); await waitForGateway(); win?.webContents.reload(); return { restarted: true };
+    await gateway.restart(env); gatewayStartedAt = new Date().toISOString(); await waitForGateway(); win?.webContents.reload(); return { restarted: true };
   });
+  handle("desktop:gateway:status", () => gatewayStatus(paths.tokenFile));
   handle("desktop:window:show", () => showWindow());
   handle("desktop:window:set-skin", (_event, skinId) => {
     if (skinId !== null && skinId !== "pear") throw new Error("unsupported skin");
