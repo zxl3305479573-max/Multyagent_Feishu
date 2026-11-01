@@ -32,7 +32,7 @@
 
 `SkinDefinition` 的基础字段是 `id`、`name`、`description`、`colorScheme`、四个 `preview` 色块和可选 `tokens`。已有颜色皮肤继续提供完整 token 集合。skin pack 还可选提供：
 
-- `assets`: `aiAvatar`、`welcomeIllustration`、`toolRobotIcon`、`logo`，均为由 Vite 导入的 URL。
+- `assets`: `aiAvatar`、`welcomeIllustration`、`toolRobotIcon`、`logo`、`emptyState`，均为由 Vite 导入的 URL。
 - `brand`: `displayName`、`slogan`、`welcomeText`、`quickEntries`。每条 quick entry 有 `id`、`label`、可选 `description` / `icon`，以及写入 composer 的 `prompt`。
 - `layout`: `homeThreeColumn`、`taskPanel`、`extendable` 布尔开关。
 
