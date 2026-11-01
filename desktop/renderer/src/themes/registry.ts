@@ -1,4 +1,5 @@
 import type { SkinDefinition, SkinOptionLayer } from "./types";
+import { resolveSkinDefinition } from "./defaults";
 
 const modules = import.meta.glob<{ default: SkinDefinition }>(["./skins/*.ts", "./skins/*/index.ts"], { eager: true });
 
@@ -24,6 +25,6 @@ export type SkinId = (typeof skins)[number]["id"];
 /** 空列表是有意的：appearance WIP 不在当前工作区，后续可在此注册强调色/字体/密度层。 */
 export const skinOptionLayers: readonly SkinOptionLayer[] = [];
 
-export function getSkin(id: string | null | undefined): SkinDefinition {
-  return skinsById.get(id || "") || skinsById.get("light") || skins[0];
+export function getSkin(id: string | null | undefined) {
+  return resolveSkinDefinition(skinsById.get(id || "") || skinsById.get("light") || skins[0]);
 }

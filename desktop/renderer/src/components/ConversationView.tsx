@@ -7,7 +7,8 @@ import { RuntimeModelPicker } from "./RuntimeModelPicker";
 import { ModeBar } from "./ModeBar";
 import type { RuntimeConfig, TaskModes } from "../types";
 import { useSkinPack } from "../themes/SkinContext";
-import { createSkinAnimationAdapter, moodStateForTaskStatus } from "../themes/animation";
+import { moodStateForTaskStatus } from "../themes/animation";
+import { AgentAvatar, StatusMood, ToolRobot } from "./AgentVisuals";
 
 // 规划模式下等待确认的内容：最近一条 approval_required 之后还没有派发、结算或失败等后续事件。
 const SETTLING_AFTER_APPROVAL = new Set(["dispatch_started", "task_settle", "task_failed", "task_terminated", "task_cancelled", "selection_failed", "control_applied"]);
@@ -79,16 +80,14 @@ function Acceptance({ event, onOpenFile }: { event: EventRecord; onOpenFile: Ope
 }
 
 function ExecutionEvent({ event, agents, onOpenFile }: { event: EventRecord; agents: Agent[]; onOpenFile: OpenFile }) {
-  const skin = useSkinPack();
-  const animation = createSkinAnimationAdapter(skin);
   const summary = event.summary || eventLabels[event.type || ""] || "任务状态已更新";
   const isError = event.status === "failed" || event.type?.includes("failed") || event.type === "error";
   const isPlan = Boolean(event.type?.includes("plan") || event.type === "approval_required");
   const moodState = isError ? "error" : event.type === "approval_required" ? "confirm" : isPlan ? "planning" : event.status === "completed" ? "success" : "thinking";
-  return <article className={`message agent-message agent-execution-event ${isError ? "message-error" : ""} ${skin.id === "pear" && isPlan ? "pear-plan-card" : ""}`}>
-    {skin.id === "pear" && (animation.mood(moodState) || skin.assets?.aiAvatar) && <img className="pear-message-avatar" src={animation.mood(moodState) || skin.assets?.aiAvatar} alt="Pear Agent" />}
+  return <article className={`message agent-message agent-execution-event ${isError ? "message-error" : ""} ${isPlan ? "plan-card" : ""}`}>
+    <AgentAvatar state={moodState} label="Agent" className="message-avatar" />
     <div className="message-body">
-      <div className="message-author">{isPlan && skin.id === "pear" ? "任务计划" : eventLabels[event.type || ""] || event.type || "事件"}<time>{formatTime(event.timestamp)}</time></div>
+      <div className="message-author">{isPlan ? "任务计划" : eventLabels[event.type || ""] || event.type || "事件"}<time>{formatTime(event.timestamp)}</time></div>
       <p>{summary}</p>
       {(event.target || event.tool) && <div className="message-tags">{event.target && <span>分配给 {agents.find((agent) => agent.key === event.target)?.displayName || event.target}</span>}{event.tool && <span>工具 · {event.tool}</span>}</div>}
       {event.command && <pre className="event-code">{event.command}</pre>}
@@ -180,7 +179,7 @@ function RoleFinalResult({ bundle, onOpenFile }: { bundle: ExecutionBundle; onOp
 function FinalSummary({ event }: { event: EventRecord }) {
   return <section className="final-summary-output" aria-label="项目经理最终总结">
     <header>
-      <span className="message-avatar agent-avatar">总</span>
+      <AgentAvatar state="success" label="项目经理" className="message-avatar" />
       <div>
         <strong>项目经理 · 最终总结</strong>
         <time>{formatTime(event.timestamp)}</time>
@@ -203,10 +202,24 @@ function UserMessage({ event, task, userName, userInitial }: { event: EventRecor
 
 type PendingApproval = NonNullable<ReturnType<typeof pendingApproval>>;
 
-function ApprovalCard({ approval, approverName, approving = false, onApprove }: { approval: PendingApproval; approverName: string; approving?: boolean; onApprove?: (taskId: string) => void }) {
-  return <div className="approval-banner" role="status">
-    <div><strong>{approverName} 的方案等待你确认</strong><span>{approval.next || approval.summary.slice(0, 160) || "确认后开始执行"}</span></div>
-    <button type="button" disabled={approving} onClick={() => onApprove?.(approval.taskId)}>{approving ? "确认中…" : "确认执行"}</button>
+function ApprovalCard({ approval, approverName, busy = null, onApprove, onReject }: {
+  approval: PendingApproval;
+  approverName: string;
+  busy?: "approve" | "reject" | null;
+  onApprove?: (taskId: string) => void;
+  onReject?: (taskId: string) => void;
+}) {
+  return <div className="approval-card" role="status">
+    <AgentAvatar state="confirm" label={approverName || "Agent"} className="approval-avatar" />
+    <div className="approval-copy">
+      <strong>{approverName || "Agent"} 的方案等待你确认</strong>
+      <span>{approval.next || approval.summary.slice(0, 160) || "确认后开始执行"}</span>
+      <small><ToolRobot state="loading" label="等待确认" />确认后继续执行；驳回会把结果退回项目经理。</small>
+    </div>
+    <div className="approval-actions">
+      <button className="quiet-button" type="button" disabled={Boolean(busy)} onClick={() => onReject?.(approval.taskId)}>{busy === "reject" ? "驳回中…" : "驳回"}</button>
+      <button className="primary-button" type="button" disabled={Boolean(busy)} onClick={() => onApprove?.(approval.taskId)}>{busy === "approve" ? "确认中…" : "确认执行"}</button>
+    </div>
   </div>;
 }
 
@@ -226,25 +239,17 @@ function groupExecutionItems(items: AgentExecutionItem[]): ExecutionBlock[] {
 }
 
 function ToolRun({ executions, agents, onOpenFile }: { executions: ToolExecutionData[]; agents: Agent[]; onOpenFile: OpenFile }) {
-  const skin = useSkinPack();
-  const animation = createSkinAnimationAdapter(skin);
   const statuses = executions.map((execution) => toolExecutionStatus(execution.events));
   const runStatus = statuses.includes("failed") ? "failed" : statuses.includes("running") ? "running" : "completed";
-  const runRobot = skin.id === "pear"
-    ? animation.robot(runStatus === "failed" ? "error" : runStatus === "running" ? "working" : "idle")
-    : undefined;
   const failedCount = statuses.filter((status) => status === "failed").length;
   const names = [...new Set(executions.map((execution) => execution.tool))];
   return <details className={`tool-run tool-run-${runStatus}`}>
-    <summary>{runRobot && <img className="pear-tool-robot" src={runRobot} alt="" aria-hidden="true" />}<span className="tool-run-chevron">›</span><span className="tool-run-title">工具调用 · {executions.length} 次</span><span className="tool-run-names">{names.join("、")}</span><span className="tool-run-status">{runStatus === "failed" ? `${failedCount} 次失败` : statusLabels[runStatus] || runStatus}</span></summary>
+    <summary><ToolRobot state={runStatus === "failed" ? "error" : runStatus === "running" ? "working" : "idle"} /><span className="tool-run-chevron">›</span><span className="tool-run-title">工具调用 · {executions.length} 次</span><span className="tool-run-names">{names.join("、")}</span><span className="tool-run-status">{runStatus === "failed" ? `${failedCount} 次失败` : statusLabels[runStatus] || runStatus}</span></summary>
     <div className="tool-run-content">{executions.map((execution, index) => {
       const status = toolExecutionStatus(execution.events);
       const description = execution.events.find((event) => event.type === "tool_call")?.summary || "调用工具";
-      const executionRobot = skin.id === "pear"
-        ? animation.robot(status === "failed" ? "error" : status === "running" ? "loading" : "idle")
-        : undefined;
       return <details className={`tool-execution tool-${status}`} key={`tool-${execution.events[0]?.event_id || index}`}>
-        <summary>{executionRobot && <img className="pear-tool-robot pear-tool-robot-inline" src={executionRobot} alt="" aria-hidden="true" />}<span className="tool-execution-chevron">›</span><span className="tool-execution-title">{execution.tool}</span><span className="tool-execution-description">{description}</span><span className="tool-execution-status">{statusLabels[status] || status}</span><span className="tool-execution-count">{execution.events.length} 个步骤</span></summary>
+        <summary><ToolRobot state={status === "failed" ? "error" : status === "running" ? "loading" : "idle"} /><span className="tool-execution-chevron">›</span><span className="tool-execution-title">{execution.tool}</span><span className="tool-execution-description">{description}</span><span className="tool-execution-status">{statusLabels[status] || status}</span><span className="tool-execution-count">{execution.events.length} 个步骤</span></summary>
         <div className="tool-execution-content">{execution.events.map((event, eventIndex) => <ExecutionEvent key={event.event_id || `${event.type}-${eventIndex}`} event={event} agents={agents} onOpenFile={onOpenFile} />)}</div>
       </details>;
     })}</div>
@@ -262,15 +267,12 @@ function ExecutionProcess({ group, agents, onOpenFile }: { group: AgentExecution
 
 type ExecutionBundle = AgentExecutionBundle<AgentExecutionGroup>;
 
-function SubagentExecution({ group, agents, approval, approverName, approving, onApprove, onOpenFile }: { group: AgentExecutionGroup; agents: Agent[]; approval: PendingApproval | null; approverName: string; approving?: boolean; onApprove?: (taskId: string) => void; onOpenFile: OpenFile }) {
-  const skin = useSkinPack();
-  const animation = createSkinAnimationAdapter(skin);
-  const mood = skin.id === "pear" ? animation.mood(moodStateForTaskStatus(group.status)) : undefined;
+function SubagentExecution({ group, agents, approval, approverName, approvalBusy, onApprove, onReject, onOpenFile }: { group: AgentExecutionGroup; agents: Agent[]; approval: PendingApproval | null; approverName: string; approvalBusy?: "approve" | "reject" | null; onApprove?: (taskId: string) => void; onReject?: (taskId: string) => void; onOpenFile: OpenFile }) {
   return <details className={`subagent-execution subagent-${group.status}`}>
     <summary>
-      <span className="message-avatar subagent-avatar">{group.displayName.slice(1, 2)}</span>
+      <AgentAvatar state={moodStateForTaskStatus(group.status)} label={group.displayName} className="message-avatar subagent-avatar" />
       <span className="subagent-summary-main">
-        <span className="subagent-summary-title"><strong>{group.displayName}</strong>{mood && <img className="pear-mood" src={mood} alt="" aria-hidden="true" />}<span className={`agent-execution-status status-${group.status}`}>{statusLabels[group.status] || group.status}</span></span>
+        <span className="subagent-summary-title"><strong>{group.displayName}</strong><StatusMood status={group.status} label={statusLabels[group.status] || group.status} /><span className={`agent-execution-status status-${group.status}`}>{statusLabels[group.status] || group.status}</span></span>
         {group.assignedTask && <small>{group.assignedTask}</small>}
       </span>
       <span className="subagent-summary-meta">{group.toolCount} 次工具 · {group.fileCount} 个文件 · {formatDuration(group.durationMs)}</span>
@@ -279,14 +281,12 @@ function SubagentExecution({ group, agents, approval, approverName, approving, o
     <div className="subagent-execution-body">
       <ExecutionProcess group={group} agents={agents} onOpenFile={onOpenFile} />
       <FinalResult group={group} onOpenFile={onOpenFile} />
-      {approval && <ApprovalCard approval={approval} approverName={approverName} approving={approving} onApprove={onApprove} />}
+      {approval && <ApprovalCard approval={approval} approverName={approverName} busy={approvalBusy} onApprove={onApprove} onReject={onReject} />}
     </div>
   </details>;
 }
 
-function ExecutionGroup({ bundle, agents, approval, approvalGroupKey, approverName, approving, onApprove, onOpenFile }: { bundle: ExecutionBundle; agents: Agent[]; approval: PendingApproval | null; approvalGroupKey: string | null; approverName: string; approving?: boolean; onApprove?: (taskId: string) => void; onOpenFile: OpenFile }) {
-  const skin = useSkinPack();
-  const animation = createSkinAnimationAdapter(skin);
+function ExecutionGroup({ bundle, agents, approval, approvalGroupKey, approverName, approvalBusy, onApprove, onReject, onOpenFile }: { bundle: ExecutionBundle; agents: Agent[]; approval: PendingApproval | null; approvalGroupKey: string | null; approverName: string; approvalBusy?: "approve" | "reject" | null; onApprove?: (taskId: string) => void; onReject?: (taskId: string) => void; onOpenFile: OpenFile }) {
   const instances = bundle.instances;
   const statuses = instances.map((group) => group.status);
   const status = statuses.includes("failed") ? "failed"
@@ -299,12 +299,11 @@ function ExecutionGroup({ bundle, agents, approval, approvalGroupKey, approverNa
   const duration = instances.reduce((sum, group) => sum + (group.durationMs || 0), 0);
   const tasks = [...new Set(instances.map((group) => group.assignedTask).filter(Boolean))];
   const singleInstance = instances.length === 1 ? instances[0] : null;
-  const mood = skin.id === "pear" ? animation.mood(moodStateForTaskStatus(status)) : undefined;
   return <section className="agent-execution-group">
     <header className="agent-execution-overview">
-      <span className="message-avatar agent-avatar">{bundle.displayName.slice(0, 1)}</span>
+      <AgentAvatar state={moodStateForTaskStatus(status)} label={bundle.displayName} className="message-avatar" />
       <div className="agent-execution-overview-copy">
-        <div className="agent-execution-overview-title"><strong>{bundle.displayName}</strong>{mood && <img className="pear-mood" src={mood} alt="" aria-hidden="true" />}<span className={`agent-execution-status status-${status}`}>{statusLabels[status] || status}</span></div>
+        <div className="agent-execution-overview-title"><strong>{bundle.displayName}</strong><StatusMood status={status} label={statusLabels[status] || status} /><span className={`agent-execution-status status-${status}`}>{statusLabels[status] || status}</span></div>
         <p>{tasks.join("；") || `${instances.length} 个执行实例`}</p>
         <div className="agent-execution-meta">
           <span>{instances.length} 个执行实例</span>
@@ -317,14 +316,26 @@ function ExecutionGroup({ bundle, agents, approval, approvalGroupKey, approverNa
     {singleInstance ? <>
       <ExecutionProcess group={singleInstance} agents={agents} onOpenFile={onOpenFile} />
       <FinalResult group={singleInstance} onOpenFile={onOpenFile} />
-      {singleInstance.key === approvalGroupKey && approval && <ApprovalCard approval={approval} approverName={approverName} approving={approving} onApprove={onApprove} />}
+      {singleInstance.key === approvalGroupKey && approval && <ApprovalCard approval={approval} approverName={approverName} busy={approvalBusy} onApprove={onApprove} onReject={onReject} />}
     </> : <>
       <div className="subagent-executions">
         <div className="subagent-list-heading"><strong>任务分块 · 子机器人</strong><span>{instances.length} 个 · 默认收起</span></div>
-        {instances.map((instance) => <SubagentExecution key={instance.key} group={instance} agents={agents} approval={instance.key === approvalGroupKey ? approval : null} approverName={approverName} approving={approving} onApprove={onApprove} onOpenFile={onOpenFile} />)}
+        {instances.map((instance) => <SubagentExecution key={instance.key} group={instance} agents={agents} approval={instance.key === approvalGroupKey ? approval : null} approverName={approverName} approvalBusy={approvalBusy} onApprove={onApprove} onReject={onReject} onOpenFile={onOpenFile} />)}
       </div>
       <RoleFinalResult bundle={bundle} onOpenFile={onOpenFile} />
     </>}
+  </section>;
+}
+
+function ErrorCard({ event, retrying = false, onRetry }: { event?: EventRecord; retrying?: boolean; onRetry?: () => void }) {
+  return <section className="error-card" role="alert" aria-label="任务执行异常">
+    <AgentAvatar state="error" label="Agent 异常" className="error-card-avatar" />
+    <div className="error-card-copy">
+      <strong>执行遇到问题</strong>
+      <p>{event?.error || event?.summary || "任务已失败，请查看执行记录后重试。"}</p>
+      <small><ToolRobot state="error" label="工具执行异常" />重试会把失败原因交回项目经理重新决策。</small>
+    </div>
+    <button className="primary-button" type="button" disabled={retrying || !onRetry} onClick={onRetry}>{retrying ? "重试中…" : "重试任务"}</button>
   </section>;
 }
 
@@ -341,13 +352,15 @@ type ConversationProps = {
   taskDuration: number | null;
   scrollToBottomRequest?: number;
   onOpenFile: OpenFile;
-  approving?: boolean;
+  approvalBusy?: "approve" | "reject" | null;
   onApprove?: (taskId: string) => void;
+  onReject?: (taskId: string) => void;
+  retrying?: boolean;
+  onRetry?: () => void;
 };
 
-export function ConversationView({ selected, selectedTask, project, agents, userDisplayName, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, scrollToBottomRequest = 0, onOpenFile, approving = false, onApprove }: ConversationProps) {
+export function ConversationView({ selected, selectedTask, project, agents, userDisplayName, taskEvents, taskEventsLoading, groups, taskStartedAt, taskDuration, scrollToBottomRequest = 0, onOpenFile, approvalBusy = null, onApprove, onReject, retrying = false, onRetry }: ConversationProps) {
   const skin = useSkinPack();
-  const animation = createSkinAnimationAdapter(skin);
   const userName = userDisplayName.trim() || "我";
   const userInitial = Array.from(userName)[0] || "我";
   const approval = selectedTask && onApprove ? pendingApproval(taskEvents) : null;
@@ -371,18 +384,20 @@ export function ConversationView({ selected, selectedTask, project, agents, user
       approval={approval}
       approvalGroupKey={approvalGroupKey}
       approverName={approverName}
-      approving={approving}
+      approvalBusy={approvalBusy}
       onApprove={onApprove}
+      onReject={onReject}
       onOpenFile={onOpenFile}
     />);
   };
   const lastUserInputIndex = taskEvents.reduce((last, event, index) => ["task_created", "task_reused"].includes(event.type || "") ? index : last, -1);
   const finalSummary = taskEvents.slice(lastUserInputIndex + 1).reverse().find((event) => event.type === "final_summary");
-  const taskMood = skin.id === "pear" ? animation.mood(moodStateForTaskStatus(snapshotStatus(selectedTask))) : undefined;
+  const latestError = [...taskEvents].reverse().find((event) => event.type === "task_failed" || event.type === "error" || event.status === "failed");
+  const showErrorCard = snapshotStatus(selectedTask) === "failed";
   return <div className="conversation-scroll" key={selected || "empty"} ref={scrollRef}>
     {!selectedTask ? (
       <div className="welcome-state">
-        {skin.id === "pear" && skin.assets?.welcomeIllustration && <img className="pear-conversation-empty" src={skin.assets.welcomeIllustration} alt="Pear Agent" />}
+        {skin.assets.welcomeIllustration && <img className="welcome-illustration" src={skin.assets.welcomeIllustration} alt={skin.brand.displayName} />}
         <span className="welcome-mark">A</span>
         <h2>接下来要完成什么？</h2>
         <p>描述目标和约束，项目经理会规划任务并分配给合适的 Agent。</p>
@@ -390,17 +405,18 @@ export function ConversationView({ selected, selectedTask, project, agents, user
       </div>
     ) : (
       <div className="conversation-content">
-        <div className="conversation-task-overview"><strong>{selectedTask.title || "当前任务"}</strong><span>{taskMood && <img className="pear-mood" src={taskMood} alt="" aria-hidden="true" />}{selectedTask.project_name || project} · {taskStatus(selectedTask)}{taskStartedAt ? ` · 开始 ${formatTime(taskStartedAt)} · 总耗时 ${formatDuration(taskDuration)}` : ""}</span></div>
+        <div className="conversation-task-overview"><strong>{selectedTask.title || "当前任务"}</strong><span><StatusMood status={snapshotStatus(selectedTask)} label={taskStatus(selectedTask)} />{selectedTask.project_name || project} · {taskStatus(selectedTask)}{taskStartedAt ? ` · 开始 ${formatTime(taskStartedAt)} · 总耗时 ${formatDuration(taskDuration)}` : ""}</span></div>
         <QualityGateStrip gates={selectedTask.status_snapshot?.quality_gates} />
         {taskEvents.length === 0 && (taskEventsLoading
           ? <div className="conversation-empty"><span className="empty-spinner" />正在加载任务记录…</div>
-          : <div className={`conversation-empty ${skin.id === "pear" ? "pear-conversation-empty-state" : ""}`}>{skin.id === "pear" && skin.assets?.emptyConversation && <img src={skin.assets.emptyConversation} alt="" aria-hidden="true" />}<span>暂无任务记录</span></div>)}
+          : <div className="conversation-empty">{skin.assets.emptyConversation ? <img className="conversation-empty-visual" src={skin.assets.emptyConversation} alt="" aria-hidden="true" /> : <span className="neutral-empty-visual" aria-hidden="true">A</span>}<span>暂无任务记录</span></div>)}
         {userEvents.map((event, turn) => <React.Fragment key={event.event_id || `request-${turn}`}>
           <UserMessage event={event} task={selectedTask} userName={userName} userInitial={userInitial} />
           {renderExecutionTurn(turn)}
         </React.Fragment>)}
         {[...new Set(groups.filter((group) => group.turn >= userEvents.length).map((group) => group.turn))].map((turn) => <React.Fragment key={`turn-${turn}`}>{renderExecutionTurn(turn)}</React.Fragment>)}
-        {approval && !approvalGroupKey && <ApprovalCard approval={approval} approverName={approverName} approving={approving} onApprove={onApprove} />}
+        {approval && !approvalGroupKey && <ApprovalCard approval={approval} approverName={approverName} busy={approvalBusy} onApprove={onApprove} onReject={onReject} />}
+        {showErrorCard && <ErrorCard event={latestError} retrying={retrying} onRetry={onRetry} />}
         {finalSummary && <FinalSummary event={finalSummary} />}
         {["running", "in_progress"].includes(snapshotStatus(selectedTask)) && <div className="running-indicator"><span className="pulse-dot" />Agent 正在执行</div>}
       </div>
