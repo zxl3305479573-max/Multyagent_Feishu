@@ -13,6 +13,9 @@ const skinTypes = await readFile(join(root, "desktop/renderer/src/themes/types.t
 const defaultsSource = await readFile(join(root, "desktop/renderer/src/themes/defaults.ts"), "utf8");
 const registrySource = await readFile(join(root, "desktop/renderer/src/themes/registry.ts"), "utf8");
 const pearSource = await readFile(join(skinsDir, "pear/index.ts"), "utf8");
+const applySource = await readFile(join(root, "desktop/renderer/src/themes/apply.ts"), "utf8");
+const skinContextSource = await readFile(join(root, "desktop/renderer/src/themes/SkinContext.tsx"), "utf8");
+const stylesheet = await readFile(join(root, "desktop/renderer/src/style.css"), "utf8");
 
 test("every skin covers the tokens.css contract", async () => {
   const entries = await readdir(skinsDir, { withFileTypes: true });
@@ -85,4 +88,25 @@ test("Pear character and robot states map to the existing static assets and anim
   }
   assert.match(animationSource, /SkinAnimationAdapter/);
   assert.match(animationSource, /createRiveSkinAnimationAdapter/);
+});
+
+test("skin changes update the root selector, color scheme, and persisted choice", () => {
+  assert.match(applySource, /document\.documentElement\.dataset\.skin\s*=\s*skin\.id/);
+  assert.match(applySource, /html\[data-skin="\$\{skin\.id\}"\]\{color-scheme:\$\{skin\.colorScheme\}/);
+  assert.match(applySource, /storageSet\(SKIN_STORAGE_KEY, choice\)/);
+  assert.match(applySource, /applySkin\(resolveSkinId\(choice\), persist\)/);
+  assert.match(skinContextSource, /setSkin\?\.\(skin\.id === "light" \? null : skin\.id\)/);
+});
+
+test("sidebar and unified workspace styles use skin tokens rather than hardcoded colors", async () => {
+  const components = ["Sidebar.tsx", "HomeWorkspace.tsx", "TaskPanel.tsx"];
+  for (const file of components) {
+    const source = await readFile(join(root, "desktop/renderer/src/components", file), "utf8");
+    assert.doesNotMatch(source, /#[\da-f]{3,8}\b|rgba?\(/i, `${file} contains a hardcoded color`);
+  }
+  const blocks = [...stylesheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, selector]) => /\.sidebar(?:\b|[-.]|\s)|\.home-workspace|\.task-panel/.test(selector));
+  for (const [block] of blocks) {
+    assert.doesNotMatch(block, /#[\da-f]{3,8}\b|rgba?\(/i, `unified layout CSS contains a hardcoded color: ${block.slice(0, 120)}`);
+  }
 });

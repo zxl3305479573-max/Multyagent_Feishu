@@ -188,6 +188,44 @@ try {
     await waitFor("Boolean(document.querySelector('.settings-detail-heading h2')?.textContent?.trim())", "二级页面标题");
   });
 
+  await record("逐个切换注册皮肤并检查布局 token 与持久化", async () => {
+    await client.evaluate(`(() => [...document.querySelectorAll('.settings-toolbar nav button')].find((button) => button.textContent.trim() === '外观')?.click())()`);
+    await waitFor("Boolean(document.querySelector('.skin-card[data-skin-id=\\\"light\\\"]'))", "皮肤选择器");
+    const skins = await client.evaluate(`(() => [...document.querySelectorAll('.skin-card[data-skin-id]')].map((button) => button.dataset.skinId).filter((id) => id !== 'system'))()`);
+    assert.ok(skins.length >= 6, "全部注册皮肤应在外观页显示");
+    let previousBg = "";
+    for (const id of skins) {
+      await client.evaluate(`document.querySelector('.skin-card[data-skin-id="${id}"]')?.click()`);
+      await waitFor(`document.documentElement.dataset.skin === ${JSON.stringify(id)} && localStorage.getItem('multyagent.skin') === ${JSON.stringify(id)}`, `切换并保存 ${id}`);
+      const result = await client.evaluate(`(() => {
+        const root = document.documentElement;
+        const style = getComputedStyle(document.querySelector('.sidebar'));
+        return { id: root.dataset.skin, bg: getComputedStyle(root).getPropertyValue('--color-bg').trim(), sidebar: style.backgroundColor, saved: localStorage.getItem('multyagent.skin') };
+      })()`);
+      const ipcSkin = await client.evaluate(`window.desktop.setSkin(${JSON.stringify(id === "light" ? null : id)})`);
+      assert.equal(result.id, id, `皮肤 ${id} 未更新根节点属性`);
+      assert.ok(result.bg && result.sidebar, `皮肤 ${id} 未应用到布局`);
+      assert.equal(result.saved, id, `皮肤 ${id} 未持久化`);
+      assert.equal(ipcSkin, id === "light" ? null : id, `皮肤 ${id} 未通过 Electron 图标 IPC`);
+      assert.notEqual(result.bg, previousBg, `皮肤 ${id} 的背景 token 未改变`);
+      previousBg = result.bg;
+    }
+    const expectedSkin = skins.at(-1);
+    await client.send("Page.reload", { ignoreCache: true });
+    await waitFor("Boolean(document.querySelector('.app-shell'))", "重载后工作台重新挂载");
+    await waitFor(`document.documentElement.dataset.skin === ${JSON.stringify(expectedSkin)}`, "重载后恢复已保存皮肤");
+    const restored = await client.evaluate("({ id: document.documentElement.dataset.skin, bg: getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim() })");
+    assert.equal(restored.id, expectedSkin);
+    assert.equal(restored.bg, previousBg);
+    const reopenedSettings = await client.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')].find((item) => item.getAttribute('title') === '运行设置');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    assert.equal(reopenedSettings, true);
+    await waitFor("Boolean(document.querySelector('.settings-section-nav'))", "重载后重新进入运行设置");
+  });
+
   await record("右侧内容滚动时左侧目录保持固定", async () => {
     const result = await client.evaluate(`(async () => {
       const nav = document.querySelector('.settings-section-nav');
