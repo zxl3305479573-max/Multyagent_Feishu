@@ -14,6 +14,9 @@ export function SkinProvider({ children }: { children: React.ReactNode }) {
   }, []);
   useEffect(() => { document.title = skin.brand?.displayName || "Agent 工作台"; }, [skin]);
   useEffect(() => {
+    void Promise.resolve(window.desktop?.setSkin?.(skin.id === "pear" ? "pear" : null)).catch(() => {});
+  }, [skin]);
+  useEffect(() => {
     const favicon = skin.assets?.favicon;
     if (!favicon?.png32) return;
 
