@@ -2,46 +2,49 @@
   /* Color */
   --color-scheme: light;
   color-scheme: var(--color-scheme);
-  --color-primary: #3370ff;
-  --color-primary-hover: #245bdb;
+  --color-primary: #3e6ee8;
+  --color-primary-hover: #2f5bcf;
   --color-primary-contrast: #fff;
-  --color-primary-soft: #eef3ff;
-  --color-primary-border: #c9d8ff;
-  --color-bg: #fff;
-  --color-surface: #f7f8fa;
-  --color-surface-raised: #fff;
-  --color-surface-sunken: #f5f6f8;
-  --color-surface-hover: #eceef1;
-  --color-text: #1f2329;
-  --color-text-muted: #646a73;
-  --color-text-subtle: #8f959e;
-  --color-border: #e5e7eb;
-  --color-border-strong: #cfd3d9;
-  --color-danger: #d14343;
-  --color-danger-soft: #fdeeee;
-  --color-success: #1f8f52;
-  --color-success-soft: #e8f6ee;
-  --color-warning: #b97a12;
-  --color-warning-soft: #fdf4e3;
-  --color-info: #3370ff;
-  --color-focus-ring: #3370ff;
-  --color-overlay: rgba(31, 35, 41, .45);
-  --color-code-bg: #1f2329;
-  --color-code-border: #2b3038;
-  --color-code-text: #e6e8eb;
+  --color-primary-soft: #edf2ff;
+  --color-primary-border: #c9d7ff;
+  --color-action: #242526;
+  --color-action-hover: #111213;
+  --color-action-contrast: #fff;
+  --color-bg: #f7f5f2;
+  --color-surface: #f0eeea;
+  --color-surface-raised: #fffefd;
+  --color-surface-sunken: #ebe8e3;
+  --color-surface-hover: #e8e5df;
+  --color-text: #242424;
+  --color-text-muted: #716e69;
+  --color-text-subtle: #98948d;
+  --color-border: #e2ded7;
+  --color-border-strong: #cfc9bf;
+  --color-danger: #ca4d4a;
+  --color-danger-soft: #fff0ef;
+  --color-success: #25845b;
+  --color-success-soft: #eaf7f0;
+  --color-warning: #b47b20;
+  --color-warning-soft: #fff6e5;
+  --color-info: #3e6ee8;
+  --color-focus-ring: #3e6ee8;
+  --color-overlay: rgba(30, 29, 27, .42);
+  --color-code-bg: #242526;
+  --color-code-border: #3b3b39;
+  --color-code-text: #f4f1ed;
 
   /* Radius */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
   --radius-full: 999px;
 
   /* Shadows */
-  --shadow-sm: 0 1px 3px rgba(31, 35, 41, .06), 0 1px 2px rgba(31, 35, 41, .04);
-  --shadow-md: 0 6px 20px rgba(31, 35, 41, .08);
-  --shadow-lg: 0 18px 50px rgba(31, 35, 41, .18);
-  --shadow-popover: 0 6px 20px rgba(31, 35, 41, .08);
+  --shadow-sm: 0 1px 2px rgba(43, 39, 34, .04), 0 3px 10px rgba(43, 39, 34, .04);
+  --shadow-md: 0 10px 30px rgba(43, 39, 34, .08);
+  --shadow-lg: 0 24px 70px rgba(43, 39, 34, .20);
+  --shadow-popover: 0 12px 34px rgba(43, 39, 34, .12);
 
   /* Typography */
   --font-sans: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -71,9 +74,9 @@
   --space-8: 32px;
 
   /* Controls */
-  --control-h-sm: 30px;
-  --control-h-md: 34px;
-  --control-h-lg: 36px;
+  --control-h-sm: 32px;
+  --control-h-md: 36px;
+  --control-h-lg: 40px;
 
   /* Motion */
   --transition-fast: 120ms ease;
