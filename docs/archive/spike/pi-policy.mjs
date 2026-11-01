@@ -1,5 +1,5 @@
 // Spike 2: 验证 "策略扩展能强制拦截 tool_call" —— 拦截对 .env 的读取，确认 block 生效且模型收到原因。
-// 运行: node spike/pi-policy.mjs
+// 运行: node docs/archive/spike/pi-policy.mjs
 import {
   createAgentSession,
   DefaultResourceLoader,

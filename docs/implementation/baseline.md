@@ -11,11 +11,11 @@
 | 自动化测试 | 通过 | `npm test`：51 tests、0 failures、0 skipped |
 | 六角色长连接 | 通过（本地凭据环境） | `npm start` 输出 six active agents：project_manager、architect、frontend_developer、backend_developer、tester、auditor |
 | 无凭据启动 | 通过 | `DOTENV_CONFIG_PATH=runtime/no-such-empty.env npm start` 跳过六个角色并输出 `No configured Feishu bots` |
-| 消息入口 | 已实现 | `im.message.receive_v1` 注册于 `src/index.js` |
+| 消息入口 | 已实现 | `im.message.receive_v1` 注册于 `src/runtime/bootstrap.js`（由 `src/index.js` 加载） |
 | 角色路由 | 已实现 | `config/agents.json` 的 App ID 环境变量映射 |
-| 消息去重 | 已实现 | `src/gateway.js` 的 message ID deduper |
+| 消息去重 | 已实现 | `src/runtime/gateway.js` 的 message ID deduper |
 | 原机器人回复 | 已实现 | `sendText()` 使用 `receive_id_type=chat_id` |
-| 任务持久化 | 已实现（基础版） | `src/tasks.js` 写入 `runtime/tasks.json` |
+| 任务持久化 | 已实现（基础版） | `src/domain/task-store.js` 写入任务状态文件 |
 
 ## 已知限制
 

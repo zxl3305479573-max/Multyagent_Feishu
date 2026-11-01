@@ -1,5 +1,5 @@
 // Spike 1: 验证 "Pi 会话能被驱动" —— 创建 AgentSession、prompt、拿到回复、观察 agent_settled。
-// 运行: node spike/pi-session.mjs
+// 运行: node docs/archive/spike/pi-session.mjs
 import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 
 const MODEL_PROVIDER = "deepseek";

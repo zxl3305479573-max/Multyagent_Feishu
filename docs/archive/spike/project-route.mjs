@@ -1,6 +1,6 @@
 // 项目路由验证：项目经理确认项目名 → create_project → 产物写入 workspace/<项目名>/。
-// 运行: node spike/project-route.mjs
-import { runAgent } from "../src/pi-agent.js";
+// 运行: node docs/archive/spike/project-route.mjs
+import { runAgent } from "../../../src/runtime/pi-agent.js";
 import { existsSync } from "node:fs";
 
 const pm = { key: "project_manager", displayName: "项目经理", appId: "cli_pm" };

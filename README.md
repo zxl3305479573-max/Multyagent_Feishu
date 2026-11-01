@@ -26,6 +26,7 @@
 - [多维表格看板](#多维表格看板)
 - [数据、状态与日志](#数据状态与日志)
 - [命令行工具与运维脚本](#命令行工具与运维脚本)
+- [Architecture](#architecture)
 - [目录结构](#目录结构)
 - [开发与检查](#开发与检查)
 - [安全须知](#安全须知)
@@ -148,7 +149,7 @@ npm run desktop:package   # 生成 Windows 安装包（输出到 release/）
 
 - 渲染进程运行在 Electron 沙箱中，只能通过 preload 暴露的 IPC 调用主进程；会话令牌由主进程读取，只接受来自本应用页面的 IPC。
 - 密钥加密保存在应用数据目录的 `credentials.json`，其余配置保存在 `settings.json`。系统加密不可用或凭据来自另一台电脑时，设置页会明确提示，而不是显示为“未配置”。
-- 配置项清单定义在 `src/env-catalog.cjs`，测试会扫描源码里的 `process.env.*`，新增环境变量未登记时测试失败。
+- 配置项清单定义在 `src/runtime/env-catalog.cjs`，测试会扫描源码里的 `process.env.*`，新增环境变量未登记时测试失败。
 - 网关因配置错误起不来时，窗口仍会打开，可以直接在运行设置里改好再重启服务。
 - 首次启动会从应用目录下的 `.env` 迁移凭据；其他位置可在运行设置或 `MULTYAGENT_LEGACY_ENV_FILE` 中指定。
 - 退出时先通过 IPC 请求网关优雅退出，8 秒内未退出再强制结束。
@@ -165,7 +166,7 @@ npm run desktop:package   # 生成 Windows 安装包（输出到 release/）
 
 ### GitHub 工单
 
-把 GitHub Issues 接到项目经理，完成后自动回写结果（`src/tickets/`）。
+把 GitHub Issues 接到项目经理，完成后自动回写结果（`src/domain/tickets/`）。
 
 1. 在运行设置「GitHub 工单」填写 `GITHUB_TOKEN`（fine-grained token，Issues 读写权限），重启服务。
 2. 侧边栏「工单」→「添加工单源」：仓库 `owner/name` 对应一个本地项目，可按标签、指派人过滤。
@@ -214,7 +215,7 @@ npm run desktop:package   # 生成 Windows 安装包（输出到 release/）
 | `PI_AGENT_API_KEY` | 自定义服务商的通用 Key；不会写入生成的模型文件 |
 | `PI_AGENT_MODELS_FILE` | 直接指定 Pi 的 `models.json`，优先于上面的自定义 Base URL 配置 |
 
-运行设置内置了 DeepSeek、OpenAI、Anthropic、Google Gemini、Azure OpenAI、OpenRouter、Moonshot / Kimi、Z.AI、Qwen、MiniMax、Xiaomi MiMo、Mistral、Groq 等服务商，选择后只显示该服务商需要的 Key；也可以填写自定义服务商 ID。完整清单见 `src/env-catalog.cjs`。
+运行设置内置了 DeepSeek、OpenAI、Anthropic、Google Gemini、Azure OpenAI、OpenRouter、Moonshot / Kimi、Z.AI、Qwen、MiniMax、Xiaomi MiMo、Mistral、Groq 等服务商，选择后只显示该服务商需要的 Key；也可以填写自定义服务商 ID。完整清单见 `src/runtime/env-catalog.cjs`。
 
 ### 接入本地或自定义模型
 
@@ -238,7 +239,7 @@ PI_AGENT_API_KEY=ollama
 
 ### 角色配置
 
-每个角色一个文件：`config/roles/<key>.json`，字段说明见同目录的 `role.schema.json`（VS Code 会据此提示和校验）。网关启动时由 `src/role-config.cjs` 做完整校验，配置有误会直接报错并指出文件和字段。
+每个角色一个文件：`config/roles/<key>.json`，字段说明见同目录的 `role.schema.json`（VS Code 会据此提示和校验）。网关启动时由 `src/agent/role-config.cjs` 做完整校验，配置有误会直接报错并指出文件和字段。
 
 | 字段 | 作用 |
 | --- | --- |
@@ -271,7 +272,7 @@ PI_AGENT_API_KEY=ollama
 - **交接契约**：每次交付必带结论、产物、证据、假设；产物路径限制在当前项目的工作区内。
 - **最终汇总**：项目经理发起的任务链，只有项目经理的 `final=true` 才算收尾；其他角色声明 `final` 仍会交回项目经理汇总。失败也交回项目经理重新决策。根任务结算后，系统再生成一条独立的 `final_summary`，单独展示最终总结。
 - **结论与文件聚合**：项目经理最终交付会合并所有子机器人文件并去重；桌面端每个主机器人也会汇总自身全部执行实例的结论和产物。
-- **派发守卫**（`src/orchestrator/guards.js`）：项目经理只在文字里写“已派发给前端”，或提交的 assignments 全部无效被过滤时，编排层先要求纠正一次，仍失败再按文字推断目标角色兜底派发，避免任务悄悄卡住。
+- **派发守卫**（`src/agent/orchestrator/guards.js`）：项目经理只在文字里写“已派发给前端”，或提交的 assignments 全部无效被过滤时，编排层先要求纠正一次，仍失败再按文字推断目标角色兜底派发，避免任务悄悄卡住。
 - **验收门禁**：测试必须提交结构化验收结果——`verdict=pass` 需全部检查通过且至少一条证据，`fail` 需写明失败项，`skip` 需写明原因。“单元测试通过 / 页面能打开”不能当作通过；未通过时交回项目经理决定打回谁修复。
 - **人工确认**：需要用户拍板的选项通过飞书卡片或桌面端确认；暂停时保存检查点，继续后从检查点恢复。
 
@@ -419,6 +420,18 @@ CLI 的写入操作必须带项目名，目标路径限制在 `workspace/<projec
 | `node scripts/check-bot-identity.mjs` | 查看各机器人的 open_id 与应用名 |
 | `node scripts/create-bitable-trace.mjs` | 创建 Trace 表 |
 
+## Architecture
+
+源码按职责分层，Feishu 和 Desktop 两个入口面共享同一套领域状态和 Agent 执行链：
+
+- **Feishu 入口**：`src/index.js` 只加载 `src/runtime/bootstrap.js`；飞书消息和卡片事件从 `src/integrations/feishu/handlers.js` 进入运行时网关。
+- **Desktop 入口**：`desktop/electron/main.cjs` 通过 `desktop/electron/gateway-process.cjs` 启动同一个 `src/index.js`，再通过本机 WebSocket 连接 `src/desktop/desktop-host.js`；Electron UI 仍在 `desktop/`。
+- **Runtime 层**：`src/runtime/` 放启动、网关、Pi bridge、模型配置、会话、观测、关闭流程、环境目录和锁。
+- **Agent 与 Domain 层**：`src/agent/` 放工具、策略闸门、工具事件、编排和质量门禁；`src/domain/` 放任务、事件、项目、工单、产物和持久化。
+- **接入与扩展层**：`src/integrations/` 放飞书、Bitable 和 diagram 等外部接入；`src/mcp/` 与 `src/capabilities/` 保持独立，分别提供 MCP 和能力注册。
+
+更短的层次图和数据流见 [docs/architecture.md](docs/architecture.md)。
+
 ## 目录结构
 
 ```text
@@ -429,15 +442,14 @@ desktop/
   electron/           主进程、preload、托盘与图标
   renderer/           React 渲染层（Vite）
 src/
-  index.js            网关入口：飞书长连接、桌面控制面、看板与工单
-  orchestrator.js     编排层；orchestrator/ 下是计划、路由、守卫、待确认存储
-  pi-agent.js         Pi 会话构造与执行
-  agent/              策略闸门、提示词、工具与工具事件
-  runtime/            embedded / RPC runner、Pi 扩展、worktree
-  domain/             任务模型、TaskStore、DAG、交付、审计、Trace
+  index.js            进程入口薄层
+  runtime/            网关、Pi bridge、模型、会话、观测与生命周期
+  agent/              工具、策略、编排与质量门禁
+  domain/             任务、事件、项目、工单、产物与持久化
+  desktop/             Node host 侧桌面模块
+  integrations/        飞书、Bitable 与 diagram 接入
+  mcp/                 MCP 配置、服务与工具桥接
   capabilities/       Skill 与插件注册表
-  tickets/            GitHub 工单：拉取、附图、优先级、回写
-  env-catalog.cjs     全部环境配置的清单（运行设置据此渲染）
 scripts/              运维、诊断与冒烟脚本
 test/                 node:test 单元测试
 docs/                 总览、设计文档与实施计划

@@ -1,7 +1,7 @@
 // 协作链路验证：项目经理产出计划 → 编排层派发架构师 → 架构师交付。
-// 运行: node spike/collaboration.mjs
-import { runAgent } from "../src/pi-agent.js";
-import { createOrchestrator } from "../src/orchestrator.js";
+// 运行: node docs/archive/spike/collaboration.mjs
+import { runAgent } from "../../../src/runtime/pi-agent.js";
+import { createOrchestrator } from "../../../src/agent/orchestrator.js";
 
 function mockClient(name) {
   return {
