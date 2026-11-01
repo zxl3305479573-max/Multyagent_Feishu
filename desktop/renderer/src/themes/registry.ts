@@ -1,8 +1,8 @@
 import type { SkinDefinition, SkinOptionLayer } from "./types";
 
-const modules = import.meta.glob<{ default: SkinDefinition }>("./skins/*.ts", { eager: true });
+const modules = import.meta.glob<{ default: SkinDefinition }>(["./skins/*.ts", "./skins/*/index.ts"], { eager: true });
 
-const builtinOrder = ["light", "dark", "warm", "contrast", "forest"];
+const builtinOrder = ["light", "dark", "warm", "contrast", "forest", "pear"];
 export const skins = Object.values(modules)
   .map((module) => module.default)
   .sort((left, right) => {

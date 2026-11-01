@@ -2,7 +2,6 @@ import { createRoot } from "react-dom/client";
 import "./styles/tokens.css";
 import "./style.css";
 import { App } from "./App";
-import { applyStoredSkin } from "./themes/apply";
+import { SkinProvider } from "./themes/SkinContext";
 
-applyStoredSkin();
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(<SkinProvider><App /></SkinProvider>);

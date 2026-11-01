@@ -28,7 +28,7 @@ export function getSavedSkinChoice(): SkinChoice {
 }
 
 export function skinCss(skin: SkinDefinition) {
-  return `[data-skin="${skin.id}"]{${Object.entries(skin.tokens).map(([name, value]) => `${name}:${value};`).join("")}}`;
+  return `[data-skin="${skin.id}"]{${Object.entries(skin.tokens || {}).map(([name, value]) => `${name}:${value};`).join("")}}`;
 }
 
 function styleElement() {
@@ -47,6 +47,7 @@ export function applySkin(id: string, cache = true) {
   const css = skinCss(skin);
   document.documentElement.dataset.skin = skin.id;
   styleElement().textContent = css;
+  window.dispatchEvent(new CustomEvent("multyagent:skin-change", { detail: skin }));
   if (cache) {
     storageSet(SKIN_CSS_STORAGE_KEY, css);
     storageSet(SKIN_CSS_ID_STORAGE_KEY, skin.id);

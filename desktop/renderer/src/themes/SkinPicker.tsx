@@ -13,7 +13,7 @@ function SkinCard({ skin, selected, onSelect, onPreview, onRestore }: {
   skin: SkinDefinition; selected: boolean; onSelect: () => void; onPreview: () => void; onRestore: () => void;
 }) {
   return <button type="button" className={`skin-card ${selected ? "is-selected" : ""}`} aria-pressed={selected} onClick={onSelect} onMouseEnter={onPreview} onFocus={onPreview} onMouseLeave={onRestore} onBlur={onRestore}>
-    <Swatches colors={skin.preview} />
+    {skin.assets?.aiAvatar ? <img className="skin-card-avatar" src={skin.assets.aiAvatar} alt="" /> : <Swatches colors={skin.preview} />}
     <strong>{skin.name}</strong>
     <span>{skin.description}</span>
   </button>;
