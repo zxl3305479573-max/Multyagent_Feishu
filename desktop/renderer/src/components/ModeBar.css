@@ -6,9 +6,8 @@
 .mode-segment button.is-selected { background: var(--color-surface-raised); color: var(--accent); font-weight: 600; box-shadow: var(--shadow-sm); }
 .mode-segment button:disabled { cursor: not-allowed; opacity: 0.6; }
 .mode-select { position: relative; display: inline-flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; }
-.mode-select select { min-height: var(--control-height-sm); max-width: 112px; padding: 0 6px; border: var(--control-border); border-radius: var(--control-radius); background: var(--surface-raised); color: var(--ink); font-size: 12px; transition: var(--control-transition); }
+.mode-select select { min-height: var(--control-height-sm); max-width: 112px; padding-left: 6px; font-size: 12px; }
 .mode-select:last-child select { max-width: 72px; }
-.mode-select select:hover:not(:disabled) { border-color: var(--control-hover-border); }
 .mode-select select:disabled { color: var(--muted); background: var(--surface); }
 .mode-select:last-child[data-tooltip]::after { right: 0; left: auto; }
 
