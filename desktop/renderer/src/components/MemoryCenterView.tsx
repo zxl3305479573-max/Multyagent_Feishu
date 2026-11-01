@@ -9,6 +9,8 @@ export function MemoryCenterView({ project, connected, request, onNotice }: Prop
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
 
   const load = useCallback(async () => {
     if (!connected) {
@@ -28,6 +30,15 @@ export function MemoryCenterView({ project, connected, request, onNotice }: Prop
 
   useEffect(() => { void load(); }, [load]);
 
+  async function update(item: MemoryItem, patch: Record<string, unknown>) {
+    try { await request("memory_update", { taskId: item.taskId, id: item.id, ...patch }); await load(); setEditing(null); }
+    catch (error) { onNotice(`保存记忆失败：${(error as Error).message}`); }
+  }
+  async function remove(item: MemoryItem) {
+    try { await request("memory_delete", { taskId: item.taskId, id: item.id }); await load(); }
+    catch (error) { onNotice(`删除记忆失败：${(error as Error).message}`); }
+  }
+
   const needle = query.trim().toLowerCase();
   const visible = needle
     ? items.filter((item) => `${item.taskTitle} ${item.text} ${item.projectName || ""}`.toLowerCase().includes(needle))
@@ -37,7 +48,7 @@ export function MemoryCenterView({ project, connected, request, onNotice }: Prop
 
   return <div className="central-view settings-content feature-page">
     <section className="feature-hero">
-      <div><span>长期上下文</span><h2>记忆中心</h2><p>这里展示任务记录中真实保存的对话记忆。当前版本只读，编辑、删除与“已确认/模型推断”分类需要独立记忆后端。</p></div>
+      <div><span>长期上下文</span><h2>记忆中心</h2><p>这里展示任务记录中真实保存的对话记忆。编辑、删除和确认状态会直接写回任务记录。</p></div>
       <dl><div><dt>用户输入</dt><dd>{userCount}</dd></div><div><dt>Agent 结果</dt><dd>{assistantCount}</dd></div></dl>
     </section>
     <div className="feature-toolbar">
@@ -49,9 +60,10 @@ export function MemoryCenterView({ project, connected, request, onNotice }: Prop
     {visible.length > 0 && <div className="memory-grid">{visible.map((item) => <article className="memory-card" key={item.id}>
       <header><span className={`memory-role memory-role-${item.role}`}>{item.role === "assistant" ? "Agent" : "用户"}</span><time>{formatTime(item.at || undefined)}</time></header>
       <strong>{item.taskTitle || item.taskId}</strong>
-      <p>{item.text}</p>
-      <footer><span>{item.projectName || "未归属项目"}</span><code>{item.taskId}</code></footer>
+      {editing === item.id ? <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={4} /> : <p>{item.text}</p>}
+      <footer><span>{item.projectName || "未归属项目"} · {item.confirmed ? "已确认" : "未确认"}</span><code>{item.taskId}</code></footer>
+      <div className="memory-actions">{editing === item.id ? <><button className="quiet-button" onClick={() => setEditing(null)}>取消</button><button className="primary-button" onClick={() => void update(item, { text: draft })}>保存</button></> : <><button className="quiet-button" onClick={() => { setEditing(item.id); setDraft(item.text); }}>编辑</button><button className="quiet-button" onClick={() => void update(item, { confirmed: !item.confirmed })}>{item.confirmed ? "取消确认" : "确认"}</button><button className="quiet-button" onClick={() => void remove(item)}>删除</button></>}</div>
     </article>)}</div>}
-    <p className="feature-note">数据来源：`runtime/domain-tasks.json` 中的任务 `conversation_memory`，通过只读命令 `memory_list` 读取。</p>
+    <p className="feature-note">数据来源：`runtime/domain-tasks.json` 中的任务 `conversation_memory`，通过 `memory_list`、`memory_update` 和 `memory_delete` 读取与修改。</p>
   </div>;
 }

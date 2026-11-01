@@ -14,7 +14,7 @@ function clean(value, max = 4000) {
 function withMemory(memory, role, text) {
   const content = clean(text, 3000);
   if (!content) return Array.isArray(memory) ? memory : [];
-  return [...(Array.isArray(memory) ? memory : []), { role, text: content, at: new Date().toISOString() }].slice(-40);
+  return [...(Array.isArray(memory) ? memory : []), { role, text: content, at: new Date().toISOString(), confirmed: false }].slice(-40);
 }
 
 function formatMemory(memory) {

@@ -26,6 +26,7 @@ type Listing = {
   base?: BaseAgent[];
   local?: { skills: Capability[]; plugins: Capability[]; error?: string };
 };
+type McpServer = { id: string; name: string; transport: "stdio"; command?: string; args?: string[]; env: Record<string, string>; roles: string[]; enabled: boolean; trusted: boolean; status: string; error?: string | null; tools: Array<{ name: string; description?: string }> };
 type SourceType = "github" | "local" | "inline";
 
 type Props = {
@@ -51,11 +52,18 @@ export function CapabilitiesView({ agents, connected, request, onNotice }: Props
   const [trust, setTrust] = useState(false);
   const [busy, setBusy] = useState("");
   const [removeTarget, setRemoveTarget] = useState<Capability | null>(null);
+  const [mcp, setMcp] = useState<McpServer[]>([]);
+  const [mcpDraft, setMcpDraft] = useState({ id: "", name: "", command: "", args: "", env: "", roles: "" });
+  const [mcpAdding, setMcpAdding] = useState(false);
+  const [mcpTrusted, setMcpTrusted] = useState(false);
   const roleAgents = agents.filter((agent) => agent.enabled !== false);
 
   const load = useCallback(async () => {
     if (!connected) return;
-    try { setItems(await request<Listing>("capabilities_list")); }
+    try {
+      const [listing, mcpListing] = await Promise.all([request<Listing>("capabilities_list"), request<{ servers: McpServer[] }>("mcp_list")]);
+      setItems(listing); setMcp(mcpListing.servers || []);
+    }
     catch (error) { onNotice(`读取能力失败：${(error as Error).message}`); }
   }, [connected, request, onNotice]);
   useEffect(() => { void load(); }, [load]);
@@ -118,6 +126,31 @@ export function CapabilitiesView({ agents, connected, request, onNotice }: Props
       await load();
     } catch (error) { onNotice(`移除失败：${(error as Error).message}`); }
     finally { setBusy(""); }
+  }
+
+  async function saveMcp() {
+    try {
+      await request("mcp_save", { id: mcpDraft.id, name: mcpDraft.name || mcpDraft.id, transport: "stdio", command: mcpDraft.command, args: mcpDraft.args.split(/\r?\n|\s+/).filter(Boolean), env: Object.fromEntries(mcpDraft.env.split(/\r?\n/).map((line) => line.split("=").map((part) => part.trim())).filter(([key, value]) => key && value)), roles: mcpDraft.roles.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean), trusted: mcpTrusted, enabled: mcpTrusted });
+      setMcpAdding(false); setMcpTrusted(false); setMcpDraft({ id: "", name: "", command: "", args: "", env: "", roles: "" }); await load();
+    } catch (error) { onNotice(`保存 MCP 失败：${(error as Error).message}`); }
+  }
+  async function toggleMcp(server: McpServer) {
+    if (!server.enabled && !server.trusted && !window.confirm(`启用「${server.name}」会允许该本机 MCP 进程接收分配角色的 Agent 工具参数。请确认你信任这个进程及其代码。继续启用？`)) return;
+    try { await request("mcp_set_enabled", { id: server.id, enabled: !server.enabled }); await load(); }
+    catch (error) { onNotice(`切换 MCP 失败：${(error as Error).message}`); }
+  }
+  async function reconnectMcp(server: McpServer) {
+    try { await request("mcp_reconnect", { id: server.id }); await load(); }
+    catch (error) { onNotice(`重连 MCP 失败：${(error as Error).message}`); }
+  }
+  async function removeMcp(server: McpServer) {
+    try { await request("mcp_remove", { id: server.id }); await load(); }
+    catch (error) { onNotice(`删除 MCP 失败：${(error as Error).message}`); }
+  }
+  function editMcp(server: McpServer) {
+    setMcpDraft({ id: server.id, name: server.name, command: server.command || "", args: (server.args || []).join("\n"), env: Object.entries(server.env || {}).map(([key, value]) => `${key}=${value}`).join("\n"), roles: (server.roles || []).join("\n") });
+    setMcpAdding(true);
+    setMcpTrusted(server.trusted);
   }
 
   const toggle = (list: string[], key: string) => list.includes(key) ? list.filter((item) => item !== key) : [...list, key];
@@ -217,6 +250,29 @@ export function CapabilitiesView({ agents, connected, request, onNotice }: Props
         {items.local?.error && <p className="capability-warning">读取本机能力失败：{items.local.error}</p>}
         {localList.map(renderCard)}
       </section>}
+      <section className="capability-local-section mcp-section">
+        <div className="capability-card-heading"><h3>MCP 服务</h3><button className="capability-add" onClick={() => setMcpAdding((value) => !value)}>＋ 添加 MCP</button></div>
+        <p className="capability-intro">仅支持本机 stdio 服务。环境变量栏只保存“参数名=进程环境变量名”，不会保存密钥值。</p>
+        {mcpAdding && <section className="capability-form">
+          <label>ID<input value={mcpDraft.id} placeholder="例如 filesystem" onChange={(event) => setMcpDraft({ ...mcpDraft, id: event.target.value })} /></label>
+          <label>名称<input value={mcpDraft.name} onChange={(event) => setMcpDraft({ ...mcpDraft, name: event.target.value })} /></label>
+          <label>启动命令<input value={mcpDraft.command} placeholder="例如 npx" onChange={(event) => setMcpDraft({ ...mcpDraft, command: event.target.value })} /></label>
+          <label>参数（空格或每行一个）<textarea rows={2} value={mcpDraft.args} onChange={(event) => setMcpDraft({ ...mcpDraft, args: event.target.value })} /></label>
+          <label>环境变量映射（每行 KEY=ENV_NAME）<textarea rows={2} value={mcpDraft.env} onChange={(event) => setMcpDraft({ ...mcpDraft, env: event.target.value })} /></label>
+          <label>分配角色（每行一个，留空表示全部角色）<textarea rows={2} value={mcpDraft.roles} onChange={(event) => setMcpDraft({ ...mcpDraft, roles: event.target.value })} /></label>
+          <label className="capability-trust"><input type="checkbox" checked={mcpTrusted} onChange={(event) => setMcpTrusted(event.target.checked)} />我已检查启动命令与参数，并信任该 MCP 服务处理 Agent 工具输入</label>
+          <div className="capability-form-actions"><button className="quiet-button" onClick={() => { setMcpAdding(false); setMcpTrusted(false); }}>取消</button><button className="capability-primary" disabled={!mcpTrusted} onClick={() => void saveMcp()}>确认信任并连接</button></div>
+        </section>}
+        {!mcp.length && !mcpAdding && <p className="capability-empty">还没有配置 MCP 服务。</p>}
+        {mcp.map((server) => <article className={`capability-card ${server.enabled && server.status === "connected" ? "" : "is-disabled"}`} key={server.id}>
+          <div className="capability-card-heading"><strong>{server.name}</strong><code>{server.id}</code><span className="capability-badge">{server.status === "connected" ? "已连接" : server.status === "error" ? "连接失败" : server.enabled ? server.trusted ? "未连接" : "待信任" : "已停用"}</span><label className="capability-switch"><input type="checkbox" checked={server.enabled && server.trusted} onChange={() => void toggleMcp(server)} />启用</label></div>
+          <p>{server.command} {server.args?.join(" ")}</p>
+          {server.error && <p className="capability-warning">{server.error}</p>}
+          <div className="capability-tools">工具：{server.tools.length ? server.tools.map((tool) => <code key={tool.name}>{tool.name}</code>) : "尚未发现工具"}</div>
+          <small>来源：MCP · 环境变量名 {Object.keys(server.env).length ? Object.entries(server.env).map(([key, value]) => `${key}=${value}`).join("、") : "无"}</small>
+          <div className="capability-form-actions"><button className="quiet-button" onClick={() => editMcp(server)}>编辑</button><button className="quiet-button" onClick={() => void reconnectMcp(server)}>重新连接</button><button className="quiet-button" onClick={() => void removeMcp(server)}>删除</button></div>
+        </article>)}
+      </section>
       {removeTarget && <ConfirmDialog
         title={`移除${KIND_LABEL[removeTarget.kind]}？`}
         description={<>将从本机删除 <strong>{removeTarget.name}</strong> 及其文件。此操作无法撤销。</>}

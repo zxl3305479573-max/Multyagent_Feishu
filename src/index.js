@@ -31,6 +31,7 @@ import { createCustomAgentService } from "./agent-designer.js";
 import { feishuEnabled } from "./feishu-mode.cjs";
 import { rotateEventLog } from "./event-log.js";
 import { activeLock, describeLock, globalLockFile, releaseLock as releaseGatewayLock, writeLock } from "./gateway-lock.cjs";
+import { getMcpService } from "./mcp/index.js";
 
 // 角色定义来自 config/roles/*.json 与数据目录下的自建角色；内置配置有误时在这里直接报错退出。
 // 固定自建角色目录的绝对路径，RPC 子进程等从其他工作目录启动时也读同一处。
@@ -88,6 +89,13 @@ try {
   process.exit(1);
 }
 configureTaskStore(taskStore);
+const mcp = getMcpService();
+try {
+  await mcp.startAll();
+} catch (error) {
+  console.warn(`[mcp] startup skipped: ${error.message}`);
+}
+ lifecycle.register("MCP servers", () => mcp.stopAll());
 const eventsFile = process.env.PI_EVENTS_FILE || "runtime/events.jsonl";
 // 事件日志超过阈值时在启动阶段归档（此时还没有并发写入）。进行中和最近 24 小时内
 // 结束的任务事件会带到新文件，保证看板与 Trace 重放仍能还原它们。
@@ -336,6 +344,8 @@ if (process.env.PI_DESKTOP_CONTROL !== "false") {
     exportProject,
     cleanupHistory,
     restoreHistory,
+    mcp,
+    listProjectRoots: async (projectName) => (await projectRegistry.list(projectName ? [projectName] : [])).filter((item) => !projectName || item.name === projectName),
     tickets: ticketService,
     capabilities: getCapabilityRegistry(),
     customAgents: createCustomAgentService({
