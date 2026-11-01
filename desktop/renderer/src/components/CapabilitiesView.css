@@ -22,7 +22,7 @@
 .capability-local span { min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; }
 .capability-trust { padding: 8px 10px; border-radius: 6px; background: var(--surface); }
 .capability-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.capability-primary { min-height: var(--control-height); padding: 0 14px; border: 0; border-radius: var(--control-radius); background: var(--accent); color: #fff; font-size: 13px; cursor: pointer; transition: var(--control-transition); }
+.capability-primary { min-height: var(--control-height); padding: 0 14px; border: 0; border-radius: var(--control-radius); background: var(--accent); color: var(--color-primary-contrast); font-size: 13px; cursor: pointer; transition: var(--control-transition); }
 .capability-primary:hover:not(:disabled) { background: var(--accent-hover); }
 .capability-primary:disabled { opacity: 0.5; cursor: default; }
 .capability-card { display: grid; gap: 8px; padding: 14px; border: var(--control-border); border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-xs); transition: var(--control-transition); }
@@ -52,7 +52,7 @@
 .base-capability-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 7px; }
 .base-capability-item { display: flex; gap: 8px; align-items: flex-start; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); cursor: pointer; transition: var(--control-transition); }
 .base-capability-item:hover { border-color: var(--control-hover-border); }
-.base-capability-item.is-enabled { border-color: var(--accent-line); background: #f8faff; }
+.base-capability-item.is-enabled { border-color: var(--accent-line); background: var(--color-primary-soft); }
 .base-capability-item input { width: 15px; height: 15px; flex: none; margin: 2px 0 0; accent-color: var(--accent); }
 .base-capability-item > span { display: grid; gap: 2px; min-width: 0; }
 .base-capability-item strong { color: var(--ink); font-size: 12.5px; font-weight: 600; }

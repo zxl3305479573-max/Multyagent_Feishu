@@ -1,0 +1,6 @@
+/* Small shadcn-style building blocks; all visual values come from the token contract. */
+.ui-dialog-overlay { position: fixed; inset: 0; z-index: var(--z-modal); background: var(--color-overlay); backdrop-filter: blur(var(--space-1)); animation: ui-fade-in var(--transition-base); }
+.ui-dialog-content { position: fixed; z-index: calc(var(--z-modal) + 1); top: 50%; left: 50%; width: min(480px, calc(100vw - var(--space-6))); max-height: calc(100vh - var(--space-8)); overflow: auto; transform: translate(-50%, -50%); animation: ui-dialog-in var(--transition-base); }
+.ui-dialog-content:focus { outline: none; }
+@keyframes ui-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ui-dialog-in { from { opacity: 0; transform: translate(-50%, calc(-50% + var(--space-2))); } to { opacity: 1; transform: translate(-50%, -50%); } }
