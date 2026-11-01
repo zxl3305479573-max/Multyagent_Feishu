@@ -7,7 +7,7 @@
 - 桌面端：`<Electron userData>/runtime/mcp.json`
 - 命令行网关：`runtime/mcp.json`，也可通过 `PI_MCP_CONFIG_FILE` 指定
 
-配置只保存 server id、名称、启动命令、参数、角色分配和环境变量名映射。例如 `TOKEN: MCP_TOKEN` 表示运行时从当前网关进程的 `MCP_TOKEN` 环境变量读取值；配置文件不会保存环境变量的实际值。
+配置只保存 server id、名称、启动命令、参数、角色分配和环境变量名映射。例如 `TOKEN: MCP_TOKEN` 表示运行时从当前网关进程的 `MCP_TOKEN` 环境变量读取值；配置文件不会保存环境变量的实际值。子进程只继承启动所需的系统环境变量和明确映射的变量，不会继承网关进程中的其他凭据。
 
 ## 生命周期和权限
 

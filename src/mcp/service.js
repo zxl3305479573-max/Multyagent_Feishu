@@ -3,6 +3,7 @@ import { loadMcpConfig, normalizeMcpServer, saveMcpConfig } from "./config.js";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const MAX_LINE = 1024 * 1024;
+const MCP_ENV_ALLOWLIST = ["PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "LANG", "LC_ALL"];
 
 function errorText(error) { return String(error?.message || error).slice(0, 500); }
 function toolName(serverId, name) {
@@ -16,10 +17,11 @@ function resultText(result) {
 }
 
 class McpStdioClient {
-  constructor(server, { spawn = defaultSpawn, log = console, timeoutMs = 10_000 } = {}) {
+  constructor(server, { spawn = defaultSpawn, log = console, envSource = process.env, timeoutMs = 10_000 } = {}) {
     this.server = server;
     this.spawn = spawn;
     this.log = log;
+    this.envSource = envSource;
     this.timeoutMs = timeoutMs;
     this.child = null;
     this.buffer = "";
@@ -30,9 +32,9 @@ class McpStdioClient {
 
   async start() {
     if (this.child) return this.tools;
-    const env = { ...process.env };
+    const env = Object.fromEntries(MCP_ENV_ALLOWLIST.filter((key) => this.envSource[key] !== undefined).map((key) => [key, this.envSource[key]]));
     for (const [key, envName] of Object.entries(this.server.env || {})) {
-      if (process.env[envName] !== undefined) env[key] = process.env[envName];
+      if (this.envSource[envName] !== undefined) env[key] = this.envSource[envName];
     }
     const child = this.spawn(this.server.command, this.server.args || [], {
       cwd: process.cwd(),
@@ -124,10 +126,11 @@ class McpStdioClient {
 }
 
 export class McpService {
-  constructor({ file = process.env.PI_MCP_CONFIG_FILE || "runtime/mcp.json", spawn = defaultSpawn, log = console } = {}) {
+  constructor({ file = process.env.PI_MCP_CONFIG_FILE || "runtime/mcp.json", spawn = defaultSpawn, log = console, envSource = process.env } = {}) {
     this.file = file;
     this.spawn = spawn;
     this.log = log;
+    this.envSource = envSource;
     this.config = { version: 1, servers: [] };
     this.clients = new Map();
     this.statuses = new Map();
@@ -154,8 +157,9 @@ export class McpService {
     const server = this.config.servers.find((item) => item.id === id);
     if (!server) throw new Error("找不到 MCP server");
     if (!server.trusted) throw new Error("MCP server must be explicitly trusted before connecting");
+    if (!server.enabled) throw new Error("MCP server must be enabled before connecting");
     await this.disconnect(id);
-    const client = new McpStdioClient(server, { spawn: this.spawn, log: this.log });
+    const client = new McpStdioClient(server, { spawn: this.spawn, log: this.log, envSource: this.envSource });
     client.owner = this;
     this.clients.set(id, client);
     this.statuses.set(id, { status: "connecting", error: null });

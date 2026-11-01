@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { WebSocket } from "ws";
 
 const require = createRequire(import.meta.url);
@@ -14,6 +15,7 @@ const entry = join(root, "desktop", "electron", "main.cjs");
 const distIndex = join(root, "dist", "desktop", "index.html");
 const outputDir = join(root, "test-results", "desktop-e2e");
 const reportPath = join(outputDir, "report.json");
+const execFileAsync = promisify(execFile);
 
 if (!existsSync(distIndex)) {
   throw new Error("桌面端构建不存在，请先运行 npm run desktop:build");
@@ -242,10 +244,26 @@ try {
   client?.close();
   if (child && child.exitCode === null) {
     child.kill();
-    await Promise.race([
+    const stopped = await Promise.race([
       new Promise((resolveExit) => child.once("exit", resolveExit)),
-      sleep(5_000),
+      sleep(2_000).then(() => false),
     ]);
+    if (stopped === false && process.platform === "win32") {
+      try { await execFileAsync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }); } catch {}
+    }
   }
-  await rm(resolve(userData), { recursive: true, force: true });
+  // Chromium may keep a profile database handle briefly after Electron exits.
+  // Cleanup failure must not turn an otherwise passing browser run into a test failure.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await rm(resolve(userData), { recursive: true, force: true });
+      break;
+    } catch (error) {
+      if (!(["EBUSY", "EPERM"].includes(error?.code)) || attempt === 2) {
+        console.warn(`E2E 临时目录清理跳过：${error?.message || error}`);
+        break;
+      }
+      await sleep(250 * (attempt + 1));
+    }
+  }
 }

@@ -62,3 +62,34 @@ test("MCP connect cannot bypass explicit trust confirmation", async (t) => {
   await assert.rejects(service.connect("untrusted"), /explicitly trusted/);
   assert.equal(service.clients.size, 0);
 });
+
+test("MCP child receives only platform environment and explicitly mapped values", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-env-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  let childEnv;
+  const listeners = {};
+  const child = {
+    stdin: { write(line) {
+      const request = JSON.parse(line);
+      if (request.id) {
+        const result = request.method === "initialize" ? {} : { tools: [] };
+        queueMicrotask(() => listeners.data?.(Buffer.from(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`)));
+      }
+    }, end() {} },
+    stdout: { on(type, handler) { listeners[type] = handler; } },
+    stderr: { on() {} },
+    once(type, handler) { listeners[type] = handler; },
+    kill() {},
+  };
+  const service = new McpService({
+    file: join(dir, "mcp.json"),
+    envSource: { PATH: "safe-path", SystemRoot: "C:\\Windows", MCP_TOKEN: "mapped-value", FEISHU_APP_SECRET: "must-not-leak" },
+    spawn: (_command, _args, options) => { childEnv = options.env; return child; },
+  });
+  t.after(() => service.stopAll());
+  await saveMcpConfig(service.file, { servers: [{ id: "env", command: "server", env: { TOKEN: "MCP_TOKEN" }, trusted: true }] });
+  await service.startAll();
+  assert.equal(childEnv.PATH, "safe-path");
+  assert.equal(childEnv.TOKEN, "mapped-value");
+  assert.equal(childEnv.FEISHU_APP_SECRET, undefined);
+});
