@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDesktopHost } from "../src/desktop-host.js";
+import { createDesktopHost } from "../src/desktop/desktop-host.js";
 
 test("desktop host connects lifecycle controls to the existing task and orchestrator services", async () => {
   const calls = [];

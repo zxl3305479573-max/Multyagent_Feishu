@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator } from "../src/orchestrator.js";
-import { agentInstanceLabel, ensureAssignmentIds, scheduleByRole, sequenceAssignments, sliceInfoFor, writeScopesOverlap } from "../src/orchestrator/assignments.js";
-import { overlappingSlices, oversizedAssignments } from "../src/orchestrator/guards.js";
-import { deliveryNameFor } from "../src/artifacts.js";
-import { createPolicyFactory } from "../src/pi-agent.js";
+import { createOrchestrator } from "../src/agent/orchestrator.js";
+import { agentInstanceLabel, ensureAssignmentIds, scheduleByRole, sequenceAssignments, sliceInfoFor, writeScopesOverlap } from "../src/agent/orchestrator/assignments.js";
+import { overlappingSlices, oversizedAssignments } from "../src/agent/orchestrator/guards.js";
+import { deliveryNameFor } from "../src/domain/artifacts.js";
+import { createPolicyFactory } from "../src/runtime/pi-agent.js";
 import { createRpcExtension } from "../src/runtime/pi-extension.mjs";
 import { createDeliverTool, droppedAssignments, normalizeAssignments } from "../src/agent/tools.js";
-import { validateTaskPlan } from "../src/task-plan.js";
+import { validateTaskPlan } from "../src/domain/task-plan.js";
 
 const quiet = { info() {}, warn() {}, error() {} };
 const client = { im: { message: { create: async () => ({ code: 0 }) } } };
@@ -318,7 +318,7 @@ test("切片状态变化时广播 plan_progress 快照，计划被放弃时广�
 });
 
 test("切片结束时记录 slice_finished；summarizeSliceStats 按角色、规模与门禁汇总", async () => {
-  const { summarizeSliceStats } = await import("../src/slice-stats.js");
+  const { summarizeSliceStats } = await import("../src/runtime/slice-stats.js");
   const events = [];
   let failed = false;
   const orch = createOrchestrator({

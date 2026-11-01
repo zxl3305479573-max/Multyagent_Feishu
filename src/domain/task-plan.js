@@ -1,4 +1,4 @@
-import { validateAcceptanceMatrix, validateIntegrationSlice } from "./quality-gates.js";
+import { validateAcceptanceMatrix, validateIntegrationSlice } from "../agent/quality-gates.js";
 
 const PROJECT_SLUG = /^[a-z][a-z0-9-]*$/;
 // 一份计划的切片总数上限：拆得过细会让派发轮次和汇总成本失控。

@@ -4,7 +4,7 @@
 import "dotenv/config";
 import { Client } from "@larksuiteoapi/node-sdk";
 
-import { roleConfig } from "../src/role-config.cjs";
+import { roleConfig } from "../src/agent/role-config.cjs";
 
 const config = { agents: roleConfig().agents };
 

@@ -11,7 +11,7 @@
 const { readdirSync, readFileSync } = require("node:fs");
 const { join, resolve } = require("node:path");
 
-const DEFAULT_DIR = join(__dirname, "..", "config", "roles");
+const DEFAULT_DIR = join(__dirname, "..", "..", "config", "roles");
 // 用户在桌面端自建的角色放在数据目录下（与内置角色分开，升级应用不会覆盖）。
 // 网关以数据目录为工作目录；Electron 主进程与 RPC 子进程通过 PI_CUSTOM_ROLES_DIR 指向同一处。
 function customRolesDir(env = process.env, cwd = process.cwd()) {

@@ -1,6 +1,6 @@
-import { readJsonFile, writeFileAtomic } from "./atomic-file.cjs";
-import { forEachEvent } from "./event-log.js";
-import { TRACE_FIELD_SCHEMA, TRACE_KEY_FIELD, sanitizeTraceEvent, toTraceFields } from "./domain/trace.js";
+import { readJsonFile, writeFileAtomic } from "../domain/atomic-file.cjs";
+import { forEachEvent } from "../domain/event-log.js";
+import { TRACE_FIELD_SCHEMA, TRACE_KEY_FIELD, sanitizeTraceEvent, toTraceFields } from "../domain/trace.js";
 
 const DEFAULT_MAPPING_FILE = "runtime/bitable-trace-records.json";
 const DEFAULT_FLUSH_DELAY_MS = 500;

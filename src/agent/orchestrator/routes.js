@@ -2,7 +2,7 @@
 // 角色间默认流转路由（config/routes.json）与派发轮次上限。
 import { readFileSync } from "node:fs";
 
-export const routesConfig = JSON.parse(readFileSync(new URL("../../config/routes.json", import.meta.url), "utf8"));
+export const routesConfig = JSON.parse(readFileSync(new URL("../../../config/routes.json", import.meta.url), "utf8"));
 
 export const MAX_DISPATCH_ROUNDS = Number(process.env.PI_MAX_DISPATCH_ROUNDS) || 8;
 

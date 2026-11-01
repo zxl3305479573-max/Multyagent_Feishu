@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { abortActiveSessions, registerActiveSession, resetSessionControlForTest } from "../src/session-control.js";
+import { abortActiveSessions, registerActiveSession, resetSessionControlForTest } from "../src/runtime/session-control.js";
 
 test.beforeEach(() => resetSessionControlForTest());
 test.afterEach(() => resetSessionControlForTest());

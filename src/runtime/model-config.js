@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { writeFileAtomic } from "./atomic-file.cjs";
+import { writeFileAtomic } from "../domain/atomic-file.cjs";
 
 export const MODEL_API_TYPES = [
   ["openai-completions", "OpenAI Chat Completions（兼容服务）"],

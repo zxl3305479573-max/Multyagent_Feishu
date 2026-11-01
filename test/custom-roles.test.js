@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import customRoles from "../src/custom-roles.cjs";
-import { DEFAULT_DIR, loadRoles, toAgentDefinitions, toPolicy } from "../src/role-config.cjs";
-import { createCustomAgentService, designAgent, parseDesign } from "../src/agent-designer.js";
+import customRoles from "../src/agent/custom-roles.cjs";
+import { DEFAULT_DIR, loadRoles, toAgentDefinitions, toPolicy } from "../src/agent/role-config.cjs";
+import { createCustomAgentService, designAgent, parseDesign } from "../src/agent/agent-designer.js";
 import { customRoleCatalog } from "../src/agent/prompts.js";
 
 const { createCustomRoleStore, normalizeRole } = customRoles;

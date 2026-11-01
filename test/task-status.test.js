@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { summarizeTaskEvents } from "../src/task-status.js";
+import { summarizeTaskEvents } from "../src/domain/task-status.js";
 
 test("child final events preserve root activity until root settlement", () => {
   const events = [

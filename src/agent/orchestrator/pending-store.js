@@ -1,7 +1,7 @@
 // @ts-check
 // 编排器的待确认项（approvals）与暂停检查点（checkpoints）持久化。
 // 两者都必须跨网关重启存活：重启前发出的确认卡片、暂停时挂起的派发，在重启后仍要能继续。
-import { readJsonFileSync, writeFileAtomicSync } from "../atomic-file.cjs";
+import { readJsonFileSync, writeFileAtomicSync } from "../../domain/atomic-file.cjs";
 
 // 只有真正需要人工决定的交付才值得跨重启保留，其余的恢复后也无从处理。
 /** @param {any} item @param {{ now?: number, ttlMs: number }} options */

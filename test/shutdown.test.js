@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { createShutdown } from "../src/shutdown.js";
+import { createShutdown } from "../src/runtime/shutdown.js";
 
 const quiet = { info() {}, warn() {}, error() {} };
 

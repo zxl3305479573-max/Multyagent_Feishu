@@ -1,5 +1,5 @@
 import test from "node:test";
-import { roleConfig } from "../src/role-config.cjs";
+import { roleConfig } from "../src/agent/role-config.cjs";
 import assert from "node:assert/strict";
 import { BOARD_FIELD_SCHEMA, OWNER_LABELS, STAGE_LABELS, STATUS_LABELS } from "../src/domain/bitable-board.js";
 

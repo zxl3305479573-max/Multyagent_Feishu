@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
-import { createDesktopControlServer } from "../src/desktop-control.js";
+import { createDesktopControlServer } from "../src/desktop/desktop-control.js";
 
 const queues = new WeakMap();
 function connect(ws, message) {

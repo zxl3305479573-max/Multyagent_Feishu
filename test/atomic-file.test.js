@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CorruptStateFileError, readJsonFile, readJsonFileSync, writeFileAtomic, writeFileAtomicSync } from "../src/atomic-file.cjs";
+import { CorruptStateFileError, readJsonFile, readJsonFileSync, writeFileAtomic, writeFileAtomicSync } from "../src/domain/atomic-file.cjs";
 
 function scratch() { return mkdtempSync(join(tmpdir(), "atomic-file-")); }
 

@@ -1,8 +1,8 @@
 import { appendFile, mkdir } from "node:fs/promises";
-import { readEventsTail } from "./event-log.js";
+import { readEventsTail } from "../domain/event-log.js";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
-import { redactTraceText } from "./domain/trace.js";
+import { redactTraceText } from "../domain/trace.js";
 
 const NEVER_LOG = new Set(["prompt", "system_prompt", "thinking", "tool_output", "content", "result", "input"]);
 

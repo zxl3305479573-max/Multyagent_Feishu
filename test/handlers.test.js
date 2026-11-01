@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createRunAgent } from "../src/handlers.js";
+import { createRunAgent } from "../src/integrations/feishu/handlers.js";
 
 test("RPC 运行模式把任务上下文和安全事件回传到网关", async () => {
   const calls = [];

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createProjectRegistry } from "../src/project-registry.js";
+import { createProjectRegistry } from "../src/domain/project-registry.js";
 
 test("project list includes workspace folders created from Feishu without the registry", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-registry-"));

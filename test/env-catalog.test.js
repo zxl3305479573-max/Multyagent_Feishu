@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { buildEnvCatalog, catalogFields, isSecretKey } from "../src/env-catalog.cjs";
-import { roleConfig } from "../src/role-config.cjs";
+import { buildEnvCatalog, catalogFields, isSecretKey } from "../src/runtime/env-catalog.cjs";
+import { roleConfig } from "../src/agent/role-config.cjs";
 
 // 只在开发时使用、不属于运行配置的变量。
 const NOT_SETTINGS = new Set([

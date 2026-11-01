@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { buildValidatedHandoff } from "./domain/delivery.js";
-import { loadProjectSummaryFor } from "./gateway.js";
-import { isTerminated } from "./tasks.js";
+import { buildValidatedHandoff } from "../domain/delivery.js";
+import { loadProjectSummaryFor } from "../runtime/gateway.js";
+import { isTerminated } from "../domain/tasks.js";
 import { ASK_TOOL_ALLOWLIST, applyModeToDelivery, modeInstruction, normalizeModes } from "./desktop-modes.js";
-import { createQualityGates, qualityPolicyForTask, requestsQualitySkip, withQualitySkip } from "./quality-gates.js";
+import { createQualityGates, qualityPolicyForTask, requestsQualitySkip, withQualitySkip } from "../agent/quality-gates.js";
 
 const DESKTOP_CHAT_ID = "desktop-local";
 

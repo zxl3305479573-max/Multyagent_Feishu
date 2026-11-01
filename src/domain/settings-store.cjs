@@ -4,7 +4,7 @@
 // - 生效值优先级：运行设置 > 桌面端托管默认值（应用数据目录下的路径）> 系统环境变量 > 内置默认值。
 // - 校验规则来自 env-catalog：数字、下拉选项、开关、角色列表都在保存时检查，不合法直接拒绝。
 const { readJsonFile, writeFileAtomic } = require("./atomic-file.cjs");
-const { buildEnvCatalog, catalogFields } = require("./env-catalog.cjs");
+const { buildEnvCatalog, catalogFields } = require("../runtime/env-catalog.cjs");
 
 const MAX_LENGTH = 4000;
 

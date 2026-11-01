@@ -1,13 +1,13 @@
 const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, safeStorage, shell } = require("electron");
 const { join } = require("node:path");
 const { mkdir, readFile } = require("node:fs/promises");
-const { resolveProjectFile } = require("../../src/project-file.cjs");
+const { resolveProjectFile } = require("../../src/domain/project-file.cjs");
 const { createCredentialStore } = require("./credential-store.cjs");
 const { createGatewayProcess } = require("./gateway-process.cjs");
-const { buildEnvCatalog, catalogFields, isSecretKey } = require("../../src/env-catalog.cjs");
-const { createSettingsStore, describeSettings } = require("../../src/settings-store.cjs");
-const { roleConfig } = require("../../src/role-config.cjs");
-const { activeLock, describeLock, globalLockFile } = require("../../src/gateway-lock.cjs");
+const { buildEnvCatalog, catalogFields, isSecretKey } = require("../../src/runtime/env-catalog.cjs");
+const { createSettingsStore, describeSettings } = require("../../src/domain/settings-store.cjs");
+const { roleConfig } = require("../../src/agent/role-config.cjs");
+const { activeLock, describeLock, globalLockFile } = require("../../src/runtime/gateway-lock.cjs");
 
 const root = join(__dirname, "..", "..");
 const e2eMode = process.env.PI_DESKTOP_E2E === "1";

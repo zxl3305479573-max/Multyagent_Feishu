@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createQualityGates } from "../quality-gates.js";
+import { createQualityGates } from "../agent/quality-gates.js";
 
 function readableTaskId(date = new Date()) {
   const stamp = date.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);

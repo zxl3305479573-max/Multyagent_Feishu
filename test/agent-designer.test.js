@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import customRoles from "../src/custom-roles.cjs";
-import { buildDesignPrompt, createCustomAgentService, designAgent, parseDesign } from "../src/agent-designer.js";
+import customRoles from "../src/agent/custom-roles.cjs";
+import { buildDesignPrompt, createCustomAgentService, designAgent, parseDesign } from "../src/agent/agent-designer.js";
 
 const { createCustomRoleStore } = customRoles;
 

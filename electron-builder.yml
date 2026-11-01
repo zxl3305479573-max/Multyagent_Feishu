@@ -7,7 +7,7 @@ files:
   - desktop/electron/**/*
   - src/**/*
   - config/**/*
-  # 可选：随包附带 diagram-design 技能（src/pi-agent.js 会优先使用 skills/diagram-design，
+  # 可选：随包附带 diagram-design 技能（src/runtime/pi-agent.js 会优先使用 skills/diagram-design，
   # 不存在时回退到 PI_DIAGRAM_SKILL_PATH 或 ~/.codex/skills）。目录不存在时该规则不匹配任何文件。
   - skills/**/*
   - package.json

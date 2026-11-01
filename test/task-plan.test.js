@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateTaskPlan } from "../src/task-plan.js";
-import { createDeliverTool } from "../src/pi-agent.js";
+import { validateTaskPlan } from "../src/domain/task-plan.js";
+import { createDeliverTool } from "../src/runtime/pi-agent.js";
 
 const limits = {
   architect: {

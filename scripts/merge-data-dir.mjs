@@ -18,9 +18,9 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { activeLock, describeLock, globalLockFile } from "../src/gateway-lock.cjs";
-import { roleConfig } from "../src/role-config.cjs";
-import { writeFileAtomic } from "../src/atomic-file.cjs";
+import { activeLock, describeLock, globalLockFile } from "../src/runtime/gateway-lock.cjs";
+import { roleConfig } from "../src/agent/role-config.cjs";
+import { writeFileAtomic } from "../src/domain/atomic-file.cjs";
 
 const PROJECT_NAME = /^[a-z][a-z0-9-]{1,63}$/;
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));

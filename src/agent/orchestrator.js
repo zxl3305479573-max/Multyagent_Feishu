@@ -1,11 +1,11 @@
 // 编排层：接收各角色交付，按计划/路由派发下游角色，处理人工确认、暂停检查点与根任务结算。
 // 待确认项与检查点的持久化见 orchestrator/pending-store.js，默认路由见 orchestrator/routes.js。
-import { buildTaskReceivedCard, loadProjectSummaryFor, sendCard, sendResultCard, sendText } from "./gateway.js";
-import { appendProjectSummary } from "./project-summary.js";
-import { getRootTask, isPaused, isTerminated, rootAgentKey, setPaused, setTerminated } from "./tasks.js";
-import { artifactsDirFor, describeDeliveryArtifacts } from "./artifacts.js";
-import { abortActiveSessions } from "./session-control.js";
-import { readyPlanAssignments } from "./plan-scheduler.js";
+import { buildTaskReceivedCard, loadProjectSummaryFor, sendCard, sendResultCard, sendText } from "../runtime/gateway.js";
+import { appendProjectSummary } from "../domain/project-summary.js";
+import { getRootTask, isPaused, isTerminated, rootAgentKey, setPaused, setTerminated } from "../domain/tasks.js";
+import { artifactsDirFor, describeDeliveryArtifacts } from "../domain/artifacts.js";
+import { abortActiveSessions } from "../runtime/session-control.js";
+import { readyPlanAssignments } from "../domain/plan-scheduler.js";
 import { createPendingStores } from "./orchestrator/pending-store.js";
 import { agentInstanceLabel, ensureAssignmentIds, permissionsOf, scheduleByRole, sequenceAssignments, sliceInfoFor, withAssignments, withoutAssignments } from "./orchestrator/assignments.js";
 import { isTerminalNext, matchRoutes, MAX_DISPATCH_ROUNDS, routesConfig } from "./orchestrator/routes.js";
@@ -1151,7 +1151,7 @@ export function createOrchestrator({
     ].filter(Boolean).join("\n");
 
     const endDispatch = beginDispatch(rootTaskId);
-    // 切片统计（见 src/slice-stats.js）：耗时、结果与规模信号，用来校准粒度门禁的阈值。
+    // 切片统计（见 src/runtime/slice-stats.js）：耗时、结果与规模信号，用来校准粒度门禁的阈值。
     const startedAt = Date.now();
     const recordSlice = (status) => (assignment?.id ? onEvent({
       type: "slice_finished",

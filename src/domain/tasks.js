@@ -1,5 +1,5 @@
 // Compatibility facade: TaskStore is the only durable source of task state.
-import { TaskStore } from "./domain/task-store.js";
+import { TaskStore } from "./task-store.js";
 
 const DEFAULT_FILE = process.env.PI_DOMAIN_TASKS_FILE || process.env.PI_TASKS_FILE || "runtime/domain-tasks.json";
 let store = new TaskStore(DEFAULT_FILE);

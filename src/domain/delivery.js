@@ -1,5 +1,5 @@
 import { createHandoff, validateHandoff } from "./handoff.js";
-import { describeArtifact, saveArtifactMetadata, saveHandoff } from "../artifacts.js";
+import { describeArtifact, saveArtifactMetadata, saveHandoff } from "./artifacts.js";
 
 function evidenceFor(delivery) {
   if (Array.isArray(delivery?.evidence) && delivery.evidence.length) return delivery.evidence;

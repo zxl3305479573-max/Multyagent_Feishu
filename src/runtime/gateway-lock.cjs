@@ -8,7 +8,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const { dirname, join } = require("node:path");
-const { feishuEnabled } = require("./feishu-mode.cjs");
+const { feishuEnabled } = require("../integrations/feishu/feishu-mode.cjs");
 
 function isAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;

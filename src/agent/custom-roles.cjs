@@ -7,7 +7,7 @@
 // 让 AI 生成的草稿和人工修改都能落成一份合法配置；仍不合法时返回可读错误，不写文件。
 const { readdirSync, readFileSync, unlinkSync } = require("node:fs");
 const { join } = require("node:path");
-const { writeFileAtomic } = require("./atomic-file.cjs");
+const { writeFileAtomic } = require("../domain/atomic-file.cjs");
 const { KNOWN_TOOLS, SHELL_MODES, THINKING, DEFAULT_DIR, customRolesDir, loadRoles, validateRole } = require("./role-config.cjs");
 
 const KEY = /^[a-z][a-z0-9_]{1,40}$/;

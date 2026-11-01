@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { Client } from "@larksuiteoapi/node-sdk";
-import { createCompactLogger, resolveBitableTarget } from "../src/bitable-sync.js";
+import { createCompactLogger, resolveBitableTarget } from "../src/integrations/bitable-sync.js";
 import { TRACE_FIELD_SCHEMA } from "../src/domain/trace.js";
 
 const appId = process.env.FEISHU_PROJECT_MANAGER_APP_ID;

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { TaskStore } from "../src/domain/task-store.js";
-import { executeAgentCli, forwardedBitableArgs, parseArgs, renderDiagram, runBitableAction, runNodeScript, runTestCommand, readTaskStatus, validateDelivery } from "../src/agent-cli.js";
+import { executeAgentCli, forwardedBitableArgs, parseArgs, renderDiagram, runBitableAction, runNodeScript, runTestCommand, readTaskStatus, validateDelivery } from "../src/agent/agent-cli.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 

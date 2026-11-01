@@ -1,6 +1,6 @@
 // 系统提示与用户提示构造，以及 Agent 回复的清洗。
-import { artifactsDirFor } from "../artifacts.js";
-import { roleConfig } from "../role-config.cjs";
+import { artifactsDirFor } from "../domain/artifacts.js";
+import { roleConfig } from "./role-config.cjs";
 
 // 默认只读工具集：角色配置缺失时的 fallback。
 export const DEFAULT_TOOLS = ["read", "ls", "grep", "find"];

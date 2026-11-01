@@ -1,5 +1,5 @@
 import { createDesktopControlServer } from "./desktop-control.js";
-import { forEachEvent } from "./event-log.js";
+import { forEachEvent } from "../domain/event-log.js";
 import { readdir, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 

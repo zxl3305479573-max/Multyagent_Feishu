@@ -1,7 +1,7 @@
 // 本地冒烟测试：一条命令验证 Pi 桥接层核心链路。
 // 注意：会调用真实模型，消耗 token，耗时约 1-3 分钟。
 // 运行: npm run smoke
-import { runAgent } from "../src/pi-agent.js";
+import { runAgent } from "../src/runtime/pi-agent.js";
 import { existsSync, rmSync } from "node:fs";
 
 const results = [];

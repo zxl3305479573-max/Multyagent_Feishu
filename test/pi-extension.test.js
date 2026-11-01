@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createPolicyFactory } from "../src/pi-agent.js";
+import { createPolicyFactory } from "../src/runtime/pi-agent.js";
 import {
   createRpcExtension,
   readRpcDelivery,

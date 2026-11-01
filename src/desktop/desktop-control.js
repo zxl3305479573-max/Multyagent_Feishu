@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
-import { readEventsTail } from "./event-log.js";
+import { readEventsTail } from "../domain/event-log.js";
 
 const isLoopback = (address = "") => address === "::1" || address === "127.0.0.1" || address.startsWith("::ffff:127.");
 

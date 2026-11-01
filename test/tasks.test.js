@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
-import { _resetForTest, createTask, findRecentTask, findTaskByRoot, isPaused, isTerminated, linkRootAlias, setPaused, setTerminated, updateTask } from "../src/tasks.js";
+import { _resetForTest, createTask, findRecentTask, findTaskByRoot, isPaused, isTerminated, linkRootAlias, setPaused, setTerminated, updateTask } from "../src/domain/tasks.js";
 import { TaskStore } from "../src/domain/task-store.js";
 
 const TEST_FILE = "runtime/tasks.test.json";

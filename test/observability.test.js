@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createEventLogger, projectTask, queryEvents, sanitizeLoggedEvent } from "../src/observability.js";
+import { createEventLogger, projectTask, queryEvents, sanitizeLoggedEvent } from "../src/runtime/observability.js";
 
 test("delivery metadata preserves file size and redacts descriptions, risks and next steps", () => {
   const event = sanitizeLoggedEvent({

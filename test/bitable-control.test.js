@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createBitableControl, parseControlValue } from "../src/bitable-control.js";
+import { createBitableControl, parseControlValue } from "../src/integrations/bitable-control.js";
 
 function makeClient(pages = []) {
   const calls = { list: [], update: [] };

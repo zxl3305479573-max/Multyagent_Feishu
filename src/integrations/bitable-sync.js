@@ -3,8 +3,8 @@
 // The gateway owns task state; the table is a read-only dashboard for humans.
 // Every failure here is logged and swallowed so a Bitable outage can never
 // block an agent run, an approval card, or a downstream dispatch.
-import { readJsonFile, writeFileAtomic } from "./atomic-file.cjs";
-import { forEachEvent } from "./event-log.js";
+import { readJsonFile, writeFileAtomic } from "../domain/atomic-file.cjs";
+import { forEachEvent } from "../domain/event-log.js";
 import {
   BOARD_FIELD_SCHEMA,
   KEY_FIELD,
@@ -12,7 +12,7 @@ import {
   reduceEvent,
   rootTaskIdFor,
   toBitableFields,
-} from "./domain/bitable-board.js";
+} from "../domain/bitable-board.js";
 
 const DEFAULT_FIELDS_FILE = "runtime/bitable-records.json";
 const DEFAULT_FLUSH_DELAY_MS = 400;

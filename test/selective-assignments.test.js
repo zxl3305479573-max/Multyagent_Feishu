@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildResultCard } from "../src/gateway.js";
-import { createOrchestrator } from "../src/orchestrator.js";
-import { sequenceArchitectFirst } from "../src/orchestrator/assignments.js";
+import { buildResultCard } from "../src/runtime/gateway.js";
+import { createOrchestrator } from "../src/agent/orchestrator.js";
+import { sequenceArchitectFirst } from "../src/agent/orchestrator/assignments.js";
 
 function setup() {
   const dispatched = [];

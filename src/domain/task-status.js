@@ -83,7 +83,7 @@ export async function loadTaskStatus(taskId, chatId, file = process.env.PI_EVENT
   const fromEvents = summarizeTaskEvents(events, taskId, chatId);
   const taskFile = process.env.PI_DOMAIN_TASKS_FILE || process.env.PI_TASKS_FILE || "runtime/domain-tasks.json";
   try {
-    const { TaskStore } = await import("./domain/task-store.js");
+    const { TaskStore } = await import("./task-store.js");
     const snapshot = await new TaskStore(taskFile).getStatus(taskId, chatId);
     if (snapshot.status !== "not_found" && snapshot.latest_event) {
       return { ...fromEvents, ...snapshot, task_id: taskId };

@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { artifactsDirFor, describeArtifact } from "./artifacts.js";
-import { validateHandoff } from "./domain/handoff.js";
-import { renderDiagramPng } from "./diagram.js";
-import { TaskStore } from "./domain/task-store.js";
+import { artifactsDirFor, describeArtifact } from "../domain/artifacts.js";
+import { validateHandoff } from "../domain/handoff.js";
+import { renderDiagramPng } from "../integrations/diagram.js";
+import { TaskStore } from "../domain/task-store.js";
 
 const MAX_OUTPUT = 2000;
 

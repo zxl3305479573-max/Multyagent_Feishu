@@ -4,11 +4,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskStore } from "../src/domain/task-store.js";
-import { createDesktopTaskSubmitter } from "../src/desktop-task.js";
-import { ASK_TOOL_ALLOWLIST, applyModeToDelivery, normalizeModes } from "../src/desktop-modes.js";
-import { createRunAgent } from "../src/handlers.js";
-import { createOrchestrator } from "../src/orchestrator.js";
-import { createDesktopHost } from "../src/desktop-host.js";
+import { createDesktopTaskSubmitter } from "../src/desktop/desktop-task.js";
+import { ASK_TOOL_ALLOWLIST, applyModeToDelivery, normalizeModes } from "../src/desktop/desktop-modes.js";
+import { createRunAgent } from "../src/integrations/feishu/handlers.js";
+import { createOrchestrator } from "../src/agent/orchestrator.js";
+import { createDesktopHost } from "../src/desktop/desktop-host.js";
 
 const PM = { key: "project_manager", displayName: "项目经理" };
 const BACKEND = { key: "backend_developer", displayName: "后端开发" };

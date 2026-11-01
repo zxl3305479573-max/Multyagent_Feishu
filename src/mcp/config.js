@@ -1,4 +1,4 @@
-import { readJsonFile, writeFileAtomic } from "../atomic-file.cjs";
+import { readJsonFile, writeFileAtomic } from "../domain/atomic-file.cjs";
 
 const ID = /^[a-z][a-z0-9_-]{1,63}$/;
 

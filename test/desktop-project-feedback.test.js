@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatProjectCommandFeedback } from "../src/desktop-project-feedback.js";
+import { formatProjectCommandFeedback } from "../src/desktop/desktop-project-feedback.js";
 
 test("project export feedback includes output path and snapshot counts", () => {
   assert.equal(formatProjectCommandFeedback("export_project", { outputFile: "runtime/export.json", taskCount: 3, eventCount: 12 }), "项目已导出：runtime/export.json · 3 个任务 · 12 条事件");

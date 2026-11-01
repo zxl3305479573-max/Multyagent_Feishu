@@ -1,9 +1,9 @@
 // @ts-check
 import { readFile } from "node:fs/promises";
-import { readJsonFile, writeFileAtomic } from "../atomic-file.cjs";
+import { readJsonFile, writeFileAtomic } from "./atomic-file.cjs";
 import { createTaskRecord } from "./task.js";
 import { transition } from "./task-state.js";
-import { createQualityGates, reduceQualityGates } from "../quality-gates.js";
+import { createQualityGates, reduceQualityGates } from "../agent/quality-gates.js";
 
 function clone(value) {
   return value ? JSON.parse(JSON.stringify(value)) : value;

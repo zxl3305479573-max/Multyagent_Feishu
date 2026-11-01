@@ -7,8 +7,8 @@
 //   node scripts/slice-stats.mjs --days 7           只统计最近 7 天
 //   node scripts/slice-stats.mjs --file <路径>      指定事件日志（桌面端在其数据目录的 runtime/ 下）
 import { resolve } from "node:path";
-import { forEachEvent } from "../src/event-log.js";
-import { summarizeSliceStats } from "../src/slice-stats.js";
+import { forEachEvent } from "../src/domain/event-log.js";
+import { summarizeSliceStats } from "../src/runtime/slice-stats.js";
 
 const args = process.argv.slice(2);
 const arg = (name) => { const index = args.indexOf(`--${name}`); return index >= 0 ? args[index + 1] : undefined; };

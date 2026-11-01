@@ -3,7 +3,7 @@
 // 桌面端“运行设置”页据此渲染表单：分组、类型、默认值、说明，以及哪些是密钥（加密保存）、
 // 哪些由桌面端托管（只读显示）。test/env-catalog.test.js 会扫描源码里所有 process.env.X，
 // 新增环境变量却没登记到这里时测试会失败，保证设置页始终覆盖全部配置。
-const { roleConfig } = require("./role-config.cjs");
+const { roleConfig } = require("../agent/role-config.cjs");
 
 // pi-coding-agent 支持的模型服务商及其 API Key 环境变量。
 const MODEL_PROVIDERS = [

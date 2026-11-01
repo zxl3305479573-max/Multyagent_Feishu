@@ -4,8 +4,8 @@
 // 当前范围（步骤 3 + 阶段一）：
 //   - 每次任务新建一个 in-memory session，prompt 后 dispose（天然并发隔离）。
 //   - 角色身份 + 职责通过 systemPromptOverride 注入系统提示（强约束，防身份幻觉）。
-//   - 工具白名单、职责、思考等级从 config/roles/<role>.json 按角色读取（经 src/role-config.cjs 校验）。
-//   - 策略扩展拦截敏感文件（复用 spike/pi-policy.mjs 已验证的结论）。
+//   - 工具白名单、职责、思考等级从 config/roles/<role>.json 按角色读取（经 src/agent/role-config.cjs 校验）。
+//   - 策略扩展拦截敏感文件（复用 docs/archive/spike/pi-policy.mjs 已验证的结论）。
 //
 // 后续阶段（暂未实现，见设计文档实施阶段）：
 //   - 会话持久化 + task_id 复用（多轮追问）
@@ -23,26 +23,26 @@ import {
   ModelRuntime,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { artifactsDirFor } from "./artifacts.js";
-import { isTerminated } from "./tasks.js";
+import { artifactsDirFor } from "../domain/artifacts.js";
+import { isTerminated } from "../domain/tasks.js";
 import { registerActiveSession } from "./session-control.js";
-import { roleConfig } from "./role-config.cjs";
-import { createPolicyFactory } from "./agent/policy-gate.js";
-import { getCapabilityRegistry } from "./capabilities/index.js";
+import { roleConfig } from "../agent/role-config.cjs";
+import { createPolicyFactory } from "../agent/policy-gate.js";
+import { getCapabilityRegistry } from "../capabilities/index.js";
 import { configuredThinking, prepareModelConfig, selectedModel } from "./model-config.js";
-import { buildPrompt, buildSystemPrompt, DEFAULT_TOOLS, extractText, sanitizeAgentReply } from "./agent/prompts.js";
-import { mapPiTextEvent, mapPiToolEvent } from "./agent/tool-events.js";
-import { buildTaskPlanRoleLimits, createAgentCliTool, createDeliverTool, createProjectTool, createTaskStatusTool } from "./agent/tools.js";
-import { getMcpService, mcpToolsForRole } from "./mcp/index.js";
+import { buildPrompt, buildSystemPrompt, DEFAULT_TOOLS, extractText, sanitizeAgentReply } from "../agent/prompts.js";
+import { mapPiTextEvent, mapPiToolEvent } from "../agent/tool-events.js";
+import { buildTaskPlanRoleLimits, createAgentCliTool, createDeliverTool, createProjectTool, createTaskStatusTool } from "../agent/tools.js";
+import { getMcpService, mcpToolsForRole } from "../mcp/index.js";
 
 // 对外接口保持不变：策略闸门、提示构造、事件映射和受控工具已拆到 src/agent/ 下，这里统一转出。
-export { createPolicyFactory, SENSITIVE_PATTERNS } from "./agent/policy-gate.js";
-export { buildPrompt, buildSystemPrompt, extractText, sanitizeAgentReply } from "./agent/prompts.js";
-export { mapPiToolEvent } from "./agent/tool-events.js";
-export { mapPiTextEvent } from "./agent/tool-events.js";
-export { McpService } from "./mcp/service.js";
-export { mcpToolsForRole } from "./mcp/index.js";
-export { createAgentCliTool, createDeliverTool, createProjectTool, createTaskStatusTool, normalizeAssignments } from "./agent/tools.js";
+export { createPolicyFactory, SENSITIVE_PATTERNS } from "../agent/policy-gate.js";
+export { buildPrompt, buildSystemPrompt, extractText, sanitizeAgentReply } from "../agent/prompts.js";
+export { mapPiToolEvent } from "../agent/tool-events.js";
+export { mapPiTextEvent } from "../agent/tool-events.js";
+export { McpService } from "../mcp/service.js";
+export { mcpToolsForRole } from "../mcp/index.js";
+export { createAgentCliTool, createDeliverTool, createProjectTool, createTaskStatusTool, normalizeAssignments } from "../agent/tools.js";
 
 // The diagram-design skill is intentionally scoped to the planning/design
 // agents. Other role agents should not receive the extra visual-authoring
@@ -55,7 +55,7 @@ export function diagramSkillPaths(agentKey) {
     || process.env.PI_ARCHITECT_DIAGRAM_SKILL_PATH?.trim();
   const candidates = [
     configured,
-    join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "diagram-design"),
+    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "skills", "diagram-design"),
     join(homedir(), ".codex", "skills", "diagram-design"),
   ].filter(Boolean);
   const skillPath = candidates.find((candidate) => existsSync(candidate));

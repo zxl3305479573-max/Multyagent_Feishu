@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeDiagram, renderDiagramPng, renderDiagramSvg } from "../src/diagram.js";
+import { normalizeDiagram, renderDiagramPng, renderDiagramSvg } from "../src/integrations/diagram.js";
 
 const SPEC = {
   title: "学生管理系统架构",

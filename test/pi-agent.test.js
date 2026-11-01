@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, createProjectTool, diagramSkillPaths, extractText, mapPiTextEvent, mapPiToolEvent, normalizeAssignments, sanitizeAgentReply } from "../src/pi-agent.js";
-import { appendProjectSummary } from "../src/project-summary.js";
+import { architectSkillPaths, buildPrompt, buildSystemPrompt, createAgentCliTool, createProjectTool, diagramSkillPaths, extractText, mapPiTextEvent, mapPiToolEvent, normalizeAssignments, sanitizeAgentReply } from "../src/runtime/pi-agent.js";
+import { appendProjectSummary } from "../src/domain/project-summary.js";
 import { describeToolCall } from "../src/agent/tool-events.js";
 
 test("diagram-design skill 对架构设计师和项目经理启用", async () => {

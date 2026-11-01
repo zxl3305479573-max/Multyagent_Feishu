@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import { writeFileAtomic } from "./atomic-file.cjs";
-import { artifactsDirFor } from "./artifacts.js";
+import { writeFileAtomic } from "../domain/atomic-file.cjs";
+import { artifactsDirFor } from "../domain/artifacts.js";
 import {
   QUALITY_LABELS,
   evaluateAcceptanceMatrix,

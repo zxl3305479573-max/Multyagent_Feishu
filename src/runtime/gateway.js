@@ -1,8 +1,8 @@
-import { createTask, findRecentTask, findTaskByRoot, setPaused, isTerminated, updateTask } from "./tasks.js";
-import { buildValidatedHandoff } from "./domain/delivery.js";
-import { createQualityGates, qualityPolicyForTask, requestsQualitySkip, withQualitySkip } from "./quality-gates.js";
-import { readProjectSummary } from "./project-summary.js";
-import { loadTaskStatus } from "./task-status.js";
+import { createTask, findRecentTask, findTaskByRoot, setPaused, isTerminated, updateTask } from "../domain/tasks.js";
+import { buildValidatedHandoff } from "../domain/delivery.js";
+import { createQualityGates, qualityPolicyForTask, requestsQualitySkip, withQualitySkip } from "../agent/quality-gates.js";
+import { readProjectSummary } from "../domain/project-summary.js";
+import { loadTaskStatus } from "../domain/task-status.js";
 
 const TTL = Number(process.env.PI_CONVERSATION_TTL_MS) || 30 * 60 * 1000;
 const STATUS_QUERY = /^\s*(?:(?:\u67e5\u8be2|\u67e5\u770b|\u544a\u8bc9\u6211|\u6c47\u62a5)?\s*(?:\u5f53\u524d|\u8fd9\u4e2a|\u8be5|\u672c)?\s*(?:\u4efb\u52a1|\u9879\u76ee)?\s*(?:\u72b6\u6001|\u8fdb\u5ea6|\u8fdb\u5c55)|\u73b0\u5728(?:\u5230\u54ea\u4e86|\u8fdb\u5c55\u5982\u4f55|\u4ec0\u4e48\u72b6\u6001)|status|progress)\s*[.!?\u3002\uff01\uff1f\uff1b;\s]*$/i;
@@ -131,7 +131,7 @@ export async function sendResultCard(client, chatId, result, { log = console, ta
     log.info?.(`[diagram] skipped for ${agentKey}（仅 ${[...allowed].join(", ")} 可附架构图）`);
   } else if (result?.delivery?.diagram) {
     try {
-      const { renderDiagramPng } = await import("./diagram.js");
+      const { renderDiagramPng } = await import("../integrations/diagram.js");
       const png = renderDiagramPng(result.delivery.diagram);
       if (png) diagramImageKey = await uploadCardImage(client, png);
     } catch (error) {
