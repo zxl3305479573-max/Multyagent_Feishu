@@ -95,6 +95,7 @@ function setSkinIcons(skinId) {
     tray.setImage(trayImage);
     tray.setToolTip(isPear ? "Pear Agent" : "MultyAgent Agent 工作台");
   }
+  return activeSkinId;
 }
 
 async function createWindow() {
@@ -295,8 +296,8 @@ async function start() {
   handle("desktop:gateway:status", () => gatewayStatus(paths.tokenFile));
   handle("desktop:window:show", () => showWindow());
   handle("desktop:window:set-skin", (_event, skinId) => {
-    if (skinId !== null && skinId !== "pear") throw new Error("unsupported skin");
-    setSkinIcons(skinId);
+    if (skinId !== null && !["dark", "warm", "contrast", "forest", "pear"].includes(skinId)) throw new Error("unsupported skin");
+    return setSkinIcons(skinId);
   });
   handle("desktop:app:quit", () => { quitting = true; app.quit(); });
   await createWindow();

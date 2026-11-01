@@ -247,7 +247,7 @@ declare global {
       restartGateway?: () => Promise<{ restarted: boolean }>;
       selectDirectory?: () => Promise<string>;
       openFile?: (filePath: string, projectName?: string) => Promise<{ opened: boolean; error?: string }>;
-      setSkin?: (skinId: "pear" | null) => Promise<void>;
+      setSkin?: (skinId: string | null) => Promise<void>;
       gatewayStatus?: () => Promise<GatewayStatus>;
       quit?: () => Promise<unknown>;
     };

@@ -14,7 +14,7 @@ export function SkinProvider({ children }: { children: React.ReactNode }) {
   }, []);
   useEffect(() => { document.title = skin.brand.displayName; }, [skin]);
   useEffect(() => {
-    void Promise.resolve(window.desktop?.setSkin?.(skin.id === "pear" ? "pear" : null)).catch(() => {});
+    void Promise.resolve(window.desktop?.setSkin?.(skin.id === "light" ? null : skin.id)).catch(() => {});
   }, [skin]);
   useEffect(() => {
     const favicon = skin.assets.favicon;

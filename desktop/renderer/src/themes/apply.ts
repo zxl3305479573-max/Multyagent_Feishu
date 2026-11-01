@@ -28,7 +28,7 @@ export function getSavedSkinChoice(): SkinChoice {
 }
 
 export function skinCss(skin: SkinDefinition) {
-  return `[data-skin="${skin.id}"]{${Object.entries(skin.tokens || {}).map(([name, value]) => `${name}:${value};`).join("")}}`;
+  return `html[data-skin="${skin.id}"]{color-scheme:${skin.colorScheme};${Object.entries(skin.tokens || {}).map(([name, value]) => `${name}:${value};`).join("")}}`;
 }
 
 function styleElement() {
